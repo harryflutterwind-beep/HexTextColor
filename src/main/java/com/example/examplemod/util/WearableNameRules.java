@@ -3,13 +3,19 @@ package com.example.examplemod.util;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
-import net.minecraft.util.EnumChatFormatting;
 import net.minecraftforge.common.util.Constants;
 
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 public final class WearableNameRules {
     private WearableNameRules() {}
+
+    // Strips vanilla formatting codes (works on all servers, no EnumChatFormatting call)
+    private static final Pattern STRIP_MC = Pattern.compile("(?i)§[0-9A-FK-OR]");
+
+    // Optional: strips your <grad ...> / <rbw ...> tags if they exist in lore/name
+    private static final Pattern STRIP_TAGS = Pattern.compile("(?is)</?\\s*\\w+[^>]*>");
 
     public static boolean isHelmetWearableByName(ItemStack stack) {
         if (stack == null) return false;
@@ -25,15 +31,14 @@ public final class WearableNameRules {
     private static boolean containsWearableKeyword(String raw) {
         if (raw == null) return false;
 
-        String clean = EnumChatFormatting.getTextWithoutFormattingCodes(raw);
-        if (clean == null) clean = raw;
-
+        String clean = STRIP_MC.matcher(raw).replaceAll("");
+        clean = STRIP_TAGS.matcher(clean).replaceAll("");
         clean = clean.toLowerCase(Locale.ROOT);
+
         return clean.contains("ring") || clean.contains("amulet") || clean.contains("artifact");
     }
 
     private static boolean loreContainsWearableKeyword(ItemStack stack) {
-        if (stack == null) return false;
         if (!stack.hasTagCompound()) return false;
 
         NBTTagCompound tag = stack.getTagCompound();
@@ -45,7 +50,6 @@ public final class WearableNameRules {
 
         if (!display.hasKey("Lore", Constants.NBT.TAG_LIST)) return false;
 
-        // Lore list of strings
         NBTTagList lore = display.getTagList("Lore", Constants.NBT.TAG_STRING);
         if (lore == null || lore.tagCount() <= 0) return false;
 
