@@ -1,0 +1,17 @@
+[
+  {
+    "modid": "hexcolorcodes",
+    "name": "\u00A7l\u00A7bHex\u00A73Color\u00A79Codes\u00A7r",
+   "description": "\u00A7bAdds \u00A7fsolid\u00A7r, \u00A7cg\u00A76r\u00A7ea\u00A76d\u00A7ei\u00A76e\u00A7en\u00A7et\u00A7r, and \u00A7cr\u00A76a\u00A7ei\u00A7an\u00A7bb\u00A7do\u00A7bw\u00A7r text colors to chat.\n\u00A7aSupports animated text effects like \u00A7dsparkle\u00A7r, \u00A7brain\u00A7r, and more.\n\u00A7eIncludes \u00A76Updated Beam renderers\u00A7e and \u00A76commands\u00A7e.\n\u00A7d\u00A7oThis mod is also a complete \u00A7l\u00A7oshitpost\u00A7r\u00A7d\u00A7o and absolutely refuses to take itself seriously.\u00A7r\n\u00A77ngl \u00A7cI \u00A76should \u00A7bblow \u00A76my \u00A7dshi \u00A75smoove \u00A7coff\u00A7r.",
+    "version": "\u00A7b1.5.5",
+    "mcversion": "1.7.10",
+    "url": "\u00A76https://discord.gg/KHeHrNcFQf",
+    "updateUrl": "",
+    "authorList": ["\u00A7bMr\u00A73Poofy\u00A79Pajamma\u00A7dPants\u00A7r"],
+    "credits": "\u00A77Thanks to \u00A73JM \u00A77& \u00A7bForge \u00A77communities\u00A7r",
+    "logoFile": "assets/hexcolorcodes/logo.png",
+    "screenshots": [],
+    "dependencies": [],
+    "useDependencyInformation": true
+  }
+]

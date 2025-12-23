@@ -1,0 +1,82 @@
+buildscript {
+    repositories {
+        mavenCentral()
+        maven {
+            name = "forge"
+            url = "https://maven.minecraftforge.net/"
+        }
+        maven {
+            name = "sonatype"
+            url = "https://oss.sonatype.org/content/repositories/snapshots/"
+        }
+    }
+    dependencies {
+        classpath ('com.anatawa12.forge:ForgeGradle:1.2-1.1.+') {
+            changing = true
+        }
+    }
+}
+
+apply plugin: 'forge'
+
+version = "1.5.5"
+group= "com.MrPoofyPajammaPants.HexColorText"
+archivesBaseName = "HexColorText"
+
+minecraft {
+    version = "1.7.10-10.13.4.1614-1.7.10"
+    runDir = "eclipse"
+}
+
+/** NEW: normal project repos (for Mixin) */
+repositories {
+    mavenCentral()
+    maven {
+        name = "spongepowered"
+        url = "https://repo.spongepowered.org/maven"
+    }
+}
+
+// put this near the top of build.gradle
+configurations {
+    provided
+}
+
+sourceSets {
+    main {
+        // we can compile against provided deps
+        compileClasspath += configurations.provided
+    }
+}
+
+dependencies {
+    // Mixin ONLY for compilation, NOT for runtime (UniMixins supplies it)
+    provided "org.spongepowered:mixin:0.7.11-SNAPSHOT"
+}
+
+processResources {
+    inputs.property "version", project.version
+    inputs.property "mcversion", project.minecraft.version
+
+    from(sourceSets.main.resources.srcDirs) {
+        include 'mcmod.info'
+        expand 'version':project.version, 'mcversion':project.minecraft.version
+    }
+
+    from(sourceSets.main.resources.srcDirs) {
+        exclude 'mcmod.info'
+    }
+}
+
+/**
+ * Coremod manifest – tells FML about HexCoremod.
+ */
+jar {
+    manifest {
+        attributes(
+                "FMLCorePlugin": "com.example.examplemod.core.HexCoremod",
+                "FMLCorePluginContainsFMLMod": "true"
+        )
+    }
+}
+
