@@ -7,10 +7,6 @@ package com.example.examplemod;
 
 import com.example.examplemod.command.RarityLoreCommand;
 import com.example.examplemod.command.SetDamageCommand;
-import com.example.examplemod.dragon.CommandDragonLoot;
-import com.example.examplemod.dragon.DragonCommand;
-import com.example.examplemod.dragon.DragonEvents;
-import com.example.examplemod.dragon.DragonLootHandler;
 import com.example.examplemod.item.ItemTabIcon;
 import com.example.examplemod.item.ItemTransformWeapon;
 import com.example.examplemod.command.LorePagesCommand;
@@ -68,8 +64,7 @@ public class ExampleMod {
         proxy.init();
 
         // These handlers should be *common* (no client imports)
-        MinecraftForge.EVENT_BUS.register(new DragonEvents());
-        MinecraftForge.EVENT_BUS.register(new DragonLootHandler());
+
     }
 
     @EventHandler
@@ -77,8 +72,6 @@ public class ExampleMod {
         // Commands are server-side only, all safe
         e.registerServerCommand(new RarityLoreCommand());
         e.registerServerCommand(new SetDamageCommand());
-        e.registerServerCommand(new DragonCommand());
-        e.registerServerCommand(new CommandDragonLoot());
         e.registerServerCommand(new com.example.examplemod.command.BeamTestCommand());
         e.registerServerCommand(new com.example.examplemod.command.HexHelpCommand());
         e.registerServerCommand(new LorePagesCommand());
