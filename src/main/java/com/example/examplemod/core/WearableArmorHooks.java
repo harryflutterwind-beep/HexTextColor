@@ -19,3 +19,4 @@ public final class WearableArmorHooks {
         return isHelmet && WearableNameRules.isHelmetWearableByName(stack);
     }
 }
+//this is a test to see if I updated the webhook correctly
