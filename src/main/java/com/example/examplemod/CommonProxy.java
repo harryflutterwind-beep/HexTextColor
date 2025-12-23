@@ -2,6 +2,7 @@ package com.example.examplemod;
 
 import net.minecraftforge.common.MinecraftForge;
 import com.example.examplemod.server.DropTagHandler;
+import com.example.examplemod.server.WearableRightClickEquip;
 
 public class CommonProxy {
     public void preInit() {}
@@ -10,6 +11,8 @@ public class CommonProxy {
         // Runs on both physical server and integrated server (logic side)
         // DropTagHandler itself only writes on server side where needed.
         MinecraftForge.EVENT_BUS.register(new DropTagHandler());
+        MinecraftForge.EVENT_BUS.register(new WearableRightClickEquip());
+
     }
 
     public void postInit() {}
