@@ -58,12 +58,11 @@ public class HexHelpCommand extends CommandBase {
             sender.addChatMessage(line);
         }
 
-// ✅ add space ABOVE the bottom nav
+        // ✅ add space ABOVE the bottom nav
         sender.addChatMessage(new ChatComponentText(""));
 
-// ✅ bottom nav stays last, so it hugs the bottom
+        // ✅ bottom nav stays last, so it hugs the bottom
         sender.addChatMessage(navLine(page, max));
-
     }
 
     // ─────────────────────────────────────────────
@@ -178,7 +177,6 @@ public class HexHelpCommand extends CommandBase {
 
         void addLine(IChatComponent c) {
             if (c == null) return;
-            // split if needed
             if (lineCount >= MAX_LINES_PER_PAGE) newPage(false);
             cur.add(c);
             lineCount++;
@@ -193,13 +191,11 @@ public class HexHelpCommand extends CommandBase {
         }
 
         void section(IChatComponent c) {
-            // If we’re near the bottom, push section to next page so it doesn’t orphan
             if (lineCount >= MAX_LINES_PER_PAGE - 1) newPage(false);
             addLine(c);
         }
 
         void example(IChatComponent c) {
-            // Soft split: keep about MAX_EXAMPLES_PER_PAGE per page
             if (exampleCount >= MAX_EXAMPLES_PER_PAGE || lineCount >= MAX_LINES_PER_PAGE) {
                 newPage(true);
             }
@@ -213,11 +209,8 @@ public class HexHelpCommand extends CommandBase {
             lineCount = 0;
             exampleCount = 0;
 
-            // Optionally add a small spacer at top of new pages so it feels less “jammed”
             if (keepHeaderSpace) {
-                // (no blank line by default; you can enable if you like)
-                // cur.add(new ChatComponentText(""));
-                // lineCount++;
+                // (no blank line by default)
             }
         }
 
@@ -231,7 +224,6 @@ public class HexHelpCommand extends CommandBase {
 
         // ─────────────────────────────────────────────
         // GROUP 1 — Quick Start
-        // (auto-splits into multiple pages)
         // ─────────────────────────────────────────────
         pb.tip(tip("Click any example to auto-insert it into your chat input."));
         pb.tip(tip("Most tags can be nested: <snow><grad ...>Text</grad></snow>"));
@@ -250,7 +242,7 @@ public class HexHelpCommand extends CommandBase {
                 "<#FFFF55l>Bold</#>"));
 
         pb.blank();
-        pb.section(section("Vanilla-look click builds exactly what you see"));
+        pb.section(section("Vanilla-look builds (exactly what you see)"));
         pb.example(exLine2("Quick gradient (2 colors)",
                 EnumChatFormatting.RED + "Sun" + EnumChatFormatting.GOLD + "set" + EnumChatFormatting.RESET,
                 "<#FF5555>Sun</#><#FFAA00>set</#>"));
@@ -268,7 +260,7 @@ public class HexHelpCommand extends CommandBase {
         pb.newPage(true);
 
         // ─────────────────────────────────────────────
-        // GROUP 2 — Vanilla styles + palette
+        // GROUP 2 — Vanilla styles + palette (kept as-is)
         // ─────────────────────────────────────────────
         pb.tip(tip("These use the supported hex-style suffix letters: l/o/n/m/k"));
         pb.tip(tip("You can stack them: <#FFAA00lonm>Text</#>"));
@@ -309,26 +301,27 @@ public class HexHelpCommand extends CommandBase {
 
         // ─────────────────────────────────────────────
         // GROUP 3 — Gradients
+        // (default examples -> color examples -> combo/nested examples)
         // ─────────────────────────────────────────────
         pb.tip(tip("Gradient: <grad ...>TEXT</grad> (supports multi-stops)"));
         pb.tip(tip("Common args: scroll=, waveamp=, wavespeed=, styles="));
         pb.blank();
 
-        pb.section(section("Gradients (basics)"));
+        pb.section(section("Gradients (default)"));
         pb.example(exLine("2-stop sunset", "<grad #FF6A00 #FFDD55>Sunset Shine</grad>"));
         pb.example(exLine("2-stop ocean", "<grad #00C6FF #0072FF>Deep Ocean</grad>"));
         pb.example(exLine("3-stop neon", "<grad #00FF88 #FFFFFF #FF00AA>Neon Pop</grad>"));
         pb.example(exLine("3-stop aurora", "<grad #55FFFF #FFFFFF #AA55FF>Aurora</grad>"));
 
         pb.blank();
-        pb.section(section("Gradients (animated / styled)"));
+        pb.section(section("Gradients (color / styled)"));
         pb.example(exLine("Scrolling shine", "<grad #FF6A00 #FFDD55 scroll=0.24>Scrolling Shine</grad>"));
         pb.example(exLine("Scroll + bold", "<grad #00C6FF #0072FF scroll=0.20 styles=l>Bold Ocean</grad>"));
         pb.example(exLine("Scroll + underline", "<grad #FF00AA #FFFFFF scroll=0.18 styles=n>Underline Glow</grad>"));
         pb.example(exLine("Scroll + wave", "<grad #FF00AA #00E5FF scroll=0.22 waveamp=2.2 wavespeed=6>Wave Shine</grad>"));
 
         pb.blank();
-        pb.section(section("Gradients (nested)"));
+        pb.section(section("Gradients (combo / nested)"));
         pb.example(exLine("Inside outline", "<outline><grad #FFDD55 #FF6A00 scroll=0.18>Outlined Gradient</grad></outline>"));
         pb.example(exLine("Inside snow",
                 "<snow dens=0.35 fall=14 speed=0.85 drift=1.1><grad #55FFFF #FFFFFF #AA55FF scroll=0.22>[Aurora Alert]</grad></snow>"));
@@ -336,28 +329,19 @@ public class HexHelpCommand extends CommandBase {
         pb.newPage(true);
 
         // ─────────────────────────────────────────────
-        // GROUP 4 — Rainbow + Pulse
+        // GROUP 4 — Rainbow (ALL rainbow stuff on one page)
         // ─────────────────────────────────────────────
-        pb.tip(tip("Rainbow aliases: <rainbow>, <rb>, <rbw> ... </rbw>"));
-        pb.tip(tip("Pulse: <pulse ...>TEXT</pulse> (nice over gradients/rainbow)"));
+        pb.tip(tip("Rainbow aliases: <rainbow>, <rb>, <rbw> ... </rbw> (try nesting with pulse/outline)."));
         pb.blank();
 
-        pb.section(section("Rainbow"));
+        pb.section(section("Rainbow (examples)"));
         pb.example(exLine("Rainbow simple", "<rbw>R A I N B O W</rbw>"));
         pb.example(exLine("Rainbow tuned", "<rbw sat=1 val=1 speed=1.2>Rainbow Speed</rbw>"));
         pb.example(exLine("Rainbow slow", "<rbw speed=0.55 cycles=1.1>Slow Rainbow</rbw>"));
-
-        pb.blank();
-        pb.section(section("Pulse"));
-        pb.example(exLine("Pulse simple", "<pulse amp=0.35 speed=2>Pulse Text</pulse>"));
-        pb.example(exLine("Pulse soft", "<pulse amp=0.18 speed=2.4><rbw speed=0.85>Soft Pulse</rbw></pulse>"));
-
-        pb.blank();
-        pb.section(section("Combos"));
-        pb.example(exLine("Pulse + gradient",
-                "<pulse amp=0.25 speed=2.6><grad #00C6FF #0072FF scroll=0.24>Shiny Pulse</grad></pulse>"));
-        pb.example(exLine("Pulse + rainbow",
-                "<pulse amp=0.65 speed=0.9><rbw cycles=1.2 speed=0.55>Pulse Rainbow</rbw></pulse>"));
+        pb.example(exLine("Rainbow + pulse (soft)", "<pulse amp=0.18 speed=2.4><rbw speed=0.85>Soft Pulse</rbw></pulse>"));
+        pb.example(exLine("Rainbow + pulse (strong)", "<pulse amp=0.65 speed=0.9><rbw cycles=1.2 speed=0.55>Pulse Rainbow</rbw></pulse>"));
+        pb.example(exLine("Rainbow + wave", "<wave amp=2.0 speed=6><rbw speed=0.9>Wavy Rainbow</rbw></wave>"));
+        pb.example(exLine("Rainbow + outline", "<outline><rbw sat=1 val=1 speed=1.1>Outlined RBW</rbw></outline>"));
 
         pb.newPage(true);
 
@@ -376,15 +360,41 @@ public class HexHelpCommand extends CommandBase {
         pb.example(exLine("Zoom", "<zoom amp=1.35 speed=3.5><grad #7CFF00 #00FFD5>Zoom Pop</grad></zoom>"));
         pb.example(exLine("Scroll", "<scroll speed=1.0><grad #FF00AA #00E5FF>Scroll Motion</grad></scroll>"));
 
+        pb.newPage(true);
+
+        // ─────────────────────────────────────────────
+        // GROUP 6 — NEW: Loop + ShootingStar
+        // ─────────────────────────────────────────────
+        pb.tip(tip("NEW tags: <loop ...> and <shootingstar ...> (both layer nicely over gradients/rainbow)."));
+        pb.tip(tip("Loop often looks best wrapping a long divider or header line."));
         pb.blank();
-        pb.section(section("Motion + rainbow"));
-        pb.example(exLine("Wave + rbw", "<wave amp=2.0 speed=6><rbw speed=0.9>Wavy Rainbow</rbw></wave>"));
-        pb.example(exLine("Scroll + rbw", "<scroll speed=1.0><rbw speed=0.85>Scrolling Rainbow</rbw></scroll>"));
+
+        pb.section(section("Loop"));
+        pb.example(exLine("Loop (simple color)",
+                "<loop #FFD45A>======================</loop>"));
+        pb.example(exLine("Loop + gradient (animated)",
+                "<loop #FFD45A><grad #FFD45A #FF8A2A #FF3B3B #FFD45A scroll=0.22>──────── LOOP BAR ────────</grad></loop>"));
+        pb.example(exLine("Loop + wave header",
+                "<loop #FF4FD8><wave amp=0.55 speed=4.5><grad #00C6FF #0072FF #FF4FD8 #00E5FF scroll=0.22 styles=l>──────── Header ────────</grad></wave></loop>"));
+
+        pb.blank();
+        pb.section(section("ShootingStar"));
+        pb.example(exLine("ShootingStar (simple)",
+                "<shootingstar><grad #55FFFF #FFFFFF #FF55FF scroll=0.18>Wish granted!</grad></shootingstar>"));
+        pb.example(exLine("ShootingStar + rainbow",
+                "<shootingstar><rbw speed=0.85>STAR TRAIL</rbw></shootingstar>"));
+// replace the broken one with outline-first
+        pb.example(exLine("ShootingStar + outline",
+                "<outline><shootingstar><grad #FFDD55 #FF6A00 scroll=0.18 styles=l>CRIT!</grad></shootingstar></outline>"));
+// add a solid-color variant (solid red)
+        pb.example(exLine("ShootingStar (solid red)",
+                "<outline><shootingstar><#FF3B3Bl>CRIT!</#></shootingstar></outline>"));
+
 
         pb.newPage(true);
 
         // ─────────────────────────────────────────────
-        // GROUP 6 — FX (outline/shadow/flicker/glitch/sparkle/rain)
+        // GROUP 7 — FX (outline/shadow/flicker/glitch/sparkle/rain)
         // ─────────────────────────────────────────────
         pb.tip(tip("FX tags: outline / shadow / sparkle / flicker / glitch / rain"));
         pb.tip(tip("These can wrap other styles for layered looks."));
@@ -422,7 +432,7 @@ public class HexHelpCommand extends CommandBase {
         pb.newPage(true);
 
         // ─────────────────────────────────────────────
-        // GROUP 7 — Snow Deep Dive
+        // GROUP 8 — Snow Deep Dive
         // ─────────────────────────────────────────────
         pb.tip(tip("Snow is an overlay: dens/fall/speed/drift/start change the vibe a lot."));
         pb.tip(tip("Snow flakes can be colored: flake=#RRGGBB | flake=#A,#B | flake=rbw"));
@@ -468,7 +478,7 @@ public class HexHelpCommand extends CommandBase {
         pb.newPage(true);
 
         // ─────────────────────────────────────────────
-        // GROUP 8 — Recipes / Layer stacks
+        // GROUP 9 — Recipes / Layer stacks
         // ─────────────────────────────────────────────
         pb.tip(tip("Recipes kept short to reduce wrap/carry weirdness."));
         pb.tip(tip("Rule: outer effect wraps inner style."));
