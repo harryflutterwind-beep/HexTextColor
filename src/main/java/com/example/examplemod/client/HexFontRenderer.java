@@ -22,6 +22,7 @@ import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.gui.inventory.GuiInventory;
 import net.minecraft.util.ResourceLocation;
+import net.minecraft.client.renderer.Tessellator;
 import org.lwjgl.opengl.GL11;
 
 public class HexFontRenderer extends FontRenderer {
@@ -42,6 +43,22 @@ public class HexFontRenderer extends FontRenderer {
             Pattern.compile(
                     "(?i)(<\\s*(grad|pulse|wave|zoom|shake|scroll|jitter|wobble|shootingstar|loop|sparkle|flicker|glitch|outline|shadow|glow|rain|rainbow|rb|rbw|snow)[^>]*>)"
             );
+
+
+    // Ampersand color codes (&a, &l, etc.) support (we convert to § at render-time)
+    private static final Pattern AMP_COLOR_CODE = Pattern.compile("(?i)&[0-9a-fk-or]");
+
+
+    // Inline icon tag: <ico:gems/dark_fire_face 12x12> or <ico:gems/dark_fire_face 12>
+// Also supports chevrons: «ico:gems/dark_fire_face 12x12»
+    private static final int ICON_DEFAULT_PX = 24;
+    private static final String ICON_DOMAIN = "hexcolorcodes";
+    private static final Pattern TAG_ICO_OPEN =
+            Pattern.compile("(?i)<\\s*ico\\s*:\\s*([^>\\s]+)(?:\\s+([0-9]{1,3})(?:x([0-9]{1,3}))?)?\\s*>");
+    private static final Pattern TAG_ICO_OPEN_CHEV =
+            Pattern.compile("(?i)[«]\\s*ico\\s*:\\s*([^»\\s]+)(?:\\s+([0-9]{1,3})(?:x([0-9]{1,3}))?)?\\s*[»]");
+    private static final Pattern TAG_ICO_STRIP =
+            Pattern.compile("(?i)<\\s*ico\\s*:[^>]*>|[«]\\s*ico\\s*:[^»]*[»]");
 
     private static final Pattern TAG_HEX_ANY =
             Pattern.compile("<\\s*#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})(?i:([lmonkr]*))\\s*>");
@@ -168,6 +185,10 @@ public class HexFontRenderer extends FontRenderer {
                     +              "|shootingstar|shootingstar|shootingstar|sparkle|flicker|glitch|outline|shadow|glow|snow)\\b[^»]*[»])"
                     + "|((?i)[«]\\s*/\\s*(?:wave|zoom|scroll|shake|jitter|wobble|loop|loop"
                     +               "|shootingstar|shootingstar|shootingstar|sparkle|flicker|glitch|outline|shadow|glow|snow)\\s*[»])"
+
+                    // <ico:...> inline icons
+                    + "|((?i)<\\s*ico\\s*:\\s*[^>]*>)"
+                    + "|((?i)[«]\\s*ico\\s*:\\s*[^»]*[»])"
 
                     // inline hex §#RRGGBB
                     + "|(?i)(§#[0-9a-fA-F]{6}[lmonkr]*)"
@@ -1097,6 +1118,13 @@ public class HexFontRenderer extends FontRenderer {
             // ignore – fall back to LOOKS_LIKE_OUR_TAG below
         }
 
+        // Legacy ampersand codes (e.g. &a, &l, &r)
+        try {
+            if (AMP_COLOR_CODE.matcher(s).find()) return true;
+        } catch (Throwable t) {
+            // ignore
+        }
+
         // Inline §#RRGGBB without tags
         if (hasHexControls(s)) return true;
 
@@ -1104,7 +1132,37 @@ public class HexFontRenderer extends FontRenderer {
         return LOOKS_LIKE_OUR_TAG.matcher(s).find();
     }
 
+    /** Convert &-style legacy codes to section sign codes for vanilla rendering.
+     *  Supports escaping: use && to emit a literal '&'. */
+    private static String ampToSection(String s) {
+        if (s == null || s.isEmpty()) return s;
+        StringBuilder out = new StringBuilder(s.length());
+        int n = s.length();
+        for (int i = 0; i < n; ) {
+            char c = s.charAt(i);
+            if (c == '&' && i + 1 < n) {
+                char k = s.charAt(i + 1);
 
+                // "&&" -> literal '&'
+                if (k == '&') {
+                    out.append('&');
+                    i += 2;
+                    continue;
+                }
+
+                char kl = Character.toLowerCase(k);
+                if ("0123456789abcdefklmnor".indexOf(kl) >= 0) {
+                    out.append('\u00A7').append(k);
+                    i += 2;
+                    continue;
+                }
+            }
+
+            out.append(c);
+            i++;
+        }
+        return out.toString();
+    }
 
     @Override
     public int getStringWidth(String text) {
@@ -1135,9 +1193,29 @@ public class HexFontRenderer extends FontRenderer {
 
         // Strip our <grad>/<pulse>/<wave>/… tags and § codes → visible text
         String plain = TAG_STRIP.matcher(s).replaceAll("");
+        // Remove icon tags from visible text width
+        plain = TAG_ICO_STRIP.matcher(plain).replaceAll("");
+
+        // Add icon widths manually
+        int icoExtra = 0;
+        try {
+            Matcher mi = TAG_ICO_OPEN.matcher(s);
+            while (mi.find()) {
+                int w = ICON_DEFAULT_PX;
+                try { if (mi.group(2) != null) w = Integer.parseInt(mi.group(2)); } catch (Throwable t) { w = ICON_DEFAULT_PX; }
+                icoExtra += (w + 1);
+            }
+            Matcher mc = TAG_ICO_OPEN_CHEV.matcher(s);
+            while (mc.find()) {
+                int w = ICON_DEFAULT_PX;
+                try { if (mc.group(2) != null) w = Integer.parseInt(mc.group(2)); } catch (Throwable t) { w = ICON_DEFAULT_PX; }
+                icoExtra += (w + 1);
+            }
+        } catch (Throwable t) {}
+
         plain = LEGACY_CTRL_ANY.matcher(plain).replaceAll("");
 
-        return this.base.getStringWidth(plain);
+        return this.base.getStringWidth(plain) + icoExtra;
     }
 
 
@@ -1986,6 +2064,10 @@ public class HexFontRenderer extends FontRenderer {
 
     @Override
     public int drawString(String text, int x, int y, int color, boolean shadow) {
+        // Support &-style color codes everywhere (including overlays)
+        if (text != null && text.indexOf('&') >= 0) {
+            text = ampToSection(text);
+        }
         // ⬅ NEW: never use HexFontRenderer inside CNPC GUIs
         if (isCustomNpcScreen()) {
             return this.base.drawString(text, x, y, applyForcedMul(color), shadow);
@@ -2013,6 +2095,10 @@ public class HexFontRenderer extends FontRenderer {
 
     @Override
     public int drawStringWithShadow(String text, int x, int y, int color) {
+        // Support &-style color codes everywhere (including overlays)
+        if (text != null && text.indexOf('&') >= 0) {
+            text = ampToSection(text);
+        }
         // Never use HexFontRenderer inside CNPC GUIs
         if (isCustomNpcScreen()) {
             return this.base.drawStringWithShadow(text, x, y, color);
@@ -2100,6 +2186,92 @@ public class HexFontRenderer extends FontRenderer {
     private static float timeSeconds() {
         return Minecraft.getSystemTime() / 1000.0F;
     }
+
+
+    private static ResourceLocation iconResource(String iconPath) {
+        if (iconPath == null) return null;
+        String p = String.valueOf(iconPath).trim();
+        if (p.isEmpty()) return null;
+
+        // normalize: allow "textures/..." or "gems/..." and optional ".png"
+        if (p.startsWith("/")) p = p.substring(1);
+        if (p.regionMatches(true, 0, "textures/", 0, "textures/".length())) {
+            p = p.substring("textures/".length());
+        }
+        if (p.toLowerCase().endsWith(".png")) {
+            p = p.substring(0, p.length() - 4);
+        }
+
+        return new ResourceLocation(ICON_DOMAIN, "textures/" + p + ".png");
+    }
+
+    private void drawInlineIcon(String iconPath, int x, int y, int w, int h, boolean shadow) {
+        ResourceLocation rl = iconResource(iconPath);
+        if (rl == null) return;
+
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.getTextureManager() == null) return;
+
+        mc.getTextureManager().bindTexture(rl);
+
+        GL11.glDisable(GL11.GL_LIGHTING);
+        GL11.glEnable(GL11.GL_BLEND);
+        GL11.glColor4f(1f, 1f, 1f, 1f);
+
+        // Simple convention: any icon containing "_anim" is treated as a vertical sprite sheet
+        boolean anim = (iconPath != null && iconPath.indexOf("_anim") >= 0);
+
+        if (!anim) {
+            if (shadow) {
+                GL11.glColor4f(0f, 0f, 0f, 0.35f);
+                drawInlineIconQuad(x + 1, y + 1, w, h);
+                GL11.glColor4f(1f, 1f, 1f, 1f);
+            }
+            drawInlineIconQuad(x, y, w, h);
+            return;
+        }
+
+        final int FRAMES = 8; // <-- make your PNG 64x(64*FRAMES)
+        final int FPS    = 7;
+
+        long ms = Minecraft.getSystemTime();
+        long per = 1000L / (long)Math.max(1, FPS);
+        if (per <= 0L) per = 1L;
+
+        int frame = (int)((ms / per) % (long)FRAMES);
+
+        float u0 = 0f, u1 = 1f;
+        float v0 = (float)frame / (float)FRAMES;
+        float v1 = (float)(frame + 1) / (float)FRAMES;
+
+        if (shadow) {
+            GL11.glColor4f(0f, 0f, 0f, 0.35f);
+            drawInlineIconQuadUV(x + 1, y + 1, w, h, u0, v0, u1, v1);
+            GL11.glColor4f(1f, 1f, 1f, 1f);
+        }
+
+        drawInlineIconQuadUV(x, y, w, h, u0, v0, u1, v1);
+    }
+
+    private static void drawInlineIconQuad(int x, int y, int w, int h) {
+        Tessellator t = Tessellator.instance;
+        t.startDrawingQuads();
+        t.addVertexWithUV((double)x,     (double)(y + h), 0.0D, 0.0D, 1.0D);
+        t.addVertexWithUV((double)(x+w), (double)(y + h), 0.0D, 1.0D, 1.0D);
+        t.addVertexWithUV((double)(x+w), (double)y,       0.0D, 1.0D, 0.0D);
+        t.addVertexWithUV((double)x,     (double)y,       0.0D, 0.0D, 0.0D);
+        t.draw();
+    }
+    private static void drawInlineIconQuadUV(int x, int y, int w, int h, float u0, float v0, float u1, float v1) {
+        Tessellator t = Tessellator.instance;
+        t.startDrawingQuads();
+        t.addVertexWithUV((double)x,     (double)(y + h), 0.0D, (double)u0, (double)v1);
+        t.addVertexWithUV((double)(x+w), (double)(y + h), 0.0D, (double)u1, (double)v1);
+        t.addVertexWithUV((double)(x+w), (double)y,       0.0D, (double)u1, (double)v0);
+        t.addVertexWithUV((double)x,     (double)y,       0.0D, (double)u0, (double)v0);
+        t.draw();
+    }
+
 
     private static int hsvToRgb(float h, float s, float v) {
         // Wrap hue to 0..360
@@ -5052,6 +5224,28 @@ public class HexFontRenderer extends FontRenderer {
                     }
                     break;
 
+                case ICON:
+                {
+                    int iw = (op.iconW > 0 ? op.iconW : ICON_DEFAULT_PX);
+                    int ih = (op.iconH > 0 ? op.iconH : iw);
+
+                    // Center icon vertically relative to the text line (FONT_HEIGHT is usually 9)
+                    int dy = (this.FONT_HEIGHT - ih);
+
+                    // We want a FLOOR-style /2 so negative values shift up enough
+                    int halfDy = (dy >= 0) ? (dy / 2) : -(((-dy) + 1) / 2);
+
+                    int iconY = y + halfDy;     // centered
+                    // optional tiny tweak if you want it slightly lower/higher:
+                    // iconY += 0; // or +1 / -1
+
+                    this.drawInlineIcon(op.iconPath, cursorX, iconY, iw, ih, shadow);
+                    cursorX += (iw + 1);
+                    maxRight = Math.max(maxRight, cursorX);
+                }
+                break;
+
+
                 case PUSH_HEX:
                     colorStack.push(activeHexRGB);
                     activeHexRGB = op.rgb;
@@ -5576,6 +5770,8 @@ public class HexFontRenderer extends FontRenderer {
             Matcher mrC = TAG_RBW_OPEN_CHEV.matcher(s);
             Matcher mpA = TAG_PULSE_OPEN.matcher(s);
             Matcher mpC = TAG_PULSE_OPEN_CHEV.matcher(s);
+            Matcher miA = TAG_ICO_OPEN.matcher(s);
+            Matcher miC = TAG_ICO_OPEN_CHEV.matcher(s);
 
             // WAVE
             Matcher mwA   = Pattern.compile("(?i)<\\s*wave([^>]*)>").matcher(s);
@@ -5644,6 +5840,8 @@ public class HexFontRenderer extends FontRenderer {
             boolean rC  = mrC.find();
             boolean pA  = mpA.find();
             boolean pC  = mpC.find();
+            boolean iA  = miA.find();
+            boolean iC  = miC.find();
 
             boolean wA  = mwA.find();
             boolean wC  = mwC.find();
@@ -5685,7 +5883,8 @@ public class HexFontRenderer extends FontRenderer {
                     !jitA && !jitC && !wbA && !wbC &&
                     !lpA && !lpC && !ssA && !ssC && !outA && !outC && !shdA && !shdC &&
                     !spA && !spC && !flA && !flC &&
-                    !glA && !glC) {
+                    !glA && !glC &&
+                    !iA && !iC) {
                 break;
             }
 
@@ -5697,6 +5896,8 @@ public class HexFontRenderer extends FontRenderer {
             int idxRC   = rC   ? mrC.start()   : Integer.MAX_VALUE;
             int idxPA   = pA   ? mpA.start()   : Integer.MAX_VALUE;
             int idxPC   = pC   ? mpC.start()   : Integer.MAX_VALUE;
+            int idxIA   = iA   ? miA.start()   : Integer.MAX_VALUE;
+            int idxIC   = iC   ? miC.start()   : Integer.MAX_VALUE;
             int idxWA   = wA   ? mwA.start()   : Integer.MAX_VALUE;
             int idxWC   = wC   ? mwC.start()   : Integer.MAX_VALUE;
             int idxSHA  = shA  ? mshA.start()  : Integer.MAX_VALUE;
@@ -5736,6 +5937,8 @@ public class HexFontRenderer extends FontRenderer {
             pick = Math.min(pick, idxRC);
             pick = Math.min(pick, idxPA);
             pick = Math.min(pick, idxPC);
+            pick = Math.min(pick, idxIA);
+            pick = Math.min(pick, idxIC);
             pick = Math.min(pick, idxWA);
             pick = Math.min(pick, idxWC);
             pick = Math.min(pick, idxSHA);
@@ -5780,6 +5983,8 @@ public class HexFontRenderer extends FontRenderer {
                 mrC  = TAG_RBW_OPEN_CHEV.matcher(s);
                 mpA  = TAG_PULSE_OPEN.matcher(s);
                 mpC  = TAG_PULSE_OPEN_CHEV.matcher(s);
+                miA  = TAG_ICO_OPEN.matcher(s);
+                miC  = TAG_ICO_OPEN_CHEV.matcher(s);
 
                 mwA   = Pattern.compile("(?i)<\\s*wave([^>]*)>").matcher(s);
                 mwC   = Pattern.compile("(?i)[«]\\s*wave([^»]*)[»]").matcher(s);
@@ -5816,6 +6021,7 @@ public class HexFontRenderer extends FontRenderer {
                 boolean rbwAt     = mrA.lookingAt()   || mrC.lookingAt();
                 boolean gradAt    = mgA.lookingAt()   || mgC.lookingAt();
                 boolean pulseAt   = mpA.lookingAt()   || mpC.lookingAt();
+                boolean iconAt    = miA.lookingAt()   || miC.lookingAt();
                 boolean waveAt    = mwA.lookingAt()   || mwC.lookingAt();
                 boolean shakeAt   = mshA.lookingAt()  || mshC.lookingAt();
                 boolean zoomAt    = mzA.lookingAt()   || mzC.lookingAt();
@@ -5831,6 +6037,49 @@ public class HexFontRenderer extends FontRenderer {
                 boolean flickerAt = mfA.lookingAt()   || mfC.lookingAt();
                 boolean glitchAt  = mglA.lookingAt()  || mglC.lookingAt();
                 boolean snowAt    = msnA.lookingAt()  || msnC.lookingAt();
+
+
+// ─────────────────────────────────────
+// ICON
+// ─────────────────────────────────────
+                if (iconAt) {
+                    boolean chevron = miC.lookingAt();
+                    Matcher mOpen = chevron ? miC : miA;
+
+                    Op ico = new Op();
+                    ico.kind = HexFontRenderer.Kind.ICON;
+                    ico.iconPath = mOpen.group(1);
+
+                    int w = ICON_DEFAULT_PX;
+                    int h = ICON_DEFAULT_PX;
+                    try {
+                        String gw = mOpen.group(2);
+                        String gh = mOpen.group(3);
+                        if (gw != null && gw.length() > 0) {
+                            w = Integer.parseInt(gw);
+                            if (gh != null && gh.length() > 0) {
+                                h = Integer.parseInt(gh);
+                            } else {
+                                h = w;
+                            }
+                        }
+                    } catch (Throwable t) {
+                        w = ICON_DEFAULT_PX;
+                        h = ICON_DEFAULT_PX;
+                    }
+
+                    if (w < 1) w = ICON_DEFAULT_PX;
+                    if (h < 1) h = w;
+                    if (w > 64) w = 64;
+                    if (h > 64) h = 64;
+
+                    ico.iconW = w;
+                    ico.iconH = h;
+
+                    ops.add(ico);
+                    s = s.substring(mOpen.end());
+                    continue;
+                }
 
 
                 // ─────────────────────────────────────
@@ -6620,6 +6869,7 @@ public class HexFontRenderer extends FontRenderer {
 
     private static enum Kind {
         TEXT,
+        ICON,
         PUSH_HEX,
         POP_HEX,
         GRADIENT_MULTI,
@@ -6701,6 +6951,11 @@ public class HexFontRenderer extends FontRenderer {
         float pulseAmp;
         float pulseSpeed;
         String legacyFromTag;
+
+        // ICON
+        String iconPath;
+        int iconW;
+        int iconH;
 
         int[] scrollStops = null;
         int   scrollRgb   = -1;

@@ -20,6 +20,7 @@ import java.util.List;
  * /lorepages clear
  * /lorepages list
  * /lorepages transfer <fromSlot> <toSlot> [move|copy]
+ * /lorepages testicon
  *
  * Stored in:
  *   stack.tag.HexLorePages.Pages (NBTTagList<String>)
@@ -40,7 +41,7 @@ public class LorePagesCommand extends CommandBase {
 
     @Override
     public String getCommandUsage(ICommandSender sender) {
-        return "/lorepages add <text...> | insert <index> <text...> | remove <index> | clear | list | transfer <fromSlot> <toSlot> [move|copy]";
+        return "/lorepages add <text...> | insert <index> <text...> | remove <index> | clear | list | transfer <fromSlot> <toSlot> [move|copy] | testicon";
     }
 
     @Override
@@ -60,6 +61,29 @@ public class LorePagesCommand extends CommandBase {
         if (args == null || args.length < 1) throw new WrongUsageException(getCommandUsage(sender));
 
         String sub = args[0].toLowerCase();
+
+        if ("testicon".equals(sub)) {
+            ItemStack held = p.getHeldItem();
+            if (held == null) {
+                msg(p, "§cHold an item first.");
+                return;
+            }
+
+            // NOTE: this only stores tokens in pages. Icons won't render until the client renderer
+            // supports parsing + drawing <ico:...> tokens.
+            String text =
+                    "&7Icon test: <ico:gems/pill_dark_fire_face_64_anim> &fPurple\n" +
+                            "&7Bigger: <ico:gems/pill_dark_fire_face_64_anim> &fBigger one\n" +
+                            "&7Inline: &aAAA <ico:gems/pill_dark_fire_face_64_anim> &bBBB";
+
+            NBTTagList list = getOrCreatePagesList(held);
+            list.appendTag(new net.minecraft.nbt.NBTTagString(text));
+            savePagesList(held, list);
+
+            msg(p, "§aAdded icon test page §f#" + list.tagCount() + "§a. Open lore pages and hover.");
+            return;
+        }
+
         if ("add".equals(sub)) {
             requireArgs(args, 2, sender);
             ItemStack held = p.getHeldItem();
@@ -271,7 +295,8 @@ public class LorePagesCommand extends CommandBase {
     }
 
     private static void requireArgs(String[] args, int min, ICommandSender sender) {
-        if (args == null || args.length < min) throw new WrongUsageException(((CommandBase) (Object) new LorePagesCommand()).getCommandUsage(sender));
+        if (args == null || args.length < min)
+            throw new WrongUsageException(((CommandBase) (Object) new LorePagesCommand()).getCommandUsage(sender));
     }
 
     private static String joinFrom(String[] args, int start) {

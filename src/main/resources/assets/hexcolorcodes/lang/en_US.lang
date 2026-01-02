@@ -1,0 +1,69 @@
+# ============================================================
+# Hex Gems / Pills item names (Minecraft 1.7.10)
+# Styled / Animated names to mirror each orb's texture colors
+# Fast smooth scroll + "(Enhanced)" for animated variants
+# ============================================================
+
+# ------------------------------------------------------------
+# Gem Orbs (ItemGemIcons keys: item.hex_gem.<variant>.name)
+# ------------------------------------------------------------
+
+# Frost (icy blue)
+item.hex_gem.orb_gem_blue_frost_64.name=<shadow><grad #4FD8FF #B7F2FF #FFFFFF scroll=0.28>Frost Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_blue_frost_64_anim_8f.name=<shadow><grad #3FD2FF #9CEBFF #FFFFFF scroll=0.36>Frost Gem Orb (Enhanced)</grad></shadow>
+
+# Chaotic Sphere (purple → magenta → cosmic)
+item.hex_gem.orb_gem_chaoticSphere_64.name=<shadow><grad #B54CFF #FF4FD8 #7A3CFF scroll=0.32>Chaotic Sphere Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_chaoticSphere_anim_8f_64x516.name=<shadow><grad #9B3DFF #FF43C8 #5C2CFF scroll=0.42>Chaotic Sphere Gem Orb (Enhanced)</grad></shadow>
+
+# Fractured (pale/ghosty light)
+item.hex_gem.orb_gem_fractured_64.name=<shadow><grad #EAF7FF #BFEFFF #FFFFFF scroll=0.26>Fractured Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_fractured_anim_8f_64x516.name=<shadow><grad #D7F2FF #AEE8FF #FFFFFF scroll=0.38>Fractured Gem Orb (Enhanced)</grad></shadow>
+
+# Solar (gold)
+item.hex_gem.orb_gem_gold_solar_64.name=<shadow><grad #FFC64D #FFF0A3 #FFB936 scroll=0.24>Solar Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_gold_solar_64_anim_8f.name=<shadow><grad #FFB936 #FFE88A #FFD36A scroll=0.36>Solar Gem Orb (Enhanced)</grad></shadow>
+
+# Nature (green)
+item.hex_gem.orb_gem_green_nature_64.name=<shadow><grad #2CFF6B #9CFFB9 #3DFF84 scroll=0.24>Nature Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_green_nature_64_anim_8f.name=<shadow><grad #21F962 #7CFFAA #D6FFE4 scroll=0.36>Nature Gem Orb (Enhanced)</grad></shadow>
+
+# Light (white/blue glow)
+item.hex_gem.orb_gem_light_64.name=<shadow><grad #FFFFFF #C7F3FF #8FE7FF scroll=0.22>Light Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_light_anim_8f_64x516.name=<shadow><grad #FFFFFF #B9EEFF #73DDFF scroll=0.34>Light Gem Orb (Enhanced)</grad></shadow>
+
+# Negative (dark / voidy)
+item.hex_gem.orb_gem_negative_64.name=<shadow><grad #1B0A2A #5C2CFF #1B0A2A scroll=0.34>Negative Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_negative_anim_8f_64x516.name=<shadow><grad #12061E #4A24FF #12061E scroll=0.46>Negative Gem Orb (Enhanced)</grad></shadow>
+
+# Inferno (orange/red)
+item.hex_gem.orb_gem_orange_inferno_64.name=<shadow><grad #FF5A2B #FFB14D #FF3B1A scroll=0.28>Inferno Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_orange_inferno_64_anim_8f.name=<shadow><grad #FF3B1A #FF9A3A #FF5A2B scroll=0.42>Inferno Gem Orb (Enhanced)</grad></shadow>
+
+# Energized Rainbow (full spectrum)
+item.hex_gem.orb_gem_rainbow_energized_64.name=<shadow><rbw speed=0.85>Energized Rainbow Gem Orb</rbw></shadow>
+item.hex_gem.orb_gem_rainbow_energized_anim_8f_64x516.name=<shadow><rbw speed=1.10>Energized Rainbow Gem Orb (Enhanced)</rbw></shadow>
+
+# Swirly (rainbow swirl vibe but softer)
+item.hex_gem.orb_gem_swirly_64.name=<shadow><grad #FF4FD8 #36D1FF #FFE66D #7CFF6B scroll=0.28>Swirly Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_swirly_loop.name=<shadow><grad #FF4FD8 #36D1FF #FFE66D #7CFF6B scroll=0.40>Swirly Gem Orb (Enhanced)</grad></shadow>
+
+# Aether (teal)
+item.hex_gem.orb_gem_teal_aether_64.name=<shadow><grad #2BFFD8 #36D1FF #2BFFD8 scroll=0.26>Aether Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_teal_aether_64_anim_8f.name=<shadow><grad #18F6D0 #2CCBFF #18F6D0 scroll=0.40>Aether Gem Orb (Enhanced)</grad></shadow>
+
+# Void (violet/purple)
+item.hex_gem.orb_gem_violet_void_64.name=<shadow><grad #7A3CFF #C24CFF #4B1FB8 scroll=0.30>Void Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_violet_void_64_anim_8f.name=<shadow><grad #5C2CFF #FF4FD8 #3A178F scroll=0.44>Void Gem Orb (Enhanced)</grad></shadow>
+
+# ------------------------------------------------------------
+# Pills (same item: item.hex_gem.<variant>.name)
+# ------------------------------------------------------------
+
+# Dark Fire (black/purple flame)
+item.hex_gem.pill_dark_fire_face_64.name=<shadow><grad #12061E #5C2CFF #FF4FD8 scroll=0.36>Dark Fire Pill</grad></shadow>
+item.hex_gem.pill_dark_fire_face_64_anim.name=<shadow><grad #0B0412 #4A24FF #FF3FBF scroll=0.50>Dark Fire Pill (Enhanced)</grad></shadow>
+
+# Fire (classic flame)
+item.hex_gem.pill_fire_textured_64.name=<shadow><grad #FF3B1A #FFB14D #FFD36A scroll=0.34>Fire Pill</grad></shadow>
+item.hex_gem.pill_fire_animated_64_anim.name=<shadow><grad #FF1F0F #FF8A2E #FFE88A scroll=0.48>Fire Pill (Enhanced)</grad></shadow>

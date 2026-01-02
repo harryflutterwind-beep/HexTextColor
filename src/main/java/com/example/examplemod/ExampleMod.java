@@ -8,7 +8,7 @@ package com.example.examplemod;
 import com.example.examplemod.command.RarityLoreCommand;
 import com.example.examplemod.command.SetDamageCommand;
 import com.example.examplemod.item.ItemTabIcon;
-import com.example.examplemod.item.ItemTransformWeapon;
+import com.example.examplemod.item.ItemGemIcons;
 import com.example.examplemod.command.LorePagesCommand;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.SidedProxy;
@@ -17,7 +17,6 @@ import cpw.mods.fml.common.event.FMLInitializationEvent;
 import cpw.mods.fml.common.event.FMLPreInitializationEvent;
 import cpw.mods.fml.common.event.FMLServerStartingEvent;
 import cpw.mods.fml.common.registry.GameRegistry;
-import net.minecraftforge.common.MinecraftForge;
 
 @Mod(
         modid = "hexcolorcodes",
@@ -28,8 +27,9 @@ import net.minecraftforge.common.MinecraftForge;
 public class ExampleMod {
 
     public static final CreativeTabHex HEX_TAB = new CreativeTabHex();
-    public static ItemTransformWeapon TRANSFORM_WEAPON;
+
     public static ItemTabIcon TAB_ICON_ITEM;
+    public static ItemGemIcons GEM_ICONS;
 
     @SidedProxy(
             clientSide = "com.example.examplemod.client.ClientProxy",
@@ -44,15 +44,15 @@ public class ExampleMod {
         // Config + items are safe on both sides
         ModConfig.load(e.getSuggestedConfigurationFile());
 
-        TRANSFORM_WEAPON = new ItemTransformWeapon();
-        TRANSFORM_WEAPON.setUnlocalizedName("hex_transform_weapon");
-        TRANSFORM_WEAPON.setCreativeTab(HEX_TAB);
-        TRANSFORM_WEAPON.setMaxStackSize(1);
-        GameRegistry.registerItem(TRANSFORM_WEAPON, "hex_transform_weapon");
+
 
         TAB_ICON_ITEM = new ItemTabIcon();
         GameRegistry.registerItem(TAB_ICON_ITEM, "hex_tab_icon");
         HEX_TAB.setIcon(TAB_ICON_ITEM);
+
+        // Gems: one item, many subtypes (meta variants) mapped to textures/gems/*.png
+        GEM_ICONS = new ItemGemIcons();
+        GameRegistry.registerItem(GEM_ICONS, "hex_gem");
 
         // No client classes here
         proxy.preInit();

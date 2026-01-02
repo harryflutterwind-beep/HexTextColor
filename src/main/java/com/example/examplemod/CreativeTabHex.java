@@ -19,5 +19,5 @@ public class CreativeTabHex extends CreativeTabs {
     }
 
     @Override
-    public String getTranslatedTabLabel() { return "Hex Items"; }
+    public String getTranslatedTabLabel() { return "<shadow><flicker amp=0.7 speed=1.4><wave amp=2.2 speed=6><grad #ff4fd8 #36d1ff #ffe66d #7cff6b scroll=0.22>Hex Items</grad></wave></flicker></shadow>"; }
 }
