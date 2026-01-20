@@ -2206,7 +2206,14 @@ public class HexFontRenderer extends FontRenderer {
     }
 
     private void drawInlineIcon(String iconPath, int x, int y, int w, int h, boolean shadow) {
-        ResourceLocation rl = iconResource(iconPath);
+        if (iconPath == null) return;
+
+        // sanitize: prevents ".png>" / trailing garbage issues
+        String p = iconPath.trim();
+        if (p.endsWith(">")) p = p.substring(0, p.length() - 1);
+        if (p.endsWith(".png")) p = p.substring(0, p.length() - 4);
+
+        ResourceLocation rl = iconResource(p);
         if (rl == null) return;
 
         Minecraft mc = Minecraft.getMinecraft();
@@ -2218,8 +2225,11 @@ public class HexFontRenderer extends FontRenderer {
         GL11.glEnable(GL11.GL_BLEND);
         GL11.glColor4f(1f, 1f, 1f, 1f);
 
-        // Simple convention: any icon containing "_anim" is treated as a vertical sprite sheet
-        boolean anim = (iconPath != null && iconPath.indexOf("_anim") >= 0);
+        // Treat these as animated sheets
+        boolean anim = (p.indexOf("_anim") >= 0) || (p.indexOf("_loop") >= 0);
+
+        // If you want it even more robust without ImageIO: assume any "swirly_loop" is a sheet.
+        // anim = anim || (p.indexOf("swirly_loop") >= 0);
 
         if (!anim) {
             if (shadow) {
@@ -2231,14 +2241,17 @@ public class HexFontRenderer extends FontRenderer {
             return;
         }
 
-        final int FRAMES = 8; // <-- make your PNG 64x(64*FRAMES)
-        final int FPS    = 7;
+        // Your gem sheets are 64x(64*FRAMES)
+        final int FRAMES = 8;
 
-        long ms = Minecraft.getSystemTime();
-        long per = 1000L / (long)Math.max(1, FPS);
-        if (per <= 0L) per = 1L;
+        // Match your mcmeta: frametime = 3 ticks per frame
+        final int FRAME_TICKS = 3;
 
-        int frame = (int)((ms / per) % (long)FRAMES);
+        long ticks;
+        if (mc.theWorld != null) ticks = mc.theWorld.getTotalWorldTime();
+        else ticks = (Minecraft.getSystemTime() / 50L); // fallback
+
+        int frame = (int)((ticks / (long)Math.max(1, FRAME_TICKS)) % (long)FRAMES);
 
         float u0 = 0f, u1 = 1f;
         float v0 = (float)frame / (float)FRAMES;
