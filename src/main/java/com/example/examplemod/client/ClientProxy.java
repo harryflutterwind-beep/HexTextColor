@@ -1,6 +1,9 @@
 // src/main/java/com/example/examplemod/client/ClientProxy.java
 package com.example.examplemod.client;
 
+import com.example.examplemod.client.fractured.FracturedClientBootstrap;
+import com.example.examplemod.client.hud.HexChaoticHudOverlay;
+import com.example.examplemod.client.hud.HexLightHudOverlay;
 import cpw.mods.fml.common.FMLCommonHandler;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
@@ -36,5 +39,12 @@ public class ClientProxy extends com.example.examplemod.CommonProxy {
         }
 
         HexSlotOverlay.register();
+
+        // Orb HUD overlays (non-fractured)
+        MinecraftForge.EVENT_BUS.register(new HexLightHudOverlay());
+        MinecraftForge.EVENT_BUS.register(new HexChaoticHudOverlay());
+
+        // Fractured-only HUD + CTRL tap handler
+        FracturedClientBootstrap.init();
     }
 }

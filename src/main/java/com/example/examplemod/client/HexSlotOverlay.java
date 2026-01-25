@@ -14,6 +14,7 @@ import net.minecraftforge.client.event.GuiScreenEvent;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import net.minecraftforge.common.MinecraftForge;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
 
 import java.lang.reflect.Field;
 import java.util.regex.Pattern;
@@ -58,146 +59,184 @@ public class HexSlotOverlay {
     // ── INVENTORY ──────────────────────────────────────────────────────────────
     @SubscribeEvent
     public void drawContainer(GuiScreenEvent.DrawScreenEvent.Post e) {
-        if (!(e.gui instanceof GuiContainer)) return;
-        if (!ModConfig.overlayEnableInventory) return;
+        int __prevMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        GL11.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS);
+        GL11.glMatrixMode(GL11.GL_MODELVIEW);
+        GL11.glPushMatrix();
+        try {
+            // Safety: ensure HUD isn't affected by any prior 3D render state (F5 toggles can leave lighting on)
+            GL11.glDisable(GL11.GL_LIGHTING);
+            GL11.glDisable(GL12.GL_RESCALE_NORMAL);
+            GL11.glColor4f(1f, 1f, 1f, 1f);
 
-        GuiContainer gui = (GuiContainer) e.gui;
-        int guiLeft = getGuiLeft(gui);
-        int guiTop  = getGuiTop(gui);
+            if (!(e.gui instanceof GuiContainer)) return;
+            if (!ModConfig.overlayEnableInventory) return;
 
-        Container c = gui.inventorySlots;
-        if (c == null || c.inventorySlots == null) return;
+            GuiContainer gui = (GuiContainer) e.gui;
+            int guiLeft = getGuiLeft(gui);
+            int guiTop  = getGuiTop(gui);
 
-        final long ms = Minecraft.getSystemTime() & 0xFFFFFFFFL;
-        final float t = (ms % 4000L) / 4000f;
+            Container c = gui.inventorySlots;
+            if (c == null || c.inventorySlots == null) return;
 
-        for (Object o : c.inventorySlots) {
-            if (!(o instanceof Slot)) continue;
-            Slot s = (Slot) o;
-            if (!s.getHasStack()) continue;
+            final long ms = Minecraft.getSystemTime() & 0xFFFFFFFFL;
+            final float t = (ms % 4000L) / 4000f;
 
-            ItemStack stack = s.getStack();
-            int color = colorIfHasRarityLore(stack, t); // STRICT lore-only
-            if (color == NO_OVERLAY) continue;
+            for (Object o : c.inventorySlots) {
+                if (!(o instanceof Slot)) continue;
+                Slot s = (Slot) o;
+                if (!s.getHasStack()) continue;
 
-            int x = guiLeft + s.xDisplayPosition;
-            int y = guiTop  + s.yDisplayPosition;
+                ItemStack stack = s.getStack();
+                int color = colorIfHasRarityLore(stack, t); // STRICT lore-only
+                if (color == NO_OVERLAY) continue;
 
-            int bA = ModConfig.overlayBorderAlpha & 0xFF;
-            int fA = ModConfig.overlayFillAlpha   & 0xFF;
+                int x = guiLeft + s.xDisplayPosition;
+                int y = guiTop  + s.yDisplayPosition;
 
-            boolean isBlack  = (color == 0x000000);
-            boolean isGlitch = hasTokenInLore(stack, P_GLITCH);
+                int bA = ModConfig.overlayBorderAlpha & 0xFF;
+                int fA = ModConfig.overlayFillAlpha   & 0xFF;
 
-            if (isBlack) { bA = 0xE0; fA = Math.max(fA, 0xA0); }
+                boolean isBlack  = (color == 0x000000);
+                boolean isGlitch = hasTokenInLore(stack, P_GLITCH);
 
-            // ── ITEM GLOSS (on the icon itself) ──
-            // Gloss is only for higher tiers (you can widen this list later)
-            boolean isEtech  = hasTokenInLore(stack, P_ETECH);
-            boolean isPearl  = hasTokenInLore(stack, P_PEARL);
-            boolean isLegend = hasTokenInLore(stack, P_LEGEND);
-            boolean isEff    = hasTokenInLore(stack, P_EFF) || hasTokenInLore(stack, P_EFF_PLUS);
+                if (isBlack) { bA = 0xE0; fA = Math.max(fA, 0xA0); }
 
-            if (isGlitch || isEtech || isPearl || isLegend || isEff) {
-                float period = isEff ? 1200f : (isPearl ? 1600f : (isGlitch ? 2000f : 2400f));
-                float phase  = glossPhaseFor(stack, ms, period);
-                int glossA   = isEff ? 110 : (isGlitch ? 90 : 75);
+                // ── ITEM GLOSS (on the icon itself) ──
+                // Gloss is only for higher tiers (you can widen this list later)
+                boolean isEtech  = hasTokenInLore(stack, P_ETECH);
+                boolean isPearl  = hasTokenInLore(stack, P_PEARL);
+                boolean isLegend = hasTokenInLore(stack, P_LEGEND);
+                boolean isEff    = hasTokenInLore(stack, P_EFF) || hasTokenInLore(stack, P_EFF_PLUS);
 
-                // Neutral white gloss reads like "shine" best
-                drawItemGloss(x, y, 16, 16, phase, glossA, 0xFFFFFF);
+                if (isGlitch || isEtech || isPearl || isLegend || isEff) {
+                    float period = isEff ? 1200f : (isPearl ? 1600f : (isGlitch ? 2000f : 2400f));
+                    float phase  = glossPhaseFor(stack, ms, period);
+                    int glossA   = isEff ? 110 : (isGlitch ? 90 : 75);
+
+                    // Neutral white gloss reads like "shine" best
+                    drawItemGloss(x, y, 16, 16, phase, glossA, 0xFFFFFF);
+                }
+
+                // ── SLOT BORDER/STRIP ──
+                if (isGlitch) {
+                    drawBorderVGradient(x - 1, y - 1, 18, 18, GLITCH_TOP_RGB, GLITCH_BOT_RGB, bA);
+                    drawRectVGradient(x, y + 16 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight,
+                            GLITCH_TOP_RGB, GLITCH_BOT_RGB, fA);
+                } else {
+                    drawBorder(x - 1, y - 1, 18, 18, color, bA);
+                    drawRect(x, y + 16 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight, color, fA);
+                }
+
+                if (isBlack) drawBorder(x, y, 16, 16, 0x666666, 0x80);
             }
-
-            // ── SLOT BORDER/STRIP ──
-            if (isGlitch) {
-                drawBorderVGradient(x - 1, y - 1, 18, 18, GLITCH_TOP_RGB, GLITCH_BOT_RGB, bA);
-                drawRectVGradient(x, y + 16 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight,
-                        GLITCH_TOP_RGB, GLITCH_BOT_RGB, fA);
-            } else {
-                drawBorder(x - 1, y - 1, 18, 18, color, bA);
-                drawRect(x, y + 16 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight, color, fA);
-            }
-
-            if (isBlack) drawBorder(x, y, 16, 16, 0x666666, 0x80);
+        } finally {
+            // Hard reset: prevents "dark hotbar" / tinted UI after perspective changes
+            GL11.glColor4f(1f, 1f, 1f, 1f);
+            GL11.glDisable(GL11.GL_LIGHTING);
+            GL11.glDisable(GL12.GL_RESCALE_NORMAL);
+            GL11.glPopMatrix();
+            GL11.glPopAttrib();
+            GL11.glMatrixMode(__prevMatrixMode);
         }
     }
 
     // ── HOTBAR ────────────────────────────────────────────────────────────────
     @SubscribeEvent
     public void drawHotbar(RenderGameOverlayEvent.Post e) {
-        if (e.type != RenderGameOverlayEvent.ElementType.HOTBAR) return;
-        if (!ModConfig.overlayEnableHotbar) return;
+        int __prevMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        GL11.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS);
+        GL11.glMatrixMode(GL11.GL_MODELVIEW);
+        GL11.glPushMatrix();
+        try {
+            // Safety: ensure HUD isn't affected by any prior 3D render state (F5 toggles can leave lighting on)
+            GL11.glDisable(GL11.GL_LIGHTING);
+            GL11.glDisable(GL12.GL_RESCALE_NORMAL);
+            GL11.glColor4f(1f, 1f, 1f, 1f);
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc.currentScreen != null || mc.thePlayer == null) return;
+            if (e.type != RenderGameOverlayEvent.ElementType.HOTBAR) return;
+            if (!ModConfig.overlayEnableHotbar) return;
 
-        final long ms = Minecraft.getSystemTime() & 0xFFFFFFFFL;
-        final float t  = (ms % 4000L) / 4000f;
-        final float pulse = 0.5f + 0.5f * (float)Math.sin((ms % 1000L) / 1000f * 2f * (float)Math.PI);
+            Minecraft mc = Minecraft.getMinecraft();
+            if (mc.currentScreen != null || mc.thePlayer == null) return;
 
-        ScaledResolution sr = new ScaledResolution(mc, mc.displayWidth, mc.displayHeight);
-        int sw = sr.getScaledWidth();
-        int sh = sr.getScaledHeight();
+            final long ms = Minecraft.getSystemTime() & 0xFFFFFFFFL;
+            final float t  = (ms % 4000L) / 4000f;
+            final float pulse = 0.5f + 0.5f * (float)Math.sin((ms % 1000L) / 1000f * 2f * (float)Math.PI);
 
-        final int left = sw / 2 - 90;
-        final int top  = sh - 22;
-        final int selected = mc.thePlayer.inventory.currentItem;
+            ScaledResolution sr = new ScaledResolution(mc, mc.displayWidth, mc.displayHeight);
+            int sw = sr.getScaledWidth();
+            int sh = sr.getScaledHeight();
 
-        for (int i = 0; i < 9; i++) {
-            ItemStack stack = mc.thePlayer.inventory.mainInventory[i];
-            if (stack == null) continue;
+            final int left = sw / 2 - 90;
+            final int top  = sh - 22;
+            final int selected = mc.thePlayer.inventory.currentItem;
 
-            int color = colorIfHasRarityLore(stack, t); // STRICT lore-only
-            if (color == NO_OVERLAY) continue;
+            for (int i = 0; i < 9; i++) {
+                ItemStack stack = mc.thePlayer.inventory.mainInventory[i];
+                if (stack == null) continue;
 
-            boolean isSelected = (i == selected);
-            boolean isBlack    = (color == 0x000000);
-            boolean isGlitch   = hasTokenInLore(stack, P_GLITCH);
+                int color = colorIfHasRarityLore(stack, t); // STRICT lore-only
+                if (color == NO_OVERLAY) continue;
 
-            boolean isEtech  = hasTokenInLore(stack, P_ETECH);
-            boolean isPearl  = hasTokenInLore(stack, P_PEARL);
-            boolean isLegend = hasTokenInLore(stack, P_LEGEND);
-            boolean isEff    = hasTokenInLore(stack, P_EFF) || hasTokenInLore(stack, P_EFF_PLUS);
+                boolean isSelected = (i == selected);
+                boolean isBlack    = (color == 0x000000);
+                boolean isGlitch   = hasTokenInLore(stack, P_GLITCH);
 
-            int x = left + i * 20 + 1; // frame
-            int y = top  + 1;
+                boolean isEtech  = hasTokenInLore(stack, P_ETECH);
+                boolean isPearl  = hasTokenInLore(stack, P_PEARL);
+                boolean isLegend = hasTokenInLore(stack, P_LEGEND);
+                boolean isEff    = hasTokenInLore(stack, P_EFF) || hasTokenInLore(stack, P_EFF_PLUS);
 
-            int bA = Math.max(0, (ModConfig.overlayBorderAlpha - 0x10)) & 0xFF;
-            int fA = ModConfig.overlayFillAlpha & 0xFF;
-            if (isBlack) { bA = 0xE0; fA = Math.max(fA, 0xA0); }
+                int x = left + i * 20 + 1; // frame
+                int y = top  + 1;
 
-            // ── ITEM GLOSS (icon area inside the 18x18 frame) ──
-            if (isGlitch || isEtech || isPearl || isLegend || isEff) {
-                float period = isEff ? 1200f : (isPearl ? 1600f : (isGlitch ? 2000f : 2400f));
-                float phase  = glossPhaseFor(stack, ms, period);
-                int glossA   = isEff ? 110 : (isGlitch ? 90 : 75);
+                int bA = Math.max(0, (ModConfig.overlayBorderAlpha - 0x10)) & 0xFF;
+                int fA = ModConfig.overlayFillAlpha & 0xFF;
+                if (isBlack) { bA = 0xE0; fA = Math.max(fA, 0xA0); }
 
-                drawItemGloss(x + 1, y + 1, 16, 16, phase, glossA, 0xFFFFFF);
-            }
+                // ── ITEM GLOSS (icon area inside the 18x18 frame) ──
+                if (isGlitch || isEtech || isPearl || isLegend || isEff) {
+                    float period = isEff ? 1200f : (isPearl ? 1600f : (isGlitch ? 2000f : 2400f));
+                    float phase  = glossPhaseFor(stack, ms, period);
+                    int glossA   = isEff ? 110 : (isGlitch ? 90 : 75);
 
-            if (!isSelected) {
-                if (isGlitch) {
-                    drawBorderVGradient(x, y, 18, 18, GLITCH_TOP_RGB, GLITCH_BOT_RGB, bA);
-                    drawRectVGradient(x + 1, y + 17 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight,
-                            GLITCH_TOP_RGB, GLITCH_BOT_RGB, fA);
-                } else {
-                    drawBorder(x, y, 18, 18, color, bA);
-                    drawRect(x + 1, y + 17 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight, color, fA);
+                    drawItemGloss(x + 1, y + 1, 16, 16, phase, glossA, 0xFFFFFF);
                 }
 
-                if (isBlack) drawBorder(x + 1, y + 1, 16, 16, 0x666666, 0x80);
+                if (!isSelected) {
+                    if (isGlitch) {
+                        drawBorderVGradient(x, y, 18, 18, GLITCH_TOP_RGB, GLITCH_BOT_RGB, bA);
+                        drawRectVGradient(x + 1, y + 17 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight,
+                                GLITCH_TOP_RGB, GLITCH_BOT_RGB, fA);
+                    } else {
+                        drawBorder(x, y, 18, 18, color, bA);
+                        drawRect(x + 1, y + 17 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight, color, fA);
+                    }
 
-            } else {
-                int a = (int)(0x90 + 0x40 * pulse);
+                    if (isBlack) drawBorder(x + 1, y + 1, 16, 16, 0x666666, 0x80);
 
-                if (isGlitch) {
-                    drawRectVGradient(x + 1, y + 17, 16, 2, GLITCH_TOP_RGB, GLITCH_BOT_RGB, a);
-                    drawRectVGradient(x + 1, y + 17 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight,
-                            GLITCH_TOP_RGB, GLITCH_BOT_RGB, fA);
                 } else {
-                    drawRect(x + 1, y + 17, 16, 2, color, a);
-                    drawRect(x + 1, y + 17 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight, color, fA);
+                    int a = (int)(0x90 + 0x40 * pulse);
+
+                    if (isGlitch) {
+                        drawRectVGradient(x + 1, y + 17, 16, 2, GLITCH_TOP_RGB, GLITCH_BOT_RGB, a);
+                        drawRectVGradient(x + 1, y + 17 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight,
+                                GLITCH_TOP_RGB, GLITCH_BOT_RGB, fA);
+                    } else {
+                        drawRect(x + 1, y + 17, 16, 2, color, a);
+                        drawRect(x + 1, y + 17 - ModConfig.overlayStripHeight, 16, ModConfig.overlayStripHeight, color, fA);
+                    }
                 }
             }
+        } finally {
+            // Hard reset: prevents "dark hotbar" / tinted UI after perspective changes
+            GL11.glColor4f(1f, 1f, 1f, 1f);
+            GL11.glDisable(GL11.GL_LIGHTING);
+            GL11.glDisable(GL12.GL_RESCALE_NORMAL);
+            GL11.glPopMatrix();
+            GL11.glPopAttrib();
+            GL11.glMatrixMode(__prevMatrixMode);
         }
     }
 

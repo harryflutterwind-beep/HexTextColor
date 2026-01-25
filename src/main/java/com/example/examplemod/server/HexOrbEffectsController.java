@@ -55,6 +55,28 @@ public final class HexOrbEffectsController {
     /** If set, ALL proc damage routes through this (after dev boost math, if enabled). */
     public static volatile DamageApplier DAMAGE_APPLIER = null;
 
+
+    // ─────────────────────────────────────────────────────────────
+    // FRACTURED: Flying blast (virtual projectile) keys (player entity NBT)
+    // Written by PacketFracturedAction; advanced in onLivingUpdate (server side).
+    // ─────────────────────────────────────────────────────────────
+    private static final String FRB_KEY_ACTIVE = "HexFRB_Active";
+    private static final String FRB_KEY_X      = "HexFRB_X";
+    private static final String FRB_KEY_Y      = "HexFRB_Y";
+    private static final String FRB_KEY_Z      = "HexFRB_Z";
+    private static final String FRB_KEY_DX     = "HexFRB_DX";
+    private static final String FRB_KEY_DY     = "HexFRB_DY";
+    private static final String FRB_KEY_DZ     = "HexFRB_DZ";
+    private static final String FRB_KEY_STEP   = "HexFRB_Step";
+    private static final String FRB_KEY_TICKS  = "HexFRB_Ticks";
+    private static final String FRB_KEY_DMG    = "HexFRB_Dmg";
+    private static final String FRB_KEY_KB     = "HexFRB_KB";
+    private static final String FRB_KEY_RAD    = "HexFRB_Rad";
+
+    private static final String FRB_KEY_AOE_RAD = "HexFRB_AoeRad";
+    private static final String FRB_KEY_AOE_DMG = "HexFRB_AoeDmg";
+    private static final String FRB_KEY_WIL_SNAP = "HexFRB_WilSnap";
+    private static final String FRB_KEY_END_BOOM = "HexFRB_EndBoom"; // explode when reaching end-of-path with no hit
     // ─────────────────────────────────────────────────────────────
     // PROC BASE DAMAGE SOURCE
     // Many mods (including DBC) may report tiny vanilla event damage
@@ -2190,6 +2212,11 @@ public final class HexOrbEffectsController {
         if (w == null || w.isRemote) return;
 
         NBTTagCompound data = ent.getEntityData();
+
+        // FRACTURED: advance flying blast (server-side)
+        if (ent instanceof net.minecraft.entity.player.EntityPlayerMP) {
+            tickFracturedFlyingBlast((net.minecraft.entity.player.EntityPlayerMP) ent);
+        }
         if (data == null) return;
 
         long now = serverNow(w);
@@ -2338,6 +2365,11 @@ public final class HexOrbEffectsController {
         if (w == null || w.isRemote) return;
 
         NBTTagCompound data = ent.getEntityData();
+
+        // FRACTURED: advance flying blast (server-side)
+        if (ent instanceof net.minecraft.entity.player.EntityPlayerMP) {
+            tickFracturedFlyingBlast((net.minecraft.entity.player.EntityPlayerMP) ent);
+        }
         if (data == null) return;
 
         // If a rush is active, just clear it (no extra explosion on death)
@@ -3385,4 +3417,384 @@ public final class HexOrbEffectsController {
         if (e == null) return "null";
         try { return e.getCommandSenderName(); } catch (Throwable t){ return e.getClass().getSimpleName(); }
     }
+
+
+    // ─────────────────────────────────────────────────────────────
+
+    // Returns MODIFIED WillPower (includes form multipliers) when DBC exposes it as an attribute.
+    // Used only for FRACTURED flying-blast dynamic scaling.
+    // Returns MODIFIED WillPower (includes form multipliers) when available.
+    // Used only for FRACTURED flying-blast dynamic scaling.
+    private static int frbGetEffectiveWill(net.minecraft.entity.player.EntityPlayerMP p){
+        if (p == null) return 0;
+
+        // Prefer our provider helper (handles Multi attribute + NPCDBC reflection + NBT fallback)
+        try {
+            double v = com.example.examplemod.server.HexDBCProcDamageProvider.getWillPowerEffective(p);
+            if (v > 0D){
+                if (v > 2000000000D) v = 2000000000D;
+                return (int)Math.round(v);
+            }
+        } catch (Throwable ignored) {}
+
+        // Fallback: attribute-only (may be base/original on some setups)
+        try {
+            net.minecraft.entity.ai.attributes.IAttributeInstance inst =
+                    p.getAttributeMap().getAttributeInstanceByName("dbc.WillPower");
+            if (inst != null){
+                double v = inst.getAttributeValue();
+                if (v > 0D){
+                    // If Multi exists and looks meaningful, apply it when value seems "original".
+                    try {
+                        net.minecraft.entity.ai.attributes.IAttributeInstance mi =
+                                p.getAttributeMap().getAttributeInstanceByName("dbc.WillPower.Multi");
+                        if (mi != null){
+                            double mul = mi.getAttributeValue();
+                            if (mul > 1.05D && v < 50000D) v = v * mul;
+                        }
+                    } catch (Throwable ignored2) {}
+                    if (v > 2000000000D) v = 2000000000D;
+                    return (int)Math.round(v);
+                }
+            }
+        } catch (Throwable ignored) {}
+        return 0;
+    }
+
+
+    // FRACTURED: Flying blast tick (server-side)
+    // ─────────────────────────────────────────────────────────────
+    private static void tickFracturedFlyingBlast(net.minecraft.entity.player.EntityPlayerMP p){
+        if (p == null || p.worldObj == null || p.worldObj.isRemote) return;
+
+        NBTTagCompound data = p.getEntityData();
+        if (data == null || !data.getBoolean(FRB_KEY_ACTIVE)) return;
+
+        int ticksLeft = data.getInteger(FRB_KEY_TICKS);
+
+        double x  = data.getDouble(FRB_KEY_X);
+        double y  = data.getDouble(FRB_KEY_Y);
+        double z  = data.getDouble(FRB_KEY_Z);
+
+        double dx = data.getDouble(FRB_KEY_DX);
+        double dy = data.getDouble(FRB_KEY_DY);
+        double dz = data.getDouble(FRB_KEY_DZ);
+
+        double step = data.getDouble(FRB_KEY_STEP);
+        if (step <= 0D) step = 1.25D;
+
+        double rad = data.getDouble(FRB_KEY_RAD);
+        if (rad <= 0D) rad = 0.55D;
+
+        float dmg = data.getFloat(FRB_KEY_DMG);
+        if (Float.isNaN(dmg) || Float.isInfinite(dmg) || dmg <= 0f) dmg = 4.0f;
+
+        double kb = data.getDouble(FRB_KEY_KB);
+        if (kb < 0D) kb = 0D;
+
+        double aoeRad = data.hasKey(FRB_KEY_AOE_RAD) ? data.getDouble(FRB_KEY_AOE_RAD) : 0D;
+        float aoeDmg   = data.hasKey(FRB_KEY_AOE_DMG) ? data.getFloat(FRB_KEY_AOE_DMG) : (float)(dmg * 0.70f);
+
+        // Dynamic scaling: if the player changes forms while the blast is flying,
+        // scale damage by currentWill / snapshotWill (snapshot written by PacketFracturedAction).
+        int wilSnap = data.hasKey(FRB_KEY_WIL_SNAP) ? data.getInteger(FRB_KEY_WIL_SNAP) : 0;
+        int wilCur  = frbGetEffectiveWill(p);
+        if (wilSnap > 0 && wilCur > 0){
+            float wilMul = wilCur / (float) wilSnap;
+            // Keep sane even if something returns weird numbers
+            if (!Float.isNaN(wilMul) && !Float.isInfinite(wilMul)){
+                if (wilMul < 0.10f) wilMul = 0.10f;
+                if (wilMul > 40.0f) wilMul = 40.0f;
+                dmg *= wilMul;
+                aoeDmg *= wilMul;
+            }
+        }
+
+
+        boolean endBoom = (!data.hasKey(FRB_KEY_END_BOOM)) || data.getBoolean(FRB_KEY_END_BOOM);
+
+
+        // Expired -> explode/dissipate at current position (and AoE if configured)
+        if (ticksLeft <= 0){
+            spawnFrbImpactFX(p, x, y, z);
+            if (aoeRad > 0D && aoeDmg > 0f && endBoom){
+                frbExplode(p, x, y, z, aoeRad, aoeDmg, kb, null);
+            }
+            clearFrb(data);
+            return;
+        }
+
+        net.minecraft.util.Vec3 start = net.minecraft.util.Vec3.createVectorHelper(x, y, z);
+        net.minecraft.util.Vec3 end   = net.minecraft.util.Vec3.createVectorHelper(x + dx * step, y + dy * step, z + dz * step);
+
+        // Bigger "orb" feel while flying
+        spawnFrbTrailFXScaled(p, start.xCoord, start.yCoord, start.zCoord, rad);
+        spawnFrbTrailFXScaled(p, end.xCoord, end.yCoord, end.zCoord, rad);
+
+        // Block hit?
+        net.minecraft.util.MovingObjectPosition mop = null;
+        try {
+            mop = p.worldObj.rayTraceBlocks(start, end);
+        } catch (Throwable ignored) {}
+
+        if (mop != null && mop.typeOfHit == net.minecraft.util.MovingObjectPosition.MovingObjectType.BLOCK){
+            // explode on contact
+            double hx = mop.hitVec != null ? mop.hitVec.xCoord : end.xCoord;
+            double hy = mop.hitVec != null ? mop.hitVec.yCoord : end.yCoord;
+            double hz = mop.hitVec != null ? mop.hitVec.zCoord : end.zCoord;
+
+            spawnFrbImpactFX(p, hx, hy, hz);
+            if (aoeRad > 0D && aoeDmg > 0f){
+                frbExplode(p, hx, hy, hz, aoeRad, aoeDmg, kb, null);
+            }
+            clearFrb(data);
+            return;
+        }
+
+        // Entity hit scan along segment (expanded by rad)
+        net.minecraft.entity.EntityLivingBase hit = null;
+        double hitDistSq = Double.MAX_VALUE;
+
+        try {
+            net.minecraft.util.AxisAlignedBB bb = net.minecraft.util.AxisAlignedBB.getBoundingBox(
+                    Math.min(start.xCoord, end.xCoord) - rad, Math.min(start.yCoord, end.yCoord) - rad, Math.min(start.zCoord, end.zCoord) - rad,
+                    Math.max(start.xCoord, end.xCoord) + rad, Math.max(start.yCoord, end.yCoord) + rad, Math.max(start.zCoord, end.zCoord) + rad
+            );
+
+            @SuppressWarnings("unchecked")
+            java.util.List<net.minecraft.entity.Entity> ents = p.worldObj.getEntitiesWithinAABBExcludingEntity(p, bb);
+
+            if (ents != null){
+                for (int i = 0; i < ents.size(); i++){
+                    net.minecraft.entity.Entity e = ents.get(i);
+                    if (!(e instanceof net.minecraft.entity.EntityLivingBase)) continue;
+                    if (!e.canBeCollidedWith()) continue;
+
+                    net.minecraft.entity.EntityLivingBase elb = (net.minecraft.entity.EntityLivingBase) e;
+                    if (elb.isDead) continue;
+                    if (elb == p) continue;
+
+                    double dd = elb.getDistanceSq(start.xCoord, start.yCoord, start.zCoord);
+                    if (dd < hitDistSq){
+                        hitDistSq = dd;
+                        hit = elb;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        if (hit != null){
+            double hx = hit.posX;
+            double hy = hit.posY + (double)hit.height * 0.5D;
+            double hz = hit.posZ;
+
+            // Direct hit damage
+            try {
+                dealProcDamage((net.minecraft.entity.player.EntityPlayer)p, hit, dmg, "fracturedBlast");
+            } catch (Throwable ignored) {}
+
+            // Knockback in travel direction
+            if (kb > 0D){
+                try {
+                    hit.addVelocity(dx * kb, dy * (kb * 0.25D), dz * kb);
+                    hit.velocityChanged = true;
+                } catch (Throwable ignored) {}
+            }
+
+            // Explosion (visual always; AoE for big/triple)
+            spawnFrbImpactFX(p, hx, hy, hz);
+            if (aoeRad > 0D && aoeDmg > 0f){
+                frbExplode(p, hx, hy, hz, aoeRad, aoeDmg, kb, hit);
+            }
+
+            clearFrb(data);
+            return;
+        }
+
+        // No hit -> advance
+        data.setDouble(FRB_KEY_X, end.xCoord);
+        data.setDouble(FRB_KEY_Y, end.yCoord);
+        data.setDouble(FRB_KEY_Z, end.zCoord);
+
+        data.setInteger(FRB_KEY_TICKS, ticksLeft - 1);
+    }
+
+    private static void clearFrb(NBTTagCompound data){
+        if (data == null) return;
+        data.setBoolean(FRB_KEY_ACTIVE, false);
+        data.removeTag(FRB_KEY_TICKS);
+        data.removeTag(FRB_KEY_X);
+        data.removeTag(FRB_KEY_Y);
+        data.removeTag(FRB_KEY_Z);
+        data.removeTag(FRB_KEY_DX);
+        data.removeTag(FRB_KEY_DY);
+        data.removeTag(FRB_KEY_DZ);
+        data.removeTag(FRB_KEY_STEP);
+        data.removeTag(FRB_KEY_DMG);
+        data.removeTag(FRB_KEY_WIL_SNAP);
+        data.removeTag(FRB_KEY_KB);
+        data.removeTag(FRB_KEY_RAD);
+        data.removeTag(FRB_KEY_AOE_RAD);
+        data.removeTag(FRB_KEY_AOE_DMG);
+    }
+
+    private static void spawnFrbTrailFX(net.minecraft.entity.player.EntityPlayerMP p, double x, double y, double z){
+        if (p == null || p.worldObj == null) return;
+        if (p.worldObj instanceof net.minecraft.world.WorldServer){
+            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("spell", x, y, z, 3, 0.04D, 0.04D, 0.04D, 0.01D);
+            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("fireworksSpark", x, y, z, 1, 0.02D, 0.02D, 0.02D, 0.02D);
+            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("reddust", x, y, z, 2, 1.00D, 0.95D, 0.20D, 0.0D);
+        }
+    }
+
+
+
+    /**
+     * Scaled trail FX for the Fractured flying blast.
+     * Server-safe: uses WorldServer.func_147487_a (particle packet) only.
+     */
+    private static void spawnFrbTrailFXScaled(net.minecraft.entity.player.EntityPlayerMP p, double x, double y, double z, double rad){
+        if (p == null || p.worldObj == null) return;
+
+        // Keep the tiny look identical to the base helper
+        if (rad <= 0.60D){
+            spawnFrbTrailFX(p, x, y, z);
+            return;
+        }
+
+        if (p.worldObj instanceof net.minecraft.world.WorldServer){
+            net.minecraft.world.WorldServer ws = (net.minecraft.world.WorldServer) p.worldObj;
+
+            // Scale up count/spread gently so it doesn't become spammy
+            double spread = rad * 0.65D;
+            if (spread < 0.06D) spread = 0.06D;
+            if (spread > 0.55D) spread = 0.55D;
+
+            int spell = (int) Math.round(3.0D + rad * 18.0D);
+            if (spell < 3) spell = 3;
+            if (spell > 28) spell = 28;
+
+            int sparks = (int) Math.round(1.0D + rad * 6.0D);
+            if (sparks < 1) sparks = 1;
+            if (sparks > 12) sparks = 12;
+
+            double speed = 0.012D + rad * 0.018D;
+            if (speed > 0.08D) speed = 0.08D;
+
+            // Base magical trail
+            ws.func_147487_a("spell", x, y, z, spell, spread, spread, spread, speed);
+            ws.func_147487_a("fireworksSpark", x, y, z, sparks, spread * 0.55D, spread * 0.55D, spread * 0.55D, speed * 1.15D);
+
+            // Light-blue tint (reddust uses offsets as RGB on the client)
+            int blue = (int) Math.round(2.0D + rad * 10.0D);
+            if (blue < 2) blue = 2;
+            if (blue > 20) blue = 20;
+            ws.func_147487_a("reddust", x, y, z, blue, 0.20D, 0.75D, 1.00D, 0.0D);
+
+            // Warm yellow tint (reddust uses offsets as RGB on the client)
+            int gold = (int) Math.round(2.0D + rad * 9.0D);
+            if (gold < 2) gold = 2;
+            if (gold > 18) gold = 18;
+            ws.func_147487_a("reddust", x, y, z, gold, 1.00D, 0.95D, 0.20D, 0.0D);
+
+            if (rad >= 1.10D){
+                int crit = (int) Math.round(rad * 4.0D);
+                if (crit > 10) crit = 10;
+                ws.func_147487_a("crit", x, y, z, crit, spread * 0.35D, spread * 0.35D, spread * 0.35D, 0.10D);
+            }
+        }
+    }
+
+    /**
+     * AoE explosion damage + outward knockback for the Fractured flying blast.
+     * @param directHit Optional entity already hit by the projectile (excluded from AoE to avoid double-dipping).
+     */
+    private static void frbExplode(net.minecraft.entity.player.EntityPlayerMP attacker,
+                                   double x, double y, double z,
+                                   double radius, float baseDamage,
+                                   double kb, net.minecraft.entity.EntityLivingBase directHit){
+        if (attacker == null || attacker.worldObj == null) return;
+        if (radius <= 0.05D || baseDamage <= 0f) return;
+
+        net.minecraft.world.World w = attacker.worldObj;
+
+        double r = radius;
+        if (r > 24D) r = 24D; // sanity cap
+        double r2 = r * r;
+
+        net.minecraft.util.AxisAlignedBB bb = net.minecraft.util.AxisAlignedBB.getBoundingBox(
+                x - r, y - r, z - r,
+                x + r, y + r, z + r
+        );
+
+        java.util.List list;
+        try {
+            list = w.getEntitiesWithinAABB(net.minecraft.entity.EntityLivingBase.class, bb);
+        } catch (Throwable t){
+            return;
+        }
+        if (list == null || list.isEmpty()) return;
+
+        for (int i = 0; i < list.size(); i++){
+            Object o = list.get(i);
+            if (!(o instanceof net.minecraft.entity.EntityLivingBase)) continue;
+
+            net.minecraft.entity.EntityLivingBase t = (net.minecraft.entity.EntityLivingBase) o;
+            if (t == attacker) continue;
+            if (t == directHit) continue;
+            if (t.isDead) continue;
+
+            // distance to entity center
+            double cx = t.posX;
+            double cy = t.posY + (double)t.height * 0.5D;
+            double cz = t.posZ;
+
+            double dx = cx - x;
+            double dy = cy - y;
+            double dz = cz - z;
+
+            double d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 > r2) continue;
+
+            double dist = Math.sqrt(d2);
+
+            // Simple falloff, keep a minimum so the explosion still "feels" like an explosion
+            float falloff = (float)(1.0D - (dist / r));
+            if (falloff < 0.25f) falloff = 0.25f;
+            if (falloff > 1.0f) falloff = 1.0f;
+
+            float dmg = baseDamage * falloff;
+
+            try {
+                dealProcDamage((net.minecraft.entity.player.EntityPlayer) attacker, t, dmg, "fracturedBlastAoE");
+            } catch (Throwable ignored) {}
+
+            if (kb > 0D){
+                try {
+                    double inv = (dist > 0.0001D) ? (1.0D / dist) : 1.0D;
+                    double nx = dx * inv;
+                    double nz = dz * inv;
+
+                    double k = kb * 0.85D * (double)falloff;
+                    double vy = 0.12D + (kb * 0.05D) * (double)falloff;
+
+                    t.addVelocity(nx * k, vy, nz * k);
+                    t.velocityChanged = true;
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    private static void spawnFrbImpactFX(net.minecraft.entity.player.EntityPlayerMP p, double x, double y, double z){
+        if (p == null || p.worldObj == null) return;
+        p.worldObj.playSoundEffect(x, y, z, "random.explode", 0.55F, 1.25F);
+        if (p.worldObj instanceof net.minecraft.world.WorldServer){
+            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("crit", x, y, z, 16, 0.25D, 0.25D, 0.25D, 0.12D);
+            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("spell", x, y, z, 24, 0.35D, 0.35D, 0.35D, 0.04D);
+            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("fireworksSpark", x, y, z, 12, 0.30D, 0.30D, 0.30D, 0.10D);
+            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("reddust", x, y, z, 26, 1.00D, 0.95D, 0.20D, 0.0D);
+            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("flame", x, y, z, 8, 0.22D, 0.18D, 0.22D, 0.02D);
+        }
+    }
+
 }

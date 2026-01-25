@@ -2,6 +2,8 @@ package com.example.examplemod.server;
 
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.entity.ai.attributes.IAttributeInstance;
+import net.minecraft.nbt.NBTTagCompound;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -46,7 +48,7 @@ public final class HexDBCProcDamageProvider implements HexOrbEffectsController.P
     // ── Reflection caches ───────────────────────────────────────────────────
     private static boolean LOOKED_UP = false;
     private static Method  M_GET_DBCDATA;     // DBCDataUniversal.get(player)
-    private static Field   F_STR, F_DEX, F_SPI;
+    private static Field   F_STR, F_DEX, F_SPI, F_WIL;
     private static Field   F_RELEASE;
     private static Field   F_STATS;           // dbcData.stats
     private static Method  M_GET_CURRENT_MULTI; // stats.getCurrentMulti()
@@ -68,6 +70,7 @@ public final class HexDBCProcDamageProvider implements HexOrbEffectsController.P
             F_STR     = cDBCData.getField("STR");
             F_DEX     = cDBCData.getField("DEX");
             F_SPI     = cDBCData.getField("SPI");
+            try { F_WIL = cDBCData.getField("WIL"); } catch (Throwable ignored) { F_WIL = null; }
             F_RELEASE = cDBCData.getField("Release");
             F_STATS   = cDBCData.getField("stats");
 
@@ -150,4 +153,172 @@ public final class HexDBCProcDamageProvider implements HexOrbEffectsController.P
             return -1f;
         }
     }
+
+
+    /**
+     * Returns "effective" WillPower for scaling abilities:
+     * - Prefers NPCDBC: WIL (base) * stats.getCurrentMulti() (form/release/buffs)
+     * - Falls back to Forge attributes: "dbc.WillPower" and optional "dbc.WillPower.Multi"
+     * - Last resort: a few common NBT keys if present
+     *
+     * This is designed to match the DBC sheet "Modified" value (including form multipliers),
+     * without touching any GUI code.
+     */
+    public static double getWillPowerEffective(EntityPlayer player) {
+        if (player == null) return 0D;
+
+        // A) Attribute path (some packs expose modified will here already)
+        double willAttr = getAttr(player, "dbc.WillPower");
+        double willMultiAttr = getAttr(player, "dbc.WillPower.Multi");
+
+        double willAttrEff = willAttr;
+        // If it looks like the "original" value, apply the multiplier.
+        if (willAttrEff > 0D && willMultiAttr > 1.05D) {
+            if (willAttrEff < 50000D) willAttrEff = willAttrEff * willMultiAttr;
+        }
+
+        // B) NPCDBC path: WIL * currentMulti (form/release/other multipliers)
+        double wilBase = 0D;
+        double curMulti = 1D;
+
+        ensureReflection();
+        if (M_GET_DBCDATA != null) {
+            try {
+                Object dbc = M_GET_DBCDATA.invoke(null, player);
+                if (dbc != null) {
+                    // Base WIL
+                    if (F_WIL != null) {
+                        Object v = F_WIL.get(dbc);
+                        if (v instanceof Number) wilBase = ((Number) v).doubleValue();
+                    }
+
+                    // Current multi
+                    if (F_STATS != null && M_GET_CURRENT_MULTI != null) {
+                        Object stats = F_STATS.get(dbc);
+                        if (stats != null) {
+                            Object m = M_GET_CURRENT_MULTI.invoke(stats);
+                            if (m instanceof Number) {
+                                double cm = ((Number) m).doubleValue();
+                                if (!Double.isNaN(cm) && !Double.isInfinite(cm)) {
+                                    if (cm < 0D) cm = 0D;
+                                    if (cm > (double) MAX_CURRENT_MULTI) cm = (double) MAX_CURRENT_MULTI;
+                                    curMulti = Math.max(1D, cm);
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        double wilNpcdbcEff = (wilBase > 0D) ? (wilBase * Math.max(1D, curMulti)) : 0D;
+
+        // C) NBT fallback (only if present in your environment)
+        double wilNbt = 0D;
+        try {
+            NBTTagCompound ed = player.getEntityData();
+            if (ed != null) {
+                if (ed.hasKey("jrmcWil")) wilNbt = (double) ed.getInteger("jrmcWil");
+                else if (ed.hasKey("jrmcWIL")) wilNbt = (double) ed.getInteger("jrmcWIL");
+                else if (ed.hasKey("jrmcWill")) wilNbt = (double) ed.getInteger("jrmcWill");
+            }
+        } catch (Throwable ignored) {}
+
+        double best = 0D;
+        if (willAttrEff > best) best = willAttrEff;
+        if (wilNpcdbcEff > best) best = wilNpcdbcEff;
+        if (wilNbt > best) best = wilNbt;
+
+        if (Double.isNaN(best) || Double.isInfinite(best)) return 0D;
+        return best;
+    }
+
+
+    /**
+     * Returns "effective" Strength for scaling abilities:
+     * - Prefers NPCDBC: STR (base) * stats.getCurrentMulti() (form/release/buffs)
+     * - Falls back to Forge attributes: "dbc.Strength" and optional "dbc.Strength.Multi"
+     * - Last resort: a few common NBT keys if present
+     *
+     * This aims to match the DBC sheet "Modified" value (including form multipliers).
+     */
+    public static double getStrengthEffective(EntityPlayer player) {
+        if (player == null) return 0D;
+
+        // A) Attribute path
+        double strAttr = getAttr(player, "dbc.Strength");
+        double strMultiAttr = getAttr(player, "dbc.Strength.Multi");
+
+        double strAttrEff = strAttr;
+        // If it looks like the "original" value, apply the multiplier.
+        if (strAttrEff > 0D && strMultiAttr > 1.05D) {
+            if (strAttrEff < 50000D) strAttrEff = strAttrEff * strMultiAttr;
+        }
+
+        // B) NPCDBC path: STR * currentMulti
+        double strBase = 0D;
+        double curMulti = 1D;
+
+        ensureReflection();
+        if (M_GET_DBCDATA != null) {
+            try {
+                Object dbc = M_GET_DBCDATA.invoke(null, player);
+                if (dbc != null) {
+                    if (F_STR != null) {
+                        Object v = F_STR.get(dbc);
+                        if (v instanceof Number) strBase = ((Number) v).doubleValue();
+                    }
+
+                    if (F_STATS != null && M_GET_CURRENT_MULTI != null) {
+                        Object stats = F_STATS.get(dbc);
+                        if (stats != null) {
+                            Object m = M_GET_CURRENT_MULTI.invoke(stats);
+                            if (m instanceof Number) {
+                                double cm = ((Number) m).doubleValue();
+                                if (!Double.isNaN(cm) && !Double.isInfinite(cm)) {
+                                    if (cm < 0D) cm = 0D;
+                                    if (cm > (double) MAX_CURRENT_MULTI) cm = (double) MAX_CURRENT_MULTI;
+                                    curMulti = Math.max(1D, cm);
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        double strNpcdbcEff = (strBase > 0D) ? (strBase * Math.max(1D, curMulti)) : 0D;
+
+        // C) NBT fallback
+        double strNbt = 0D;
+        try {
+            NBTTagCompound ed = player.getEntityData();
+            if (ed != null) {
+                if (ed.hasKey("jrmcStr")) strNbt = (double) ed.getInteger("jrmcStr");
+                else if (ed.hasKey("jrmcSTR")) strNbt = (double) ed.getInteger("jrmcSTR");
+                else if (ed.hasKey("jrmcStrength")) strNbt = (double) ed.getInteger("jrmcStrength");
+            }
+        } catch (Throwable ignored) {}
+
+        double best = 0D;
+        if (strAttrEff > best) best = strAttrEff;
+        if (strNpcdbcEff > best) best = strNpcdbcEff;
+        if (strNbt > best) best = strNbt;
+
+        if (Double.isNaN(best) || Double.isInfinite(best)) return 0D;
+        return best;
+    }
+    private static double getAttr(EntityPlayer p, String name) {
+        if (p == null || name == null) return 0D;
+        try {
+            IAttributeInstance inst = p.getAttributeMap().getAttributeInstanceByName(name);
+            if (inst == null) return 0D;
+            double v = inst.getAttributeValue();
+            if (Double.isNaN(v) || Double.isInfinite(v)) return 0D;
+            return v;
+        } catch (Throwable ignored) {
+            return 0D;
+        }
+    }
+
 }

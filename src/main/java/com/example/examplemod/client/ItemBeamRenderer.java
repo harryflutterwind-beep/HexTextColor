@@ -36,6 +36,66 @@ public final class ItemBeamRenderer {
     private static final ResourceLocation BEAM_TEX =
             new ResourceLocation("textures/entity/beacon_beam.png");
 
+    // ---------------------------------------------------------------------
+// Transient world beams (ability FX) — queued by packets.
+// These reuse the same beacon texture + rarity beam rendering pipeline.
+// ---------------------------------------------------------------------
+    private static final Object TRANSIENT_LOCK = new Object();
+    private static final java.util.ArrayList<TransientBeam> TRANSIENT_BEAMS = new java.util.ArrayList<TransientBeam>();
+
+    /**
+     * Enqueue a temporary world beam to be rendered for everyone who receives the packet.
+     *
+     * @param botRGB       0xRRGGBB color at beam start
+     * @param topRGB       0xRRGGBB color at beam end
+     * @param chaosOrdinal ItemBeamRenderer.Chaos.ordinal(), or 0 for NONE
+     */
+    public static void addTransientBeam(double sx, double sy, double sz,
+                                        double ex, double ey, double ez,
+                                        int botRGB, int topRGB,
+                                        byte chaosOrdinal, boolean evolved,
+                                        float radiusScale, int lifeTicks) {
+        try {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getMinecraft();
+            if (mc == null || mc.theWorld == null) return;
+
+            long now = mc.theWorld.getTotalWorldTime();
+            long expires = now + Math.max(1, lifeTicks);
+
+            TransientBeam b = new TransientBeam(sx, sy, sz, ex, ey, ez, botRGB, topRGB, chaosOrdinal, evolved, radiusScale, expires);
+            synchronized (TRANSIENT_LOCK) {
+                if (TRANSIENT_BEAMS.size() > 128) TRANSIENT_BEAMS.remove(0);
+                TRANSIENT_BEAMS.add(b);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static final class TransientBeam {
+        final double sx, sy, sz, ex, ey, ez;
+        final int botRGB, topRGB;
+        final byte chaosOrdinal;
+        final boolean evolved;
+        final float radiusScale;
+        final long expiresAtWorldTick;
+
+        TransientBeam(double sx, double sy, double sz,
+                      double ex, double ey, double ez,
+                      int botRGB, int topRGB,
+                      byte chaosOrdinal, boolean evolved,
+                      float radiusScale, long expiresAtWorldTick) {
+            this.sx = sx; this.sy = sy; this.sz = sz;
+            this.ex = ex; this.ey = ey; this.ez = ez;
+            this.botRGB = botRGB;
+            this.topRGB = topRGB;
+            this.chaosOrdinal = chaosOrdinal;
+            this.evolved = evolved;
+            this.radiusScale = radiusScale;
+            this.expiresAtWorldTick = expiresAtWorldTick;
+        }
+    }
+
+
+
     // --- knobs you can tweak quickly ---
     private static final float ALPHA_DEFAULT   = 0.72f;
     private static final float ALPHA_LEGENDARY = 0.85f;
@@ -736,6 +796,160 @@ public final class ItemBeamRenderer {
     }
 
 
+    // ---------------------------------------------------------------------
+// Transient beam rendering (used for ability beams like Solar Beam).
+// ---------------------------------------------------------------------
+    private void renderTransientBeams(Tessellator t, double camX, double camY, double camZ,
+                                      float baseScroll, float phaseTime, float tTicks, float tSec) {
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getMinecraft();
+        if (mc == null || mc.theWorld == null) return;
+
+        java.util.ArrayList<TransientBeam> copy = null;
+        long now = mc.theWorld.getTotalWorldTime();
+
+        // prune + copy under lock (keep it lightweight)
+        synchronized (TRANSIENT_LOCK) {
+            if (TRANSIENT_BEAMS.isEmpty()) return;
+
+            for (int i = TRANSIENT_BEAMS.size() - 1; i >= 0; i--) {
+                TransientBeam b = TRANSIENT_BEAMS.get(i);
+                if (b == null || b.expiresAtWorldTick <= now) {
+                    TRANSIENT_BEAMS.remove(i);
+                }
+            }
+            if (TRANSIENT_BEAMS.isEmpty()) return;
+
+            copy = new java.util.ArrayList<TransientBeam>(TRANSIENT_BEAMS);
+        }
+
+        for (int i = 0; i < copy.size(); i++) {
+            TransientBeam b = copy.get(i);
+            if (b == null || b.expiresAtWorldTick <= now) continue;
+            renderOneTransientBeam(t, b, camX, camY, camZ, baseScroll, phaseTime, tTicks, tSec);
+        }
+    }
+
+    private void renderOneTransientBeam(Tessellator t, TransientBeam b,
+                                        double camX, double camY, double camZ,
+                                        float baseScroll, float phaseTime, float tTicks, float tSec) {
+        if (b == null) return;
+
+        final double dx = b.ex - b.sx;
+        final double dy = b.ey - b.sy;
+        final double dz = b.ez - b.sz;
+
+        final double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist < 0.15D) return;
+
+        // Beam length in "blocks" for our cone renderer (it draws along +Y)
+        int h = (int) Math.ceil(dist);
+        if (h < 1) h = 1;
+        if (h > 80) h = 80;
+
+        // radius
+        double baseR = 0.19D * (double) (b.radiusScale <= 0.0F ? 1.0F : b.radiusScale);
+        if (b.evolved) baseR *= 1.10D;
+
+        // mild pulsing
+        double pulse = 0.10D + 0.06D * Math.sin(phaseTime * (Math.PI * 2.0D) * 0.35D);
+        double radius = baseR * pulse;
+
+        float alpha = b.evolved ? 0.95F : 0.85F;
+
+        // Slight "super" boost if radiusScale is large
+        boolean superBeam = (b.radiusScale >= 1.75F);
+        if (superBeam) {
+            radius *= 1.25D;
+            alpha = 0.98F;
+        }
+
+        // Basic blend setup (glowy, like beacon beams)
+        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE);
+
+        GL11.glPushMatrix();
+        try {
+            // Move to beam start (camera-relative)
+            GL11.glTranslated(b.sx - camX, b.sy - camY, b.sz - camZ);
+
+            // Rotate Y-axis to match the beam direction
+            orientYAxisTo(dx, dy, dz);
+
+            // Render the cone beam along local +Y
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getMinecraft();
+            if (mc != null) mc.getTextureManager().bindTexture(BEAM_TEX);
+
+            int r0 = (b.botRGB >> 16) & 0xFF;
+            int g0 = (b.botRGB >> 8) & 0xFF;
+            int b0 = (b.botRGB) & 0xFF;
+
+            int r1 = (b.topRGB >> 16) & 0xFF;
+            int g1 = (b.topRGB >> 8) & 0xFF;
+            int b1 = (b.topRGB) & 0xFF;
+
+            final float[] botRGB = rgb(r0, g0, b0);
+            final float[] topRGB = rgb(r1, g1, b1);
+
+            // Main beam core
+            renderConeGradient(t, 0.0D, 0.0D, 0.0D,
+                    radius, (double) h,
+                    botRGB, topRGB,
+                    baseScroll,
+                    18, 0.88D, 0.06D,
+                    0.65F,
+                    alpha, tTicks);
+
+            // Base glow (helps it read as an actual beam, not just particles)
+            renderBaseGlowBillboard(t, 0.0D, 0.0D, 0.0D,
+                    radius * 1.35D,
+                    (superBeam ? 0.90F : 0.75F) * alpha,
+                    b.botRGB);
+
+            // Top halo (subtle)
+            renderTopHalo(t, 0.0D, Math.min(h, 10) * 0.35D, 0.0D,
+                    radius * (superBeam ? 2.2D : 1.7D),
+                    26,
+                    b.topRGB,
+                    0.55F * alpha,
+                    tSec);
+
+        } catch (Throwable ignored) {
+        } finally {
+            GL11.glPopMatrix();
+        }
+    }
+
+    private static void orientYAxisTo(double dx, double dy, double dz) {
+        double len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (len < 1.0E-6D) return;
+        dx /= len; dy /= len; dz /= len;
+
+        // Axis from cross(Y, dir) where Y=(0,1,0)
+        double ax = dz;
+        double ay = 0.0D;
+        double az = -dx;
+
+        double dot = dy; // Y · dir = dy
+        if (dot > 1.0D) dot = 1.0D;
+        if (dot < -1.0D) dot = -1.0D;
+
+        double axisLen = Math.sqrt(ax*ax + ay*ay + az*az);
+
+        if (axisLen < 1.0E-6D) {
+            // Parallel or anti-parallel
+            if (dot < 0.0D) {
+                // 180 degrees around X
+                GL11.glRotatef(180.0F, 1.0F, 0.0F, 0.0F);
+            }
+            return;
+        }
+
+        ax /= axisLen; ay /= axisLen; az /= axisLen;
+
+        float angleDeg = (float) Math.toDegrees(Math.acos(dot));
+        GL11.glRotatef(angleDeg, (float) ax, (float) ay, (float) az);
+    }
+
+
     @SubscribeEvent
     public void onRender(RenderWorldLastEvent evt) {
         Minecraft mc = Minecraft.getMinecraft();
@@ -761,7 +975,10 @@ public final class ItemBeamRenderer {
                         p.posX + radiusScan, p.posY + radiusScan, p.posZ + radiusScan
                 )
         );
-        if (items.isEmpty()) return;
+        boolean hasTransient;
+        synchronized (TRANSIENT_LOCK) { hasTransient = !TRANSIENT_BEAMS.isEmpty(); }
+        if (items.isEmpty() && !hasTransient) return;
+
 
         // global setup for the whole pass
         GL11.glPushMatrix();
@@ -778,6 +995,9 @@ public final class ItemBeamRenderer {
         final float tTicks     = (mc.theWorld.getTotalWorldTime() + evt.partialTicks);
         final float baseScroll = tTicks * 0.02f;
         final float phaseTime  = tSec;
+
+        // Ability beams (Solar beam, etc.)
+        renderTransientBeams(t, camX, camY, camZ, baseScroll, phaseTime, tTicks, tSec);
 
         int drawn = 0;
 

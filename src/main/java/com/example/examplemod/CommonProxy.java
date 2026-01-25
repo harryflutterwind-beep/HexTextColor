@@ -8,8 +8,9 @@ import net.minecraftforge.common.MinecraftForge;
 import com.example.examplemod.server.DropTagHandler;
 import com.example.examplemod.server.WearableRightClickEquip;
 import com.example.examplemod.server.HexOrbEffectsController;
-import com.example.examplemod.server.HexDBCBridgeDamageApplier; // <-- add this
+import com.example.examplemod.server.HexDBCBridgeDamageApplier;
 import com.example.examplemod.server.HexDBCProcDamageProvider;
+import com.example.examplemod.network.HexFracNet;
 
 public class CommonProxy {
     /**
@@ -27,6 +28,9 @@ public class CommonProxy {
         // In case the mod only calls proxy.init() (some setups do), keep this idempotent.
         ensureGemIconsRegistered();
 
+        // Fractured-only packet channel (client->server actions)
+        HexFracNet.init();
+
         // Runs on both physical server and integrated server (logic side)
         MinecraftForge.EVENT_BUS.register(new DropTagHandler());
         MinecraftForge.EVENT_BUS.register(new WearableRightClickEquip());
@@ -35,7 +39,6 @@ public class CommonProxy {
         // Route proc damage through JRMCore for players (DBC Body damage)
         HexOrbEffectsController.API.setDamageApplier(new HexDBCBridgeDamageApplier());
         HexOrbEffectsController.PROC_DAMAGE_PROVIDER = new HexDBCProcDamageProvider();
-
     }
 
     public void postInit() {}
