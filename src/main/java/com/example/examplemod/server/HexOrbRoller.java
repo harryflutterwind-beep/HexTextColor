@@ -70,6 +70,9 @@ public class HexOrbRoller {
     private static final String G_AETHER_OPEN    = "<grad #00ffd5 #36d1ff #7a5cff #e9ffff scroll=0.24>";
     private static final String G_ENERGIZED_OPEN = "<grad #ff4fd8 #36d1ff #ffe66d #7cff6b #7a5cff scroll=0.34>";
     private static final String G_NEG_OPEN       = "<grad #7a00ff #ff4fd8 #120018 #7a5cff scroll=0.30>";
+    private static final String G_VOID_OPEN      = "<grad #b84dff #7a5cff #120018 #ff4fd8 scroll=0.30>";
+    // Shorter Void gradient for lore pages (helps tooltip width)
+    private static final String G_VOID_PAGE_OPEN = "<grad #b84dff #7a5cff scroll=0.22>";
     private static final String G_FRACTURE_OPEN  = "<grad #b84dff #7a5cff #00ffd5 #ff4fd8 scroll=0.30>";
     // Darker purple chaos palette (matches your desired Chaotic style)
     private static final String G_CHAOS_OPEN     = "<grad #ff4fd8 #7a5cff #00ffd5 #ffe66d scroll=0.38>";
@@ -119,6 +122,10 @@ public class HexOrbRoller {
     private static final int META_NEGATIVE_FLAT = 12;
     private static final int META_NEGATIVE_MULTI = 13;
 
+
+    // Void metas: 22 = flat, 23 = animated (% variant)
+    private static final int META_VOID_FLAT = 22;
+    private static final int META_VOID_MULTI = 23;
     // Meta -> roll profile
     private final Map<Integer, RollProfile> metaProfiles = new HashMap<Integer, RollProfile>();
 
@@ -146,6 +153,8 @@ public class HexOrbRoller {
     // ---------------------------------------------------------------------
     private static final String TAG_LIGHT_TYPE     = "HexLightType";     // string
     private static final String TAG_LIGHT_RAD      = "HexLightRadiance"; // int 0..100
+    private static final String TAG_VOID_TYPE     = "HexVoidType";      // string
+
 
     // Per-move cooldown/flags stored on the orb (world ticks)
     private static final String TAG_L_CD_WARD      = "HexLightCdWard";
@@ -266,6 +275,10 @@ public class HexOrbRoller {
 
         metaProfiles.put(20, RollProfiles.AETHER_FLAT);
         metaProfiles.put(21, RollProfiles.AETHER_MULTI);
+
+        // Void (type-driven; bonus roll is assigned at roll time)
+        metaProfiles.put(META_VOID_FLAT, RollProfiles.VOID_FLAT);
+        metaProfiles.put(META_VOID_MULTI, RollProfiles.VOID_MULTI);
 
         metaProfiles.put(16, RollProfiles.RAINBOW_ALL5_FLAT);
         metaProfiles.put(17, RollProfiles.RAINBOW_ALL5_MULTI);
@@ -399,6 +412,11 @@ public class HexOrbRoller {
         // Light behavior (radiance + procs)
         try {
             if (updateLightDynamics(p)) changed = true;
+
+            // Force-refresh Light tooltip on legacy stacks (fix N/A)
+            for (int i = 0; i < p.inventory.mainInventory.length; i++) ensureLightLore(p.inventory.mainInventory[i]);
+            for (int i = 0; i < p.inventory.armorInventory.length; i++) ensureLightLore(p.inventory.armorInventory[i]);
+            ensureLightLore(p.getCurrentEquippedItem());
         } catch (Throwable t) {
             // Never let a malformed Light orb NBT crash the whole server tick.
         }
@@ -482,6 +500,21 @@ public class HexOrbRoller {
             RollProfile li = (meta == META_LIGHT_MULTI) ? RollProfiles.LIGHT_MULTI : RollProfiles.LIGHT_FLAT;
             try {
                 rollLightOrbBase(stack, tag, li);
+                return true;
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+
+
+
+// Special case: Void orb (types; effects handled elsewhere).
+// Rolls ONCE: picks a Void type and a bonus stat line.
+        if (meta == META_VOID_FLAT || meta == META_VOID_MULTI) {
+            if (tag.getBoolean(TAG_ROLLED)) return false;
+            RollProfile vo = (meta == META_VOID_MULTI) ? RollProfiles.VOID_MULTI : RollProfiles.VOID_FLAT;
+            try {
+                rollVoidOrbBase(stack, tag, vo);
                 return true;
             } catch (Throwable t) {
                 return false;
@@ -995,6 +1028,15 @@ public class HexOrbRoller {
     private static final String LIGHT_TYPE_HALO    = "Halo";
     private static final String LIGHT_TYPE_ANGELIC = "Angelic";
 
+
+    // ---------------------------------------------------------------------
+// Void orb (rolled type placeholder; effects implemented in HexOrbEffectsController later)
+// ---------------------------------------------------------------------
+    private static final String VOID_TYPE_ENTROPY     = "Entropy";
+    private static final String VOID_TYPE_GRAVITY_WELL= "Gravity Well";
+    private static final String VOID_TYPE_ABYSS_MARK  = "Abyss Mark";
+
+    private static final String VOID_TYPE_NULL_SHELL  = "Null Shell";
     // Small internal throttles to avoid spam + over-gain
     private static final String TAG_L_LAST_SUN_GAIN  = "HexLightLastSunGain";   // long
     private static final String TAG_L_LAST_DEAL_GAIN = "HexLightLastDealGain";  // long
@@ -1193,6 +1235,16 @@ public class HexOrbRoller {
     }
 
 
+
+    private String pickRandomVoidType() {
+        // Even weights for now — tweak anytime.
+        int r = rng.nextInt(4);
+        if (r == 0) return VOID_TYPE_ENTROPY;
+        if (r == 1) return VOID_TYPE_GRAVITY_WELL;
+        if (r == 2) return VOID_TYPE_ABYSS_MARK;
+        return VOID_TYPE_NULL_SHELL;
+    }
+
     private String pickRandomLightType() {
         // Weighted so Angelic is rare.
         int r = rng.nextInt(100);
@@ -1322,8 +1374,77 @@ public class HexOrbRoller {
         applyLore(stack, dyn, rolls);
         ensureLightLorePages(stack);
 
+
+
         stack.setTagCompound(tag);
     }
+
+    void rollVoidOrbBase(ItemStack stack, NBTTagCompound tag, RollProfile base) {
+        if (stack == null || tag == null || base == null) return;
+
+        final boolean pct = base.pct;
+
+        // Pick and store a Void type (effects implemented later in HexOrbEffectsController).
+        final String type = pickRandomVoidType();
+        tag.setString(TAG_VOID_TYPE, type);
+
+        // Choose one random bonus stat (core 5 only, flat or % based on meta).
+        final String[] CORE_FLAT_KEYS = new String[] {
+                "dbc.Strength",
+                "dbc.Dexterity",
+                "dbc.Constitution",
+                "dbc.WillPower",
+                "dbc.Spirit"
+        };
+        final String[] CORE_NAMES = new String[] {
+                "Strength",
+                "Dexterity",
+                "Constitution",
+                "WillPower",
+                "Spirit"
+        };
+
+        int idx = rng.nextInt(CORE_FLAT_KEYS.length);
+
+        String attrKey = pct ? (CORE_FLAT_KEYS[idx] + ".Multi") : CORE_FLAT_KEYS[idx];
+        String display = CORE_NAMES[idx];
+
+        // Baseline ranges (tweak later)
+        int min = pct ? 1 : 25;
+        int max = pct ? 10 : 75;
+
+        int v = rand(min, max);
+
+        // Dynamic profile: inject rolled type into effect line.
+        RollProfile dyn = new RollProfile(
+                base.id,
+                base.displayName,
+                "§7Effect: <pulse amp=0.55 speed=0.85>" + G_VOID_OPEN + type + G_CLOSE + "</pulse>",
+                base.gradientOpen,
+                base.pct,
+                false,
+                false,
+                0,
+                0
+        );
+        dyn.entries.add(new RollEntry(attrKey, display, min, max));
+
+        NBTTagCompound rolls = new NBTTagCompound();
+        rolls.setInteger(attrKey, v);
+
+        tag.setBoolean(TAG_ROLLED, true);
+        tag.setBoolean(TAG_LORE_DONE, true);
+        tag.setString(TAG_PROFILE, dyn.id);
+        tag.setTag(TAG_ROLLS, rolls);
+
+        applyRpgCoreAttributes(tag, dyn, rolls);
+        applyLore(stack, dyn, rolls);
+        ensureVoidLorePages(stack);
+
+        stack.setTagCompound(tag);
+    }
+
+
 
     /**
      * Called when the player (with a light orb active) takes damage.
@@ -2462,6 +2583,92 @@ public class HexOrbRoller {
             // Never crash tooltips or server ticks because of lore pages.
         }
     }
+
+    void ensureVoidLorePages(ItemStack stack) {
+        if (stack == null) return;
+
+        try {
+            // Preserve any existing pages so we don't overwrite other systems.
+            List<List<String>> pages = new ArrayList<List<String>>();
+
+            if (LorePagesAPI.hasPages(stack)) {
+                List<List<String>> existing = LorePagesAPI.getPages(stack, null);
+                if (existing != null) {
+                    for (int p = 0; p < existing.size(); p++) {
+                        List<String> pg = existing.get(p);
+                        List<String> copy = new ArrayList<String>();
+                        if (pg != null) copy.addAll(pg);
+                        pages.add(copy);
+                    }
+                }
+            }
+
+            // Marker check (avoid duplicates)
+            for (int p = 0; p < pages.size(); p++) {
+                List<String> pg = pages.get(p);
+                if (pg == null) continue;
+                for (int i = 0; i < pg.size(); i++) {
+                    String ln = pg.get(i);
+                    if (ln != null && ln.toUpperCase().contains("VOID ORB")) {
+                        return;
+                    }
+                }
+            }
+
+            // Pager starts at page 1, keep index 0 as placeholder if empty.
+            if (pages.isEmpty()) pages.add(new ArrayList<String>());
+
+            NBTTagCompound tag = getOrCreateTag(stack);
+            String type = tag.hasKey(TAG_VOID_TYPE, 8) ? tag.getString(TAG_VOID_TYPE) : VOID_TYPE_ENTROPY;
+
+            // Page 1 — overview + quick type list
+            List<String> p1 = new ArrayList<String>();
+            p1.add("§f" + G_VOID_PAGE_OPEN + "VOID ORB" + G_CLOSE + " §7(§f" + G_VOID_PAGE_OPEN + type + G_CLOSE + "§7)");
+            p1.add("§7Rolls a §fVoid Type§7 + a stat bonus.");
+            p1.add("§7Type decides what you inflict on hit.");
+            p1.add(" ");
+            p1.add("§7This orb rolled: §f" + G_VOID_PAGE_OPEN + type + G_CLOSE + "§7.");
+            p1.add("§7See the next page for details.");
+            p1.add(" ");
+            p1.add("§8HUD shows when held/worn.");
+
+            // Page 2 — current type details (kept short)
+            List<String> p2 = new ArrayList<String>();
+            p2.add("§f" + G_VOID_PAGE_OPEN + "VOID TYPE" + G_CLOSE + " §7(§f" + G_VOID_PAGE_OPEN + type + G_CLOSE + "§7)");
+            p2.add(" ");
+
+            if (VOID_TYPE_ENTROPY.equalsIgnoreCase(type)) {
+                p2.add("§7On hit: apply §fCorruption§7 to target.");
+                p2.add("§7Deals damage over time; reapply adds");
+                p2.add("§7stacks (caps) and refreshes duration.");
+                p2.add("§7More stacks = stronger ticks.");
+            } else if (VOID_TYPE_GRAVITY_WELL.equalsIgnoreCase(type)) {
+                p2.add("§7Chance on hit: spawn a §fWell§7.");
+                p2.add("§7Briefly pulls nearby foes inward,");
+                p2.add("§7then ends in a small burst.");
+                p2.add("§7Great for clumping into AoE.");
+            } else if (VOID_TYPE_NULL_SHELL.equalsIgnoreCase(type)) {
+                p2.add("§7On hit: apply §fNull Shell§7 briefly.");
+                p2.add("§7Weakens the target (dmg down / shred).");
+                p2.add("§7Also grants you §fVoid Protection§7.");
+                p2.add("§7Excellent vs tanky foes.");
+            } else { // Abyss Mark
+                p2.add("§7On hit: apply a §fMark§7 stack.");
+                p2.add("§7At 3 stacks: detonate for bonus dmg");
+                p2.add("§7and clear stacks. Reapply refreshes.");
+                p2.add("§7Best for sustained combos.");
+            }
+
+            pages.add(p1);
+            pages.add(p2);
+
+            LorePagesAPI.writePagesToNBT(stack, pages);
+        } catch (Throwable t) {
+            // Never crash tooltips or server ticks because of lore pages.
+        }
+    }
+
+
     private void applyRpgCoreAttributes(NBTTagCompound root, RollProfile profile, NBTTagCompound rolls) {
         if (profile.entries.isEmpty()) return;
 
@@ -2559,6 +2766,44 @@ public class HexOrbRoller {
                 if ("§dUnlocks Unique attacks…".equals(s)) continue;
             }
 
+            if (!containsExact(newLines, s)) {
+                merged.appendTag(new NBTTagString(s));
+            }
+        }
+
+        display.setTag("Lore", merged);
+        tag.setTag("display", display);
+        stack.setTagCompound(tag);
+    }
+
+
+    // ---------------------------------------------------------------------
+    // Light tooltip refresh (force fix for legacy N/A tooltips)
+    // ---------------------------------------------------------------------
+    private void ensureLightLore(ItemStack stack) {
+        if (stack == null || stack.getItem() != gemItem) return;
+        NBTTagCompound tag = stack.getTagCompound();
+        if (tag == null) return;
+        if (!tag.hasKey(TAG_PROFILE, 8)) return;
+        String prof = tag.getString(TAG_PROFILE);
+        if (prof == null || !prof.startsWith("LIGHT_")) return;
+
+        NBTTagCompound display = tag.getCompoundTag("display");
+        NBTTagList lore = display.getTagList("Lore", 8);
+
+        List<String> newLines = new ArrayList<String>();
+        newLines.add("§7Effect: " + "<pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + "Light" + G_CLOSE + "</pulse>");
+        newLines.add("§7Bonus: " + "<pulse amp=0.40 speed=0.90>" + G_LIGHT_OPEN + "Radiance • Light Abilities" + G_CLOSE + "</pulse>");
+
+        NBTTagList merged = new NBTTagList();
+        for (String s : newLines) merged.appendTag(new NBTTagString(s));
+
+        for (int i = 0; i < lore.tagCount(); i++) {
+            String s = lore.getStringTagAt(i);
+            if (s != null) {
+                if (s.startsWith("§7Effect:")) continue;
+                if (s.startsWith("§7Bonus:")) continue;
+            }
             if (!containsExact(newLines, s)) {
                 merged.appendTag(new NBTTagString(s));
             }
@@ -2879,6 +3124,33 @@ public class HexOrbRoller {
                 0,
                 0
         ).add("dbc.Spirit.Multi", "Spirit", 1, 10);
+
+        // Void (type-driven; bonus roll is assigned at roll time)
+        static final RollProfile VOID_FLAT = new RollProfile(
+                "VOID_FLAT",
+                "Void",
+                "§7Effect: <pulse amp=0.55 speed=0.85>" + G_VOID_OPEN + "Randomized Void Type" + G_CLOSE + "</pulse>",
+                G_VOID_OPEN,
+                false,
+                false,
+                false,
+                0,
+                0
+        );
+
+        static final RollProfile VOID_MULTI = new RollProfile(
+                "VOID_MULTI",
+                "Void",
+                "§7Effect: <pulse amp=0.55 speed=0.85>" + G_VOID_OPEN + "Randomized Void Type" + G_CLOSE + "</pulse>",
+                G_VOID_OPEN,
+                true,
+                false,
+                false,
+                0,
+                0
+        );
+
+
 
         // Light (type-driven effects; bonus roll is assigned at roll time)
         static final RollProfile LIGHT_FLAT = new RollProfile(

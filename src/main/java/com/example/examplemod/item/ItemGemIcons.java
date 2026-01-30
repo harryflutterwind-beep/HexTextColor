@@ -40,16 +40,21 @@ public class ItemGemIcons extends Item {
     private static final int META_FROST_MULTI  = 1;
     private static final int META_SOLAR_FLAT   = 6;
     private static final int META_SOLAR_MULTI  = 7;
-    private static final int META_LIGHT_FLAT   = 10;
-    private static final int META_LIGHT_MULTI  = 11;
     private static final int META_NATURE_FLAT  = 8;
     private static final int META_NATURE_MULTI = 9;
+
+    // Light orb (textures exist at VARIANTS[10] and VARIANTS[11])
+    private static final int META_LIGHT_FLAT   = 10;
+    private static final int META_LIGHT_MULTI  = 11;
+
     private static final int META_INFERNO_FLAT = 14;
     private static final int META_INFERNO_MULTI= 15;
     private static final int META_RAINBOW_FLAT = 16;
     private static final int META_RAINBOW_MULTI= 17;
     private static final int META_AETHER_FLAT  = 20;
     private static final int META_AETHER_MULTI = 21;
+    private static final int META_VOID_FLAT   = 22;
+    private static final int META_VOID_MULTI  = 23;
     private static final int META_NEGATIVE_FLAT = 12;
     private static final int META_NEGATIVE_MULTI= 13;
 
@@ -71,8 +76,10 @@ public class ItemGemIcons extends Item {
     private static final String G_AETHER_OPEN    = "<grad #00ffd5 #36d1ff #7a5cff #e9ffff scroll=0.24>";
     private static final String G_ENERGIZED_OPEN = "<grad #ff4fd8 #36d1ff #ffe66d #7cff6b #7a5cff scroll=0.34>";
     private static final String G_NEG_OPEN       = "<grad #7a00ff #ff4fd8 #120018 #7a5cff scroll=0.30>";
+    private static final String G_VOID_OPEN      = "<grad #b84dff #7a5cff #120018 #ff4fd8 scroll=0.30>";
     private static final String G_FRACTURE_OPEN  = "<grad #b84dff #7a5cff #00ffd5 #ff4fd8 scroll=0.30>";
     private static final String G_CHAOS_OPEN     = "<grad #ff4fd8 #7a5cff #00ffd5 #ffe66d scroll=0.38>";
+    private static final String G_LIGHT_OPEN     = "<grad #fff7d6 #ffeaa8 #ffffff #ffd36b scroll=0.22>";
     private static final String G_CLOSE          = "</grad>";
 
     private static final String EFFECT_NA = "\u00a77Effect: \u00a78N/A";
@@ -80,7 +87,8 @@ public class ItemGemIcons extends Item {
     private static final String EFFECT_SWIRLY = "\u00a77Effect: \u00a7dUnique Attacks";
     private static final String EFFECT_CHAOTIC = "\u00a77Effect: " + G_CHAOS_OPEN + "Chaotic Shifts" + G_CLOSE;
     private static final String EFFECT_FRACTURED= "\u00a77Effect: " + G_FRACTURE_OPEN + "Fractured" + G_CLOSE;
-    private static final String EFFECT_SOLAR_RANDOM = "\u00a77Effect: <pulse amp=0.55 speed=0.85>" + G_GOLDEN_OPEN + "Randomized Type" + G_CLOSE + "</pulse>";
+    private static final String EFFECT_VOID_RANDOM= "\u00a77Effect: <pulse amp=0.55 speed=0.85>" + G_VOID_OPEN + "Randomized Void Type" + G_CLOSE + "</pulse>";
+    private static final String EFFECT_LIGHT = "\u00a77Effect: <pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + "Light" + G_CLOSE + "</pulse>";
     private static final String EFFECT_FIRE   = "\u00a77Effect: \u00a76Inferno Punch \u00a78(timed hits + finisher)";
 
     /** Texture base names (no .png). Meta index == array index. */
@@ -171,7 +179,6 @@ public class ItemGemIcons extends Item {
     // Hover tooltip fallback:
     // - If the stack already has display lore (from HexOrbRoller rolling + writing lore), we do NOTHING.
     // - If it has no lore yet (e.g., still in the creative menu list), we show Effect/Bonus lines.
-    // - Only the Swirly + Fire pills get real Effect text right now; everything else is Effect: N/A.
     @Override
     @SideOnly(Side.CLIENT)
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -179,7 +186,9 @@ public class ItemGemIcons extends Item {
         if (stack == null || tooltip == null) return;
 
         // If real lore is already present, don't add extra lines (avoid duplicates).
-        if (hasLoreLineStarting(stack, "\u00a77Effect:") || hasLoreLineStarting(stack, "\u00a77Bonus:") || hasLoreLineStarting(stack, "Sockets:")) {
+        if (hasLoreLineStarting(stack, "\u00a77Effect:")
+                || hasLoreLineStarting(stack, "\u00a77Bonus:")
+                || hasLoreLineStarting(stack, "Sockets:")) {
             return;
         }
 
@@ -194,8 +203,11 @@ public class ItemGemIcons extends Item {
             tooltip.add(EFFECT_CHAOTIC);
         } else if (meta == META_FRACTURED_FLAT || meta == META_FRACTURED_MULTI) {
             tooltip.add(EFFECT_FRACTURED);
-        } else if (meta == META_SOLAR_FLAT || meta == META_SOLAR_MULTI || meta == META_LIGHT_FLAT || meta == META_LIGHT_MULTI) {
-            tooltip.add(EFFECT_SOLAR_RANDOM);
+        } else if (meta == META_VOID_FLAT || meta == META_VOID_MULTI) {
+            tooltip.add(EFFECT_VOID_RANDOM);
+        } else if (meta == META_LIGHT_FLAT || meta == META_LIGHT_MULTI) {
+            // Preview-only Light tooltip for unrolled/creative stacks
+            tooltip.add(EFFECT_LIGHT);
         } else {
             tooltip.add(EFFECT_NA);
         }
@@ -218,11 +230,11 @@ public class ItemGemIcons extends Item {
 
             case META_CHAOTIC_FLAT:
             case META_CHAOTIC_MULTI:
-                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_CHAOS_OPEN + "Shifts 1–4 stats (±)" + G_CLOSE + "</pulse>";
+                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_CHAOS_OPEN + "Shifts 1\u20134 stats (\u00b1)" + G_CLOSE + "</pulse>";
 
             case META_FRACTURED_FLAT:
             case META_FRACTURED_MULTI:
-                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_FRACTURE_OPEN + "Balanced • Thresholds • Shards" + G_CLOSE + "</pulse>";
+                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_FRACTURE_OPEN + "Balanced \u2022 Thresholds \u2022 Shards" + G_CLOSE + "</pulse>";
 
             case META_INFERNO_FLAT:
             case META_INFERNO_MULTI:
@@ -234,9 +246,7 @@ public class ItemGemIcons extends Item {
 
             case META_SOLAR_FLAT:
             case META_SOLAR_MULTI:
-            case META_LIGHT_FLAT:
-            case META_LIGHT_MULTI:
-                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_GOLDEN_OPEN + "Random Attribute \u2022 Random Value" + G_CLOSE + "</pulse>";
+                return "\u00a77Bonus: " + G_GOLDEN_OPEN + "Constitution Is a Randomized Value" + G_CLOSE;
 
             case META_NATURE_FLAT:
             case META_NATURE_MULTI:
@@ -249,6 +259,15 @@ public class ItemGemIcons extends Item {
             case META_RAINBOW_FLAT:
             case META_RAINBOW_MULTI:
                 return "\u00a77Bonus: " + G_ENERGIZED_OPEN + "All Attributes Are Randomized Values" + G_CLOSE;
+
+            case META_VOID_FLAT:
+            case META_VOID_MULTI:
+                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_VOID_OPEN + "Random Attribute \u2022 Random Value" + G_CLOSE + "</pulse>";
+
+            case META_LIGHT_FLAT:
+            case META_LIGHT_MULTI:
+                // Testing/preview line for the Light orb (unrolled stacks)
+                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_LIGHT_OPEN + "Radiance \u2022 Light Abilities" + G_CLOSE + "</pulse>";
         }
         return null;
     }

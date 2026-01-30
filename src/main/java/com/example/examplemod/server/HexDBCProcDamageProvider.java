@@ -2,8 +2,10 @@ package com.example.examplemod.server;
 
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.entity.ai.attributes.IAttributeInstance;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.util.ChatComponentText;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -15,6 +17,19 @@ import java.lang.reflect.Method;
  * If NPCDBC isn't present, returns -1 so HexOrbEffectsController falls back to defaults.
  */
 public final class HexDBCProcDamageProvider implements HexOrbEffectsController.ProcDamageProvider {
+
+    /** Optional (off by default): send one chat line showing which stat source was used on dedicated servers. */
+    public static volatile boolean DEBUG_CHAT_STATS = false;
+
+    private static final String TAG_PLAYER_PERSISTED = "PlayerPersisted";
+    private static final String DBG_LAST_TICK_KEY = "HexDbgStatT";
+
+    private static final String[] STR_KEYS = new String[]{
+            "jrmcStr", "jrmcSTR", "jrmcStrength", "jrmcStrI", "jrmcSTRI"
+    };
+    private static final String[] WIL_KEYS = new String[]{
+            "jrmcWil", "jrmcWIL", "jrmcWill", "jrmcWilI", "jrmcWILI"
+    };
 
     // ── TUNING (adjust these to fit your server's stat scale) ────────────────
     public static volatile float BASE_ADD = 2500f;
@@ -213,14 +228,15 @@ public final class HexDBCProcDamageProvider implements HexOrbEffectsController.P
 
         double wilNpcdbcEff = (wilBase > 0D) ? (wilBase * Math.max(1D, curMulti)) : 0D;
 
-        // C) NBT fallback (only if present in your environment)
+        // C) NBT fallback (dedicated servers often store these under PlayerPersisted)
         double wilNbt = 0D;
         try {
             NBTTagCompound ed = player.getEntityData();
             if (ed != null) {
-                if (ed.hasKey("jrmcWil")) wilNbt = (double) ed.getInteger("jrmcWil");
-                else if (ed.hasKey("jrmcWIL")) wilNbt = (double) ed.getInteger("jrmcWIL");
-                else if (ed.hasKey("jrmcWill")) wilNbt = (double) ed.getInteger("jrmcWill");
+                if (ed.hasKey(TAG_PLAYER_PERSISTED, 10)) {
+                    wilNbt = Math.max(wilNbt, readBestNumeric(ed.getCompoundTag(TAG_PLAYER_PERSISTED), WIL_KEYS));
+                }
+                wilNbt = Math.max(wilNbt, readBestNumeric(ed, WIL_KEYS));
             }
         } catch (Throwable ignored) {}
 
@@ -230,6 +246,10 @@ public final class HexDBCProcDamageProvider implements HexOrbEffectsController.P
         if (wilNbt > best) best = wilNbt;
 
         if (Double.isNaN(best) || Double.isInfinite(best)) return 0D;
+
+        if (DEBUG_CHAT_STATS) {
+            debugChat(player, "[HexDBG] WIL attr=" + (long) willAttrEff + " npcdbc=" + (long) wilNpcdbcEff + " nbt=" + (long) wilNbt + " -> " + (long) best);
+        }
         return best;
     }
 
@@ -289,14 +309,15 @@ public final class HexDBCProcDamageProvider implements HexOrbEffectsController.P
 
         double strNpcdbcEff = (strBase > 0D) ? (strBase * Math.max(1D, curMulti)) : 0D;
 
-        // C) NBT fallback
+        // C) NBT fallback (dedicated servers often store these under PlayerPersisted)
         double strNbt = 0D;
         try {
             NBTTagCompound ed = player.getEntityData();
             if (ed != null) {
-                if (ed.hasKey("jrmcStr")) strNbt = (double) ed.getInteger("jrmcStr");
-                else if (ed.hasKey("jrmcSTR")) strNbt = (double) ed.getInteger("jrmcSTR");
-                else if (ed.hasKey("jrmcStrength")) strNbt = (double) ed.getInteger("jrmcStrength");
+                if (ed.hasKey(TAG_PLAYER_PERSISTED, 10)) {
+                    strNbt = Math.max(strNbt, readBestNumeric(ed.getCompoundTag(TAG_PLAYER_PERSISTED), STR_KEYS));
+                }
+                strNbt = Math.max(strNbt, readBestNumeric(ed, STR_KEYS));
             }
         } catch (Throwable ignored) {}
 
@@ -306,7 +327,42 @@ public final class HexDBCProcDamageProvider implements HexOrbEffectsController.P
         if (strNbt > best) best = strNbt;
 
         if (Double.isNaN(best) || Double.isInfinite(best)) return 0D;
+
+        if (DEBUG_CHAT_STATS) {
+            debugChat(player, "[HexDBG] STR attr=" + (long) strAttrEff + " npcdbc=" + (long) strNpcdbcEff + " nbt=" + (long) strNbt + " -> " + (long) best);
+        }
         return best;
+    }
+
+    /** Reads the largest numeric value across multiple possible keys (type 99 = any numeric). */
+    private static double readBestNumeric(NBTTagCompound tag, String[] keys) {
+        if (tag == null || keys == null) return 0D;
+        double best = 0D;
+        for (String k : keys) {
+            if (k == null) continue;
+            try {
+                if (tag.hasKey(k, 99)) {
+                    double v = tag.getDouble(k);
+                    if (!Double.isNaN(v) && !Double.isInfinite(v) && v > best) best = v;
+                }
+            } catch (Throwable ignored) {}
+        }
+        return best;
+    }
+
+    /** Throttled chat debug (1 msg/sec max) so DoTs don't spam. */
+    private static void debugChat(EntityPlayer player, String msg) {
+        try {
+            if (!(player instanceof EntityPlayerMP)) return;
+            if (player.worldObj == null) return;
+            long now = player.worldObj.getTotalWorldTime();
+            NBTTagCompound ed = player.getEntityData();
+            if (ed == null) return;
+            long last = ed.getLong(DBG_LAST_TICK_KEY);
+            if (now - last < 20L) return;
+            ed.setLong(DBG_LAST_TICK_KEY, now);
+            ((EntityPlayerMP) player).addChatMessage(new ChatComponentText(msg));
+        } catch (Throwable ignored) {}
     }
     private static double getAttr(EntityPlayer p, String name) {
         if (p == null || name == null) return 0D;

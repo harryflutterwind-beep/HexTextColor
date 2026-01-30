@@ -9,6 +9,8 @@ import com.example.examplemod.server.HexOrbRoller;
 import cpw.mods.fml.common.FMLCommonHandler;
 import com.example.examplemod.command.RarityLoreCommand;
 import com.example.examplemod.command.SetDamageCommand;
+import com.example.examplemod.command.CommandHexStats;
+import com.example.examplemod.command.CommandHexScale;
 import com.example.examplemod.item.ItemTabIcon;
 import com.example.examplemod.item.ItemGemIcons;
 import com.example.examplemod.command.LorePagesCommand;
@@ -22,6 +24,8 @@ import cpw.mods.fml.common.registry.GameRegistry;
 import cpw.mods.fml.common.network.NetworkRegistry;
 import com.example.examplemod.gui.HexSocketStationGuiHandler;
 import net.minecraftforge.common.MinecraftForge;
+import com.example.examplemod.command.CommandQuickGamemode;
+import net.minecraft.world.WorldSettings;
 
 @Mod(
         modid = "hexcolorcodes",
@@ -90,7 +94,14 @@ public class ExampleMod {
         e.registerServerCommand(new com.example.examplemod.command.HexHelpCommand());
         e.registerServerCommand(new LorePagesCommand());
         e.registerServerCommand(new com.example.examplemod.command.HexSocketCommand());
+        e.registerServerCommand(new CommandHexStats());
+        e.registerServerCommand(new CommandHexScale());
+        e.registerServerCommand(new com.example.examplemod.command.CommandVoidSphere());
 
-        System.out.println("[HexColorCodes] Commands registered: /rarity, /setdamage, /dragon, /dragonloot, hexhelp");
+        // Quick gamemode shortcuts
+        e.registerServerCommand(new CommandQuickGamemode("c", WorldSettings.GameType.CREATIVE, "§bCreative"));
+        e.registerServerCommand(new CommandQuickGamemode("s", WorldSettings.GameType.SURVIVAL, "§eSurvival"));
+
+        System.out.println("[HexColorCodes] Commands registered: /rarity, /setdamage, /dragon, /dragonloot, /hexhelp, /lorepages, /hexsocket, /hexstats, /hexscale, /c, /s");
     }
 }

@@ -6,6 +6,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.launchwrapper.Launch;
 import net.minecraft.nbt.NBTTagCompound;
@@ -56,10 +57,10 @@ public final class HexOrbEffectsController {
     public static volatile DamageApplier DAMAGE_APPLIER = null;
 
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // FRACTURED: Flying blast (virtual projectile) keys (player entity NBT)
     // Written by PacketFracturedAction; advanced in onLivingUpdate (server side).
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static final String FRB_KEY_ACTIVE = "HexFRB_Active";
     private static final String FRB_KEY_X      = "HexFRB_X";
     private static final String FRB_KEY_Y      = "HexFRB_Y";
@@ -69,6 +70,19 @@ public final class HexOrbEffectsController {
     private static final String FRB_KEY_DZ     = "HexFRB_DZ";
     private static final String FRB_KEY_STEP   = "HexFRB_Step";
     private static final String FRB_KEY_TICKS  = "HexFRB_Ticks";
+
+    // -------------------------------------------------------------
+    // VOID: Gravity Well state (player entity NBT)
+    // -------------------------------------------------------------
+    private static final String VOID_GW_KEY_ACTIVE = "HexVoidGW_Active";
+    private static final String VOID_GW_KEY_END    = "HexVoidGW_End";
+    private static final String VOID_GW_KEY_X      = "HexVoidGW_X";
+    private static final String VOID_GW_KEY_Y      = "HexVoidGW_Y";
+    private static final String VOID_GW_KEY_Z      = "HexVoidGW_Z";
+    private static final String VOID_GW_KEY_BASE   = "HexVoidGW_Base";
+    private static final String VOID_GW_KEY_ANIM   = "HexVoidGW_Anim";
+    private static final String VOID_GW_KEY_TICK   = "HexVoidGW_Tick";
+
     private static final String FRB_KEY_DMG    = "HexFRB_Dmg";
     private static final String FRB_KEY_KB     = "HexFRB_KB";
     private static final String FRB_KEY_RAD    = "HexFRB_Rad";
@@ -76,8 +90,7 @@ public final class HexOrbEffectsController {
     private static final String FRB_KEY_AOE_RAD = "HexFRB_AoeRad";
     private static final String FRB_KEY_AOE_DMG = "HexFRB_AoeDmg";
     private static final String FRB_KEY_WIL_SNAP = "HexFRB_WilSnap";
-    private static final String FRB_KEY_END_BOOM = "HexFRB_EndBoom"; // explode when reaching end-of-path with no hit
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // PROC BASE DAMAGE SOURCE
     // Many mods (including DBC) may report tiny vanilla event damage
     // even when "real" damage is huge. Procs should not scale off that.
@@ -86,7 +99,7 @@ public final class HexOrbEffectsController {
     //
     // You can override ALL of this at runtime via PROC_DAMAGE_PROVIDER
     // (great for CNPCs/Nashorn scripts or a dedicated DBC bridge).
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public enum ProcStage {
         FLAT_AOE,
         ANIM_PRIMARY,
@@ -173,9 +186,9 @@ public final class HexOrbEffectsController {
     }
 
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // DEV ENV DETECTION (1.7.10-safe)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static final boolean DEV_ENV = isDevEnvironment();
 
     /**
@@ -195,9 +208,9 @@ public final class HexOrbEffectsController {
         return false;
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // GEM KEYS (must match the key stored by your socket system)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public static volatile String GEM_ENERGIZED_FLAT = "gems/orb_gem_swirly_64";
     public static volatile String GEM_ENERGIZED_ANIM = "gems/orb_gem_swirly_loop";
 
@@ -210,16 +223,20 @@ public final class HexOrbEffectsController {
     // Fractured Orbs
     public static volatile String GEM_FRACTURED_FLAT = "gems/orb_gem_fractured_64";
     public static volatile String GEM_FRACTURED_ANIM = "gems/orb_gem_fractured_anim_8f_64x516";
-    // ─────────────────────────────────────────────────────────────
+
+    // Void Orbs
+    public static volatile String GEM_VOID_FLAT = "gems/orb_gem_violet_void_64";
+    public static volatile String GEM_VOID_ANIM = "gems/orb_gem_violet_void_64_anim_8f";
+    // -------------------------------------------------------------
     // DEBUG (chat-throttled)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public static volatile boolean DEBUG_PROC = false;
     public static volatile boolean DEBUG_SOCKET_KEYS = false;
 
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // DAMAGE DEBUGGER (chat to attacker)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public static volatile boolean DEBUG_DAMAGE = false;
     public static volatile boolean DEBUG_DAMAGE_VERBOSE = false;
 
@@ -249,11 +266,11 @@ public final class HexOrbEffectsController {
         try { return e.getHealth(); } catch (Throwable t){ return -1f; }
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // DBC BODY% (health) helper
     // DBC stores BODY in player NBT (commonly jrmcBdy / jrmcBdyF).
     // We try a few keys and fall back to vanilla health%.
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static final String[] DBC_BODY_CUR_KEYS = {"jrmcBdy", "jrmcBdyCur", "jrmcBdyc"};
     private static final String[] DBC_BODY_MAX_KEYS = {"jrmcBdyF", "jrmcBdyMax", "jrmcBdyM"};
 
@@ -331,9 +348,9 @@ public final class HexOrbEffectsController {
         return n + "#" + e.getEntityId() + "/" + e.getClass().getSimpleName();
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // PROC RELIABILITY FIXES
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
 
     /**
      * Main reason you only saw damage on CustomNPCs:
@@ -349,11 +366,11 @@ public final class HexOrbEffectsController {
      */
     public static volatile boolean PROC_FORCE_SETHEALTH_FALLBACK_NONPLAYERS = false;
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // TWEAKABLE PROC SETTINGS
     // NOTE: Cooldown caps frequency no matter the chance.
     // For "proc every hit" testing set cooldowns to 0.
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
 
     // Flat gem: rainbow shockwave (AoE burst)
     public static volatile double ENERGIZED_FLAT_PROC_CHANCE = 0.17;
@@ -375,12 +392,12 @@ public final class HexOrbEffectsController {
     // Global damage multiplier for both Energized procs
     public static volatile float  ENERGIZED_GLOBAL_DAMAGE_MULT = 1.35f;
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Fire Pill: Fire Punch buff
     // - Proc starts a short window where your hands burn (VFX)
     // - Each melee hit during the window adds extra damage
     // - When the window ends, the last target you hit takes a short DoT, then a fire explosion
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public static volatile boolean FIRE_PUNCH_ENABLED = true;
     /** If false, fire effects will never apply to players (PvP safety). */
     public static volatile boolean FIRE_PUNCH_AFFECT_PLAYERS = true;
@@ -438,13 +455,133 @@ public final class HexOrbEffectsController {
     public static volatile float   FIRE_EXPLOSION_ANIM_BONUS_DAMAGE = 24.0f;
 
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Fractured: Low-Body Chaos Surge (DBC-friendly)
     // Triggers when your BODY (DBC health) is below a threshold.
     // Chance + damage scale up as body gets lower.
     // Sometimes it backfires and hits YOU instead (true fractured chaos).
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public static volatile boolean FRACTURED_ENABLED = true;
+
+    // -------------------------------------------------------------
+    // VOID ORB: Gravity Well (defensive proc)  - ONLY used when the rolled void type is Gravity Well
+    // -------------------------------------------------------------
+    public static volatile boolean VOID_ENABLED = true;
+    public static volatile float   VOID_GW_PROC_CHANCE          = 0.88f;
+    public static volatile float   VOID_GW_PROC_CHANCE_ON_HIT  = 0.14f; // chance when YOU hit something
+    public static volatile int     VOID_GW_COOLDOWN_TICKS       = 20 * 8;   // 8s
+    public static volatile int     VOID_GW_DURATION_TICKS       = 20 * 2;   // 2s
+    public static volatile float   VOID_GW_RADIUS              = 5.5f;
+    public static volatile float   VOID_GW_RADIUS_ANIM         = 6.5f;
+    public static volatile float   VOID_GW_PULL_STRENGTH       = 0.22f;     // horiz velocity per tick
+    public static volatile float   VOID_GW_PULL_STRENGTH_ANIM  = 0.28f;
+    public static volatile int     VOID_GW_DAMAGE_PERIOD_TICKS = 6;         // apply tick damage every N ticks
+    public static volatile float   VOID_GW_TICK_DAMAGE_SCALE   = 0.20f;     // scales from incoming hit damage
+    public static volatile float   VOID_GW_BURST_DAMAGE_SCALE  = 0.85f;
+
+
+    // -------------------------------------------------------------
+    // VOID ORB: Entropy (DoT applied by Gravity Well)
+    // - Uses DBC Strength scaling when available (with vanilla fallback)
+    // - Spawns the same Gravity Well particle style on the target while ticking
+    // - On completion, returns a fraction of the DoT damage to the owner as healing
+    // -------------------------------------------------------------
+    public static volatile boolean VOID_ENTROPY_ENABLED = true;
+    public static volatile boolean VOID_ENTROPY_AFFECT_PLAYERS = true;
+    public static volatile int     VOID_ENTROPY_DURATION_TICKS = 20 * 3;     // 3s
+    public static volatile int     VOID_ENTROPY_INTERVAL_TICKS = 10;         // 0.5s
+    public static volatile float   VOID_ENTROPY_STRENGTH_SCALE = 6.0f;    // dmg per STR per tick
+    public static volatile float   VOID_ENTROPY_BONUS_DAMAGE   = 8000.0f;       // flat per tick
+    public static volatile float   VOID_ENTROPY_ANIM_MULT      = 1.18f;
+    public static volatile float   VOID_ENTROPY_LIFESTEAL_FRACTION = 0.03f;  // 30% of DoT dealt returned at the end
+    // Entropy proc tuning (for Entropy-type void gems)
+    public static volatile float   VOID_ENTROPY_PROC_CHANCE         = 0.18f; // when YOU are damaged: chance to curse the attacker
+    public static volatile float   VOID_ENTROPY_PROC_CHANCE_ON_HIT   = 0.30f; // when YOU hit something: chance to apply Entropy DoT
+    public static volatile int     VOID_ENTROPY_COOLDOWN_TICKS       = 20 * 6; // shared cooldown for Entropy procs
+
+    // -------------------------------------------------------------
+    // VOID ORB: Abyss Mark (AoE mark -> delayed detonation)
+    // - On proc, applies a Mark to ALL nearby entities in range (AoE "spread")
+    // - Marked entities have visible void particles while marked
+    // - When the timer ends, EACH marked entity detonates (single-target hit + burst VFX)
+    // - HUD shows the detonation timer as a bar + seconds (reuses HexVoidHudCD fields)
+    // -------------------------------------------------------------
+    public static volatile boolean VOID_ABYSS_MARK_ENABLED = true;
+    public static volatile boolean VOID_ABYSS_MARK_AFFECT_PLAYERS = true;
+
+    /** Radius (blocks) used to APPLY the mark to nearby entities on proc. */
+    public static volatile float   VOID_ABYSS_MARK_MARK_RADIUS      = 4.6f;
+    public static volatile float   VOID_ABYSS_MARK_MARK_RADIUS_ANIM = 5.6f;
+
+    /** Safety cap to avoid marking huge crowds at once. */
+    public static volatile int     VOID_ABYSS_MARK_MAX_TARGETS = 12;
+
+    /** How long the Mark lasts before detonation (this is the HUD timer). */
+    public static volatile int     VOID_ABYSS_MARK_DURATION_TICKS = 20 * 6; // 6s
+
+    /** Chance to apply when YOU are damaged (AoE centered on you). */
+    public static volatile float   VOID_ABYSS_MARK_PROC_CHANCE = 0.20f;
+
+    /** Chance to apply when YOU hit something (AoE centered on the target). */
+    public static volatile float   VOID_ABYSS_MARK_PROC_CHANCE_ON_HIT = 0.35f;
+
+    // Legacy (unused with the AoE/delay design, kept for back-compat configs):
+    public static volatile int     VOID_ABYSS_MARK_MAX_STACKS = 3;
+    public static volatile boolean VOID_ABYSS_MARK_DETONATE_ON_MAX = false;
+
+    /** Detonation damage tuning (DBC WILL scaling with vanilla fallback). */
+    public static volatile float   VOID_ABYSS_MARK_DETONATE_STR_SCALE = 8.0f;
+    public static volatile float   VOID_ABYSS_MARK_DETONATE_BONUS_DMG  = 12000.0f;
+    public static volatile float   VOID_ABYSS_MARK_ANIM_MULT          = 1.18f;
+
+    /** Optional detonation knockback strength (0 disables). */
+    public static volatile double  VOID_ABYSS_MARK_DETONATE_KB          = 0.20D;
+    public static volatile double  VOID_ABYSS_MARK_DETONATE_KB_ANIM     = 0.28D;
+
+    // Legacy (AoE detonation) - not used in the new design but kept for back-compat:
+    public static volatile float   VOID_ABYSS_MARK_DETONATE_RADIUS      = 4.6f;
+    public static volatile float   VOID_ABYSS_MARK_DETONATE_RADIUS_ANIM = 5.6f;
+    // -------------------------------------------------------------
+    // VOID ORB: Null Shell (charge meter only - dash/protection/push come later)
+    // - Passively charges while you stand in DARKNESS
+    // - Can still (rarely) charge in BRIGHT light
+    // - (Rare) bonus charge when you HIT / are HIT, especially while in darkness
+    //
+    // Charge is stored on the PLAYER (entity NBT) and mirrored onto the active host stack NBT
+    // so the client HUD can render it without a custom packet.
+    // -------------------------------------------------------------
+    public static volatile boolean VOID_NULL_SHELL_ENABLED = true;
+
+    /** Charge is stored as 0..MAX (default 1000 = 100.0%). */
+    public static volatile int     VOID_NULL_SHELL_CHARGE_MAX = 1000;
+
+
+    /** How many full "bars" of charge can be stored (for multi-stage abilities). */
+    public static volatile int     VOID_NULL_SHELL_CHARGE_STAGES = 3;
+
+    /** Passive gain applied once per second while in darkness. */
+    public static volatile int     VOID_NULL_SHELL_PASSIVE_DARK_GAIN_PER_SEC = 60;
+
+    /** Passive gain in bright light: rare chance per second. */
+    public static volatile float   VOID_NULL_SHELL_PASSIVE_LIGHT_CHANCE_PER_SEC = 0.08f;
+    public static volatile int     VOID_NULL_SHELL_PASSIVE_LIGHT_GAIN = 2;
+
+    /** Combat bonus while in darkness: rare chance per hit/hurt event. */
+    public static volatile float   VOID_NULL_SHELL_COMBAT_BONUS_CHANCE_DARK = 0.16f;
+    public static volatile int     VOID_NULL_SHELL_COMBAT_BONUS_GAIN_DARK = 10;
+
+    /** Combat bonus while in bright light: even rarer. */
+    public static volatile float   VOID_NULL_SHELL_COMBAT_BONUS_CHANCE_LIGHT = 0.06f;
+    public static volatile int     VOID_NULL_SHELL_COMBAT_BONUS_GAIN_LIGHT = 6;
+
+    /** Light thresholds (0..15). */
+    public static volatile int     VOID_NULL_SHELL_DARK_LIGHT_MAX = 9;
+    public static volatile int     VOID_NULL_SHELL_BRIGHT_LIGHT_MIN = 13;
+
+    /** Don't spam NBT sync to the client more frequently than this. */
+    public static volatile int     VOID_NULL_SHELL_STAMP_MIN_INTERVAL_TICKS = 20;
+
+
 
     /** Trigger threshold (0..1) of BODY%. Example: 0.45 = below 45% body. */
     public static volatile float  FRACTURED_TRIGGER_BODY_PCT = 0.45f;
@@ -475,11 +612,52 @@ public final class HexOrbEffectsController {
     public static volatile float  FRACTURED_EXTREME_MULT_POS = 2.25f;
     public static volatile float  FRACTURED_EXTREME_MULT_NEG = 2.10f;
 
+    // === Null Shell : Void Dash ===
+    public static final float NS_PASSIVE_PROC_CHANCE = 0.02f; // 2% chance
+    public static final float NS_PASSIVE_COST = 0.02f; // 2%
+    public static final float NS_ACTIVE_COST  = (1.0f/3.0f); // 1st charge bar
+    // 2 charge bars: Void Protection (defense buff)
+    public static final float NS_DEFENSE_COST = (2.0f/3.0f);
+    public static final int   NS_DEFENSE_DURATION_TICKS = 60;   // 3s
+    public static final int   NS_DEFENSE_COOLDOWN_TICKS = 120;  // 6s (separate from dash)
+    public static final float NS_DEFENSE_INCOMING_MULT = 0.65f; // 35% reduction
+
+    // 100% charge: Void Push (AoE force burst)
+    public static final float NS_PUSH_COST = 1.00f; // 3 charge bars (full)
+    public static final int   NS_PUSH_COOLDOWN_TICKS = 200;        // 10s
+    public static final int   NS_PUSH_CHARGE_TICKS = 100;          // 5s
+    public static final int   NS_PUSH_OVERCHARGE_TICKS = 100;      // +5s
+    public static final float NS_PUSH_OVERCHARGE_MULT = 1.87f;
+
+    public static volatile float  NS_PUSH_BASE_DAMAGE = 8000f;      // added before stat scaling
+    public static volatile double NS_PUSH_STAT_SCALE  = 1.60D;    // (DEX/CON weighted) * scale
+    public static volatile float  NS_PUSH_DEX_WEIGHT  = 0.55f;
+    public static volatile float  NS_PUSH_CON_WEIGHT  = 0.45f;
+    public static volatile float  NS_PUSH_RADIUS      = 6.0f;
+
+    public static volatile double NS_PUSH_KB_H = 1.25;
+    public static volatile double NS_PUSH_KB_Y = 0.30;
 
 
-    // ─────────────────────────────────────────────────────────────
+
+    public static final int   NS_DASH_COOLDOWN_TICKS = 80; // 4s
+    public static final double NS_PASSIVE_DISTANCE = 1.4;
+    public static final double NS_ACTIVE_DISTANCE  = 3.6;
+
+    public static final int NS_TRAIL_LIFE = 60;
+    public static final double NS_TRAIL_RADIUS = 1.8;
+    public static final float NS_TRAIL_BIG_MULT = 1.2f;
+    public static final float NS_TRAIL_DOT_MULT = 0.25f;
+    public static volatile int   NS_TRAIL_DOT_INTERVAL = 4;   // ticks between DoT pulses
+    public static volatile float NS_TRAIL_BASE_DAMAGE = 2500f;   // added before stat scaling
+    public static volatile double NS_TRAIL_STAT_SCALE = 0.60D; // (DEX/CON weighted) * scale
+    public static volatile float NS_TRAIL_DEX_WEIGHT = 0.55f;
+    public static volatile float NS_TRAIL_CON_WEIGHT = 0.45f;
+
+
+    // -------------------------------------------------------------
     // Swirl + explode
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public static volatile boolean ENERGIZED_SWIRL_ENABLED = true;
 
     // Variant proc: Horizontal push-swirl + big rainbow blast (NO DoT)
@@ -683,9 +861,9 @@ public final class HexOrbEffectsController {
     /** If false, players only get VFX/SFX and damage (no forced swirl movement). */
     public static volatile boolean ENERGIZED_SWIRL_AFFECT_PLAYERS = true;
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Swirl DoT
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public static volatile boolean ENERGIZED_SWIRL_DOT_ENABLED = true;
     public static volatile int     ENERGIZED_SWIRL_DOT_INTERVAL_TICKS = 4;
     public static volatile float   ENERGIZED_SWIRL_DOT_DAMAGE_SCALE = 0.12f;
@@ -693,9 +871,9 @@ public final class HexOrbEffectsController {
     public static volatile boolean ENERGIZED_SWIRL_DOT_RESET_IFRAMES = true;
     public static volatile boolean ENERGIZED_SWIRL_DOT_AFFECT_PLAYERS = true;
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // ANIM overrides (stronger/longer)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public static volatile int    ENERGIZED_ANIM_SWIRL_TICKS = 24;
     public static volatile float  ENERGIZED_ANIM_SWIRL_RADIUS = 1.05f;
     public static volatile float  ENERGIZED_ANIM_SWIRL_LIFT_TOTAL = 3.2f;
@@ -722,13 +900,13 @@ public final class HexOrbEffectsController {
     public static volatile float  KB_H = 0.55f;
     public static volatile float  KB_Y = 0.18f;
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Internal NBT keys (stored on the TARGET while swirling)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Heal buff keys (stored on the PLAYER while healing)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static final String HEAL_KEY_END   = "HexHeal_End";
     private static final String HEAL_KEY_NEXT  = "HexHeal_Next";
     private static final String HEAL_KEY_PCT   = "HexHeal_Pct";
@@ -755,9 +933,9 @@ public final class HexOrbEffectsController {
     private static final String SW_KEY_DIRZ  = "HexSwirl_DirZ";
     private static final String SW_KEY_PUSH  = "HexSwirl_Push";
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Rainbow Rush keys (stored on the TARGET while the rush sequence runs)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static final String RUSH_KEY_END     = "HexRush_End";
     private static final String RUSH_KEY_NEXT    = "HexRush_Next";
     private static final String RUSH_KEY_OWNER   = "HexRush_OwnerId";
@@ -771,18 +949,18 @@ public final class HexOrbEffectsController {
     private static final String RUSH_KEY_FINALRAD= "HexRush_FinalRad";
     private static final String RUSH_KEY_ANIM    = "HexRush_Anim";
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Fire Punch keys (stored on the ATTACKER while the fire-hands window is active)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static final String FP_KEY_END     = "HexFirePunch_End";
     private static final String FP_KEY_NEXT    = "HexFirePunch_Next";
     private static final String FP_KEY_ANIM    = "HexFirePunch_Anim";
     private static final String FP_KEY_LASTTGT = "HexFirePunch_LastTgt";
     private static final String FP_KEY_FIN     = "HexFirePunch_Fin";
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Fire DoT keys (stored on the TARGET for the finisher)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static final String FD_KEY_END     = "HexFireDot_End";
     private static final String FD_KEY_NEXT    = "HexFireDot_Next";
     private static final String FD_KEY_OWNER   = "HexFireDot_OwnerId";
@@ -793,9 +971,67 @@ public final class HexOrbEffectsController {
     private static final String FD_KEY_ANIM    = "HexFireDot_Anim";
 
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
+    // VOID Entropy keys (stored on the TARGET while entropy runs)
+    // -------------------------------------------------------------
+    private static final String VE_KEY_END     = "HexVoidEnt_End";
+    private static final String VE_KEY_NEXT    = "HexVoidEnt_Next";
+    private static final String VE_KEY_OWNER   = "HexVoidEnt_OwnerId";
+    private static final String VE_KEY_DMG     = "HexVoidEnt_Dmg";
+    private static final String VE_KEY_INT     = "HexVoidEnt_Int";
+    private static final String VE_KEY_TOTAL   = "HexVoidEnt_Total";
+    private static final String VE_KEY_ANIM    = "HexVoidEnt_Anim";
+
+
+    // VOID Abyss Mark keys (stored on the TARGET while marked)
+    private static final String VAM_KEY_OWNER  = "HexVoidAbyss_OwnerId";
+    private static final String VAM_KEY_STACKS = "HexVoidAbyss_Stacks"; // legacy (old stacking design)
+    private static final String VAM_KEY_EXPIRE = "HexVoidAbyss_Expire";
+    private static final String VAM_KEY_ANIM   = "HexVoidAbyss_IsAnim";
+
+    private static final String NS_KEY_CD_END = "HexVoidDashCDEnd";
+    private static final String NS_KEY_CD_MAX = "HexVoidDashCDMax";
+
+
+
+
+
+    // Null Shell: charge meter (stored on PLAYER entity NBT)
+    private static final String VNS_KEY_CHARGE       = "HexVoidNS_Charge";      // int
+    private static final String VNS_KEY_NEXT_PASSIVE = "HexVoidNS_NextPassive"; // long (server ticks)
+    private static final String VNS_KEY_LAST_PCT     = "HexVoidNS_LastPct";     // int (0..100)
+    private static final String VNS_KEY_LAST_STAMP   = "HexVoidNS_LastStamp";   // long (server ticks)
+
+    // Null Shell: defense buff (Void Protection)
+    private static final String VNS_KEY_DEF_END      = "HexVoidNS_DefEnd";      // long (server ticks)
+    private static final String VNS_KEY_DEF_NEXT_FX  = "HexVoidNS_DefNextFX";  // long (server ticks)
+    private static final String VNS_KEY_PUSH_START    = "HexVoidNS_PushStart";    // long (server ticks)
+    private static final String VNS_KEY_PUSH_CHARGING = "HexVoidNS_PushCharging"; // byte (0/1)
+
+    // Quick debug (server-side chat prints) - set false to silence
+    public static volatile boolean VOID_NULL_SHELL_DEBUG = true;
+    private static final String VNS_KEY_DBG_NEXT = "HexVoidNS_DbgNext"; // long (server ticks)
+    private static void nsDbg(EntityPlayer p, String msg){
+        if (!VOID_NULL_SHELL_DEBUG || p == null || p.worldObj == null || p.worldObj.isRemote) return;
+        try{
+            NBTTagCompound d = p.getEntityData();
+            long now = serverNow(p.worldObj);
+            long next = (d != null) ? d.getLong(VNS_KEY_DBG_NEXT) : 0L;
+            if (next != 0L && now < next) return;
+            if (d != null) d.setLong(VNS_KEY_DBG_NEXT, now + 10L); // ~0.5s throttle
+            p.addChatMessage(new net.minecraft.util.ChatComponentText("§8[NSDBG] §7" + msg));
+        } catch (Throwable ignored) {}
+    }
+    // Null Shell: local DBC damage applier (used only when global DAMAGE_APPLIER is not configured)
+    private static final HexDBCBridgeDamageApplier NS_LOCAL_DBC_APPLIER = new HexDBCBridgeDamageApplier();
+
+
+
+
+
+    // -------------------------------------------------------------
     // API (optional external tuning)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     public static final class API {
         private API(){}
 
@@ -836,20 +1072,59 @@ public final class HexOrbEffectsController {
         private static double clamp01(double v){ return v < 0 ? 0 : (v > 1 ? 1 : v); }
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // EVENTS: some mods fire Attack but not Hurt (or vice-versa)
     // We listen to both and de-dupe per tick.
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
 
     @SubscribeEvent
     public void onLivingAttack(LivingAttackEvent e){
         if (e == null || e.entityLiving == null || e.source == null) return;
+
+        // Null Shell: TRUE dodge happens as early as possible (Attack phase).
+        // If it procs, we cancel this hit completely and perform the dash + trail.
+        if (VOID_ENABLED && VOID_NULL_SHELL_ENABLED && e.entityLiving instanceof EntityPlayer){
+            EntityPlayer victim = (EntityPlayer) e.entityLiving;
+            long now = serverNow(victim.worldObj);
+            if (tryVoidNullShellDodge(victim, e.source, now)){
+                if (e.isCancelable()) e.setCanceled(true);
+                return;
+            }
+        }
+
         handleHit(e.source, e.entityLiving, e.ammount, "Attack");
     }
 
     @SubscribeEvent
     public void onLivingHurt(LivingHurtEvent e){
         if (e == null || e.entityLiving == null || e.source == null) return;
+
+        // Null Shell: TRUE dodge fallback (some damage sources skip Attack and go straight to Hurt).
+        if (VOID_ENABLED && VOID_NULL_SHELL_ENABLED && e.entityLiving instanceof EntityPlayer){
+            EntityPlayer victim = (EntityPlayer) e.entityLiving;
+            long now = serverNow(victim.worldObj);
+            if (tryVoidNullShellDodge(victim, e.source, now)){
+                if (e.isCancelable()) e.setCanceled(true);
+                return;
+            }
+        }
+
+        // Null Shell: Void Protection reduces incoming damage while active.
+        if (VOID_ENABLED && VOID_NULL_SHELL_ENABLED && e.entityLiving instanceof EntityPlayer){
+            EntityPlayer victim = (EntityPlayer) e.entityLiving;
+            long now = serverNow(victim.worldObj);
+            if (isNullShellDefenseActive(victim, now)){
+                // Scale the Forge event amount (affects vanilla + most modded hits)
+                e.ammount = e.ammount * NS_DEFENSE_INCOMING_MULT;
+                if (e.ammount < 0f) e.ammount = 0f;
+            }
+        }
+
+        // VOID: defensive procs when the PLAYER is damaged (e.g. Gravity Well)
+        if (VOID_ENABLED && e.entityLiving instanceof EntityPlayer){
+            tryProcVoidOnDamaged((EntityPlayer) e.entityLiving, e.source, e.ammount);
+        }
+
         handleHit(e.source, e.entityLiving, e.ammount, "Hurt");
     }
 
@@ -882,6 +1157,11 @@ public final class HexOrbEffectsController {
         EnergizedMatch match = findEnergizedMatch(player);
         FirePillMatch fireMatch = findFirePillMatch(player);
         FracturedMatch fracturedMatch = findFracturedMatch(player);
+
+        // VOID: offensive procs when the PLAYER hits something (e.g. Gravity Well)
+        if (VOID_ENABLED){
+            tryProcVoidOnAttack(player, target, amount);
+        }
 
         boolean hasEnergized = match.hasFlat || match.hasAnim;
         boolean hasFirePill  = fireMatch.hasFlat || fireMatch.hasAnim;
@@ -993,6 +1273,1037 @@ public final class HexOrbEffectsController {
 
         return m;
     }
+
+
+    // -------------------------------------------------------------
+    // VOID: match + type discovery (Void gem socketed on held item or armor)
+    // -------------------------------------------------------------
+
+    // -------------------------------------------------------------
+    // VOID: match + type discovery (Void gem socketed on held item or armor)
+    // -------------------------------------------------------------
+    private static final class VoidMatch {
+        boolean hasFlat;
+        boolean hasAnim;
+        ItemStack debugStack; // host item that contains the socketed void gem OR the orb item itself (direct wear/hold)
+        String voidType;      // rolled type (best effort)
+        boolean found;        // true if we found a matching void orb/gem host
+    }
+
+    /** Some servers treat orbs as wearable/held items (not only socketed). Detect that too. */
+    private static boolean isDirectVoidOrbItem(ItemStack s){
+        if (s == null) return false;
+        try {
+            NBTTagCompound t = s.getTagCompound();
+            if (t == null) return false;
+
+            String k = null;
+            if (t.hasKey("HexGemKey")) k = t.getString("HexGemKey");
+            else if (t.hasKey("HexGemIcon")) k = t.getString("HexGemIcon");
+            else if (t.hasKey("HexOrbIcon")) k = t.getString("HexOrbIcon");
+            else if (t.hasKey("GemKey")) k = t.getString("GemKey");
+
+            if (k != null && k.length() > 0){
+                String nk = normalizeGemKey(k);
+                return nk.contains("void");
+            }
+        } catch (Throwable ignored) {}
+
+        // fallback: name contains "Void"
+        try {
+            String dn = s.getDisplayName();
+            return dn != null && dn.toLowerCase().contains("void");
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static String directVoidGemKey(ItemStack s){
+        if (s == null) return "";
+        try {
+            NBTTagCompound t = s.getTagCompound();
+            if (t == null) return "";
+            String k = null;
+            if (t.hasKey("HexGemKey")) k = t.getString("HexGemKey");
+            else if (t.hasKey("HexGemIcon")) k = t.getString("HexGemIcon");
+            else if (t.hasKey("HexOrbIcon")) k = t.getString("HexOrbIcon");
+            else if (t.hasKey("GemKey")) k = t.getString("GemKey");
+            return (k != null) ? k : "";
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private static void fillVoidMatchFromDirectItem(VoidMatch m, ItemStack s){
+        if (m == null || s == null) return;
+
+        String key = directVoidGemKey(s);
+        String nk = normalizeGemKey(key);
+
+        boolean anim = false;
+        boolean flat = false;
+
+        // Prefer exact compare against known keys, otherwise fall back to substring checks.
+        if (keyMatchesWanted(key, GEM_VOID_ANIM)) anim = true;
+        else if (keyMatchesWanted(key, GEM_VOID_FLAT)) flat = true;
+        else {
+            // tolerate other naming variants
+            if (nk.contains("void") && nk.contains("anim")) anim = true;
+            else if (nk.contains("void")) flat = true;
+        }
+
+        m.hasAnim = anim;
+        m.hasFlat = (!anim) && flat; // if anim, treat as anim only
+        if (!anim && !flat){
+            // still treat it as flat if it is a direct void orb by name
+            m.hasFlat = true;
+        }
+
+        m.debugStack = s;
+
+        String vt = readVoidTypeFromHostItem(s);
+        if (vt == null || vt.trim().isEmpty()){
+            // If type was not stored (e.g. preview item), default to Gravity Well so the proc is still visible.
+            vt = "Gravity Well";
+        }
+        m.voidType = vt;
+        m.found = true;
+    }
+
+    private static boolean keyMatchesWanted(String raw, String wantedKey){
+        if (raw == null || wantedKey == null) return false;
+        String a = normalizeGemKey(raw);
+        String b = normalizeGemKey(wantedKey);
+        if (a.equals(b)) return true;
+        if (a.startsWith("gems/") && a.substring(5).equals(b)) return true;
+        if (b.startsWith("gems/") && b.substring(5).equals(a)) return true;
+        return false;
+    }
+
+    private static VoidMatch findVoidMatch(EntityPlayer p){
+        VoidMatch m = new VoidMatch();
+        if (p == null) return m;
+
+        ItemStack held = p.getHeldItem();
+
+        // Direct-void (holding / wearing the orb item itself)
+        if (isDirectVoidOrbItem(held)){
+            fillVoidMatchFromDirectItem(m, held); // sets found
+            return m;
+        }
+
+        // Socketed on held item
+        if (held != null){
+            if (hasGemSocketed(held, GEM_VOID_ANIM)){
+                m.hasAnim = true;
+                m.debugStack = held;
+                m.voidType = readVoidTypeFromHostItem(held);
+                if (m.voidType == null || m.voidType.trim().isEmpty()) m.voidType = "Gravity Well";
+                m.found = true;
+                return m;
+            }
+            if (hasGemSocketed(held, GEM_VOID_FLAT)){
+                m.hasFlat = true;
+                m.debugStack = held;
+                m.voidType = readVoidTypeFromHostItem(held);
+                if (m.voidType == null || m.voidType.trim().isEmpty()) m.voidType = "Gravity Well";
+                m.found = true;
+                return m;
+            }
+        }
+
+        // Armor: direct orb items first (wearables)
+        if (p.inventory != null && p.inventory.armorInventory != null){
+            ItemStack[] armor = p.inventory.armorInventory;
+            for (int i = 0; i < armor.length; i++){
+                ItemStack a = armor[i];
+                if (isDirectVoidOrbItem(a)){
+                    fillVoidMatchFromDirectItem(m, a); // sets found
+                    return m;
+                }
+            }
+
+            // Armor: socketed
+            for (int i = 0; i < armor.length; i++){
+                ItemStack a = armor[i];
+                if (a == null) continue;
+                if (hasGemSocketed(a, GEM_VOID_ANIM)){
+                    m.hasAnim = true;
+                    m.debugStack = a;
+                    m.voidType = readVoidTypeFromHostItem(a);
+                    if (m.voidType == null || m.voidType.trim().isEmpty()) m.voidType = "Gravity Well";
+                    m.found = true;
+                    return m;
+                }
+            }
+            for (int i = 0; i < armor.length; i++){
+                ItemStack a = armor[i];
+                if (a == null) continue;
+                if (hasGemSocketed(a, GEM_VOID_FLAT)){
+                    m.hasFlat = true;
+                    m.debugStack = a;
+                    m.voidType = readVoidTypeFromHostItem(a);
+                    if (m.voidType == null || m.voidType.trim().isEmpty()) m.voidType = "Gravity Well";
+                    m.found = true;
+                    return m;
+                }
+            }
+        }
+
+        return m;
+    }
+
+    // -------------------------------------------------------------
+    // Void: Null Shell - Dash/Trail (Step 1)
+    // -------------------------------------------------------------
+
+    /**
+     * A short-lived damaging segment between two points.
+     * Each entity takes a "big" hit the first time it touches the trail,
+     * then periodic DoT pulses while it remains inside.
+     */
+    private static final class VoidTrail {
+        final int dim;
+        final int ownerId;
+        final double x0, y0, z0;
+        final double x1, y1, z1;
+
+        int ticksLeft;
+        long nextDotAt;
+
+        final java.util.HashSet<Integer> hitOnce = new java.util.HashSet<Integer>();
+
+        VoidTrail(EntityPlayer owner, double sx, double sy, double sz, double ex, double ey, double ez, long nowWorld){
+            dim = owner.worldObj.provider.dimensionId;
+            ownerId = owner.getEntityId();
+            x0 = sx; y0 = sy; z0 = sz;
+            x1 = ex; y1 = ey; z1 = ez;
+
+            ticksLeft = NS_TRAIL_LIFE;
+            nextDotAt = nowWorld + (long)Math.max(1, NS_TRAIL_DOT_INTERVAL);
+        }
+    }
+
+    private static final java.util.ArrayList<VoidTrail> VOID_TRAILS = new java.util.ArrayList<VoidTrail>();
+    private static final java.util.HashMap<Integer, Long> NS_TRAIL_LAST_TICK_BY_DIM = new java.util.HashMap<Integer, Long>();
+
+    /** Ensure we tick trails once per world-tick (this class only listens on MinecraftForge.EVENT_BUS). */
+    private static void maybeTickNullShellTrailsOncePerWorld(World w){
+        if (w == null || w.isRemote) return;
+        int dim = w.provider.dimensionId;
+        long now = w.getTotalWorldTime();
+
+        Integer k = Integer.valueOf(dim);
+        Long last = NS_TRAIL_LAST_TICK_BY_DIM.get(k);
+        if (last != null && last.longValue() == now) return;
+
+        NS_TRAIL_LAST_TICK_BY_DIM.put(k, Long.valueOf(now));
+        tickNullShellTrails(w, now);
+    }
+
+    private static void tickNullShellTrails(World w, long nowWorld){
+        if (VOID_TRAILS.isEmpty()) return;
+
+        java.util.Iterator<VoidTrail> it = VOID_TRAILS.iterator();
+        while (it.hasNext()){
+            VoidTrail t = it.next();
+            if (t == null){
+                it.remove();
+                continue;
+            }
+
+            if (t.dim != w.provider.dimensionId) continue;
+
+            t.ticksLeft--;
+            if (t.ticksLeft <= 0){
+                it.remove();
+                continue;
+            }
+
+            // Particles so the trail is visible
+            spawnNullShellTrailParticles(w, t, nowWorld);
+
+            // Periodic DoT pulse
+            if (nowWorld >= t.nextDotAt){
+                applyNullShellTrailDamagePulse(w, t, false);
+                t.nextDotAt = nowWorld + (long)Math.max(1, NS_TRAIL_DOT_INTERVAL);
+            }
+        }
+    }
+
+    private static void spawnNullShellTrail(EntityPlayer owner, double sx, double sy, double sz, double ex, double ey, double ez){
+        if (owner == null) return;
+        World w = owner.worldObj;
+        if (w == null || w.isRemote) return;
+
+        long nowWorld = w.getTotalWorldTime();
+        VoidTrail t = new VoidTrail(owner, sx, sy, sz, ex, ey, ez, nowWorld);
+        VOID_TRAILS.add(t);
+
+        // Big first-contact hit on creation
+        applyNullShellTrailDamagePulse(w, t, true);
+
+        // Initial particles
+        spawnNullShellTrailParticles(w, t, nowWorld);
+    }
+
+    private static void spawnNullShellTrailParticles(World w, VoidTrail t, long nowWorld){
+        if (!(w instanceof WorldServer) || t == null) return;
+        WorldServer ws = (WorldServer) w;
+
+        double dx = t.x1 - t.x0;
+        double dy = t.y1 - t.y0;
+        double dz = t.z1 - t.z0;
+
+        int steps = 6;
+        for (int i = 0; i <= steps; i++){
+            double a = (double)i / (double)steps;
+            double px = t.x0 + dx * a;
+            double py = t.y0 + dy * a;
+            double pz = t.z0 + dz * a;
+
+            ws.func_147487_a("portal", px, py, pz, 2, 0.12, 0.08, 0.12, 0.01);
+            if (((nowWorld + (long)i) & 1L) == 0L){
+                ws.func_147487_a("witchMagic", px, py, pz, 1, 0.10, 0.06, 0.10, 0.01);
+            }
+        }
+    }
+
+    /**
+     * Apply either:
+     *  - bigHit=true  => only BIG hits for entities touching the trail for the first time
+     *  - bigHit=false => DoT pulse for entities already "primed" by a first contact
+     *
+     * (If an entity enters the trail later, it will still get its big first-hit, then DoT.)
+     */
+    private static void applyNullShellTrailDamagePulse(World w, VoidTrail t, boolean bigHit){
+        if (w == null || t == null) return;
+
+        net.minecraft.entity.Entity entOwner = w.getEntityByID(t.ownerId);
+        if (!(entOwner instanceof EntityPlayer)) return;
+        EntityPlayer owner = (EntityPlayer) entOwner;
+        if (owner.isDead) return;
+
+        double minX = Math.min(t.x0, t.x1) - NS_TRAIL_RADIUS;
+        double minY = Math.min(t.y0, t.y1) - 1.0;
+        double minZ = Math.min(t.z0, t.z1) - NS_TRAIL_RADIUS;
+        double maxX = Math.max(t.x0, t.x1) + NS_TRAIL_RADIUS;
+        double maxY = Math.max(t.y0, t.y1) + 2.0;
+        double maxZ = Math.max(t.z0, t.z1) + NS_TRAIL_RADIUS;
+
+        AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(minX, minY, minZ, maxX, maxY, maxZ);
+        java.util.List list = w.getEntitiesWithinAABB(EntityLivingBase.class, bb);
+        if (list == null || list.isEmpty()) return;
+
+        for (int i = 0; i < list.size(); i++){
+            Object o = list.get(i);
+            if (!(o instanceof EntityLivingBase)) continue;
+            EntityLivingBase e = (EntityLivingBase) o;
+            if (e == null || e.isDead) continue;
+            if (e == owner) continue;
+            if (!isDamageable(e)) continue;
+
+            if (!isPointNearSegment2D(e.posX, e.posZ, t.x0, t.z0, t.x1, t.z1, NS_TRAIL_RADIUS)) continue;
+
+            Integer id = Integer.valueOf(e.getEntityId());
+            boolean first = !t.hitOnce.contains(id);
+
+            if (first){
+                t.hitOnce.add(id);
+                dealNullShellTrailDamage(owner, e, NS_TRAIL_BIG_MULT);
+            } else if (!bigHit){
+                dealNullShellTrailDamage(owner, e, NS_TRAIL_DOT_MULT);
+            }
+        }
+    }
+
+    /** 2D distance check (horizontal) between point and segment. */
+    /** Basic sanity filter for proc/trail damage (avoid dead entities & creative players). */
+    private static boolean isDamageable(EntityLivingBase e){
+        if (e == null || e.isDead) return false;
+        try { if (!e.isEntityAlive()) return false; } catch (Throwable ignored) {}
+        try { if (e.getHealth() <= 0.0f) return false; } catch (Throwable ignored) {}
+        if (e instanceof EntityPlayer){
+            EntityPlayer ep = (EntityPlayer) e;
+            try { if (ep.capabilities != null && ep.capabilities.isCreativeMode) return false; } catch (Throwable ignored) {}
+        }
+        return true;
+    }
+
+    private static boolean isPointNearSegment2D(double px, double pz, double ax, double az, double bx, double bz, double radius){
+        double abx = bx - ax;
+        double abz = bz - az;
+        double apx = px - ax;
+        double apz = pz - az;
+
+        double abLenSq = abx*abx + abz*abz;
+        double t = 0.0;
+
+        if (abLenSq > 1.0e-6){
+            t = (apx*abx + apz*abz) / abLenSq;
+            if (t < 0.0) t = 0.0;
+            else if (t > 1.0) t = 1.0;
+        }
+
+        double cx = ax + abx * t;
+        double cz = az + abz * t;
+
+        double dx = px - cx;
+        double dz = pz - cz;
+        return (dx*dx + dz*dz) <= (radius*radius);
+    }
+
+
+    private static void dealNullShellProcDamage(EntityPlayer attacker, EntityLivingBase target, float amount, String reason){
+        if (attacker == null || target == null) return;
+        if (amount <= 0f) return;
+
+        float dmg = amount;
+
+        // Dev-only proc boost (keeps behavior consistent with other procs)
+        if (DEV_ENV && DEV_PROC_DAMAGE_BOOST){
+            dmg = dmg * DEV_PROC_DAMAGE_MULT + DEV_PROC_DAMAGE_ADD;
+        }
+
+        if (Float.isNaN(dmg) || Float.isInfinite(dmg)) dmg = 1.0f;
+        if (dmg <= 0f) return;
+
+        // i-frame bypass follows the same knobs as the generic proc path
+        boolean isPlayer = (target instanceof EntityPlayer);
+        if ((isPlayer && PROC_RESET_IFRAMES_PLAYERS) || (!isPlayer && PROC_RESET_IFRAMES_NONPLAYERS)){
+            tryResetIFrames(target);
+        }
+
+        // If the mod configured a global applier, use the normal route
+        if (DAMAGE_APPLIER != null){
+            dealProcDamage(attacker, target, dmg, reason);
+            return;
+        }
+
+        // Otherwise: apply DBC Body damage directly (players + many DBC/NPCDBC mobs), vanilla fallback for others
+        try {
+            NS_LOCAL_DBC_APPLIER.deal(attacker, target, dmg);
+        } catch (Throwable t){
+            try {
+                target.attackEntityFrom(hexOrbDamageSource(attacker), dmg);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void dealNullShellTrailDamage(EntityPlayer owner, EntityLivingBase target, float mult){
+        if (owner == null || target == null) return;
+
+        HexPlayerStats.Snapshot s = HexPlayerStats.snapshot(owner);
+        double strEff = (s != null) ? ((double)s.str * (double)s.currentMulti) : getStrengthEffective(owner);
+        double stat = strEff;
+
+        float dmg = (float)(stat * (double)NS_TRAIL_STAT_SCALE) + NS_TRAIL_BASE_DAMAGE;
+        dmg = dmg * mult;
+
+        if (dmg < 0f) dmg = 0f;
+        dealNullShellProcDamage(owner, target, dmg, "NullShellTrail");
+    }
+
+
+    // -------------------------------------------------------------------------
+    // Null Shell: DBC stat reflection (DEX/CON with form multipliers)
+    // -------------------------------------------------------------------------
+    private static boolean NS_STATS_LOOKED_UP = false;
+    private static java.lang.reflect.Method NS_M_GET_DBCDATA = null;     // DBCDataUniversal.get(player) / getData(player)
+    private static java.lang.reflect.Field  NS_F_DEX = null;
+    private static java.lang.reflect.Field  NS_F_CON = null;
+    private static java.lang.reflect.Field  NS_F_STATS = null;          // dbcData.stats
+    private static java.lang.reflect.Method NS_M_GET_CURRENT_MULTI = null; // stats.getCurrentMulti()
+
+    private static void ensureNullShellStatReflection(){
+        if (NS_STATS_LOOKED_UP) return;
+        NS_STATS_LOOKED_UP = true;
+
+        try {
+            Class<?> cUniversal = Class.forName("kamkeel.npcdbc.data.dbcdata.DBCDataUniversal");
+            try {
+                NS_M_GET_DBCDATA = cUniversal.getMethod("get", net.minecraft.entity.player.EntityPlayer.class);
+            } catch (Throwable ignored) {
+                NS_M_GET_DBCDATA = cUniversal.getMethod("getData", net.minecraft.entity.player.EntityPlayer.class);
+            }
+
+            Class<?> cDBCData = Class.forName("kamkeel.npcdbc.data.dbcdata.DBCData");
+            NS_F_DEX   = cDBCData.getField("DEX");
+            try { NS_F_CON = cDBCData.getField("CON"); } catch (Throwable ignored) { NS_F_CON = null; }
+            NS_F_STATS = cDBCData.getField("stats");
+
+            Class<?> cStats = Class.forName("kamkeel.npcdbc.data.dbcdata.DBCDataStats");
+            NS_M_GET_CURRENT_MULTI = cStats.getMethod("getCurrentMulti");
+        } catch (Throwable t){
+            NS_M_GET_DBCDATA = null; // disables reflection path
+        }
+    }
+
+    private static double getNullShellDbcStatEffective(EntityPlayer p, java.lang.reflect.Field f){
+        if (p == null || f == null) return 0.0;
+        ensureNullShellStatReflection();
+        if (NS_M_GET_DBCDATA == null || NS_F_STATS == null || NS_M_GET_CURRENT_MULTI == null) return 0.0;
+
+        try {
+            Object dbc = NS_M_GET_DBCDATA.invoke(null, p);
+            if (dbc == null) return 0.0;
+
+            Object baseObj = f.get(dbc);
+            if (!(baseObj instanceof Number)) return 0.0;
+            double base = ((Number) baseObj).doubleValue();
+
+            double multi = 1.0;
+            try {
+                Object stats = NS_F_STATS.get(dbc);
+                if (stats != null){
+                    Object m = NS_M_GET_CURRENT_MULTI.invoke(stats);
+                    if (m instanceof Number){
+                        multi = ((Number) m).doubleValue();
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            if (Double.isNaN(multi) || Double.isInfinite(multi) || multi <= 0.0) multi = 1.0;
+            if (base < 0.0) base = 0.0;
+
+            return base * multi;
+        } catch (Throwable ignored) {
+            return 0.0;
+        }
+    }
+
+    private static double getDexterityEffective(EntityPlayer p){
+        if (p == null) return 0.0;
+
+        // 1) Try attribute-map path (works when DBC/NPCDBC registers attributes)
+        double v = 0.0;
+        try {
+            net.minecraft.entity.ai.attributes.IAttributeInstance inst = p.getAttributeMap().getAttributeInstanceByName("dbc.Dexterity");
+            if (inst != null) v = inst.getAttributeValue();
+        } catch (Throwable ignored) {}
+
+        if (v <= 0.0){
+            try {
+                net.minecraft.entity.ai.attributes.IAttributeInstance inst2 = p.getAttributeMap().getAttributeInstanceByName("Dexterity");
+                if (inst2 != null) v = inst2.getAttributeValue();
+            } catch (Throwable ignored) {}
+        }
+
+        // 2) Reflection fallback (NPCDBC / DBCDataUniversal) with form multipliers
+        if (v <= 0.0){
+            double r = getNullShellDbcStatEffective(p, NS_F_DEX);
+            if (r > 0.0) v = r;
+        }
+
+        return v;
+    }
+
+
+
+    private static double getConstitutionEffective(EntityPlayer p){
+        if (p == null) return 0.0;
+
+        // 1) Try attribute-map path (works when DBC/NPCDBC registers attributes)
+        double v = 0.0;
+        try {
+            net.minecraft.entity.ai.attributes.IAttributeInstance inst = p.getAttributeMap().getAttributeInstanceByName("dbc.Constitution");
+            if (inst != null) v = inst.getAttributeValue();
+        } catch (Throwable ignored) {}
+
+        if (v <= 0.0){
+            try {
+                net.minecraft.entity.ai.attributes.IAttributeInstance inst2 = p.getAttributeMap().getAttributeInstanceByName("Constitution");
+                if (inst2 != null) v = inst2.getAttributeValue();
+            } catch (Throwable ignored) {}
+        }
+
+        // 2) Reflection fallback (NPCDBC / DBCDataUniversal) with form multipliers
+        if (v <= 0.0){
+            double r = getNullShellDbcStatEffective(p, NS_F_CON);
+            if (r > 0.0) v = r;
+        }
+
+        return v;
+    }
+
+
+
+
+    private static int getNullShellMaxCharge(){
+        int base = VOID_NULL_SHELL_CHARGE_MAX;
+        if (base <= 0) base = 1000;
+        int stages = VOID_NULL_SHELL_CHARGE_STAGES;
+        if (stages <= 0) stages = 1;
+        long v = (long)base * (long)stages;
+        if (v > (long)Integer.MAX_VALUE) v = (long)Integer.MAX_VALUE;
+        return (int) v;
+    }
+
+    private static float getNullShellChargeFrac(EntityPlayer p){
+        if (p == null) return 0f;
+        NBTTagCompound d = p.getEntityData();
+        if (d == null) return 0f;
+
+        int max = getNullShellMaxCharge();
+        if (max <= 0) return 0f;
+
+        int c = d.getInteger(VNS_KEY_CHARGE);
+        if (c <= 0) return 0f;
+        if (c >= max) return 1f;
+        return (float)c / (float)max;
+    }
+
+    private static boolean isNullShellDefenseActive(EntityPlayer p, long now){
+        if (p == null) return false;
+        NBTTagCompound d = p.getEntityData();
+        if (d == null) return false;
+        long end = d.getLong(VNS_KEY_DEF_END);
+        return end > now;
+    }
+
+
+
+    private static void consumeNullShellCharge(EntityPlayer p, float frac){
+        if (p == null) return;
+        NBTTagCompound d = p.getEntityData();
+        if (d == null) return;
+
+        int max = getNullShellMaxCharge();
+        if (max <= 0) return;
+
+        int cost = (int)Math.ceil((double)max * (double)frac);
+        if (cost < 1) cost = 1;
+
+        int c = d.getInteger(VNS_KEY_CHARGE);
+        c -= cost;
+        if (c < 0) c = 0;
+        d.setInteger(VNS_KEY_CHARGE, c);
+
+        // Mirror to host item for HUD if we can
+        VoidMatch m = findVoidMatch(p);
+        if (m != null && m.found && isVoidTypeNullShell(m.voidType)){
+            stampNullShellChargeOntoHostStack(p, m.voidType, serverNow(p.worldObj));
+        }
+    }
+    /** Alias for older call sites: mirror Null Shell charge onto the host stack for HUD. */
+    private static void stampNullShellChargeOntoHostStack(EntityPlayer owner, String voidType, long now){
+        if (owner == null) return;
+        NBTTagCompound data = owner.getEntityData();
+        if (data == null) return;
+        int max = getNullShellMaxCharge();
+        if (max <= 0) max = 1000;
+        int charge = data.getInteger(VNS_KEY_CHARGE);
+        if (charge < 0) charge = 0;
+        if (charge > max) charge = max;
+        VoidMatch m = findVoidMatch(owner);
+        if (m == null || m.debugStack == null) return;
+        stampNullShellChargeHud(owner, m.debugStack, voidType, charge, max, now, data);
+    }
+
+
+    private static boolean isTeleportSpotFreeGeneric(EntityPlayer p, World w, double x, double y, double z){
+        if (p == null || w == null) return false;
+
+        float hw = p.width * 0.5f;
+        AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(
+                x - (double)hw, y, z - (double)hw,
+                x + (double)hw, y + (double)p.height, z + (double)hw
+        );
+
+        try {
+            java.util.List coll = w.getCollidingBoundingBoxes(p, bb);
+            return (coll == null || coll.isEmpty());
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    private static boolean doNullShellDash(EntityPlayer p, double dirX, double dirZ, double dist){
+        if (p == null || p.worldObj == null) return false;
+        World w = p.worldObj;
+
+        double len = Math.sqrt(dirX*dirX + dirZ*dirZ);
+        if (len < 1.0e-6) return false;
+        dirX /= len;
+        dirZ /= len;
+
+        double sx = p.posX;
+        double sy = p.posY;
+        double sz = p.posZ;
+
+        double tx = sx + dirX * dist;
+        double tz = sz + dirZ * dist;
+        double ty = sy;
+
+        double[] yTry = new double[]{ty, ty + 0.5, ty + 1.0, ty - 0.5, ty - 1.0};
+        boolean placed = false;
+
+        for (int i = 0; i < yTry.length; i++){
+            double yy = yTry[i];
+            if (isTeleportSpotFreeGeneric(p, w, tx, yy, tz)){
+                if (p instanceof EntityPlayerMP){
+                    ((EntityPlayerMP)p).setPositionAndUpdate(tx, yy, tz);
+                } else {
+                    p.setPosition(tx, yy, tz);
+                }
+                placed = true;
+                break;
+            }
+        }
+
+        if (!placed) return false;
+
+        p.fallDistance = 0f;
+
+        // Trail from start -> end (slightly above ground so it "reads" visually)
+        spawnNullShellTrail(p, sx, sy + 0.15, sz, p.posX, p.posY + 0.15, p.posZ);
+        return true;
+    }
+
+    /**
+     * 3D dash in the direction the player is looking.
+     * Vertical component is clamped to prevent extreme up/down teleports.
+     */
+    private static boolean doNullShellDash3D(EntityPlayer p, double dirX, double dirY, double dirZ, double dist){
+        if (p == null || p.worldObj == null) return false;
+        World w = p.worldObj;
+
+        double len = Math.sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ);
+        if (len < 1.0e-6) return false;
+        dirX /= len;
+        dirY /= len;
+        dirZ /= len;
+
+        double sx = p.posX;
+        double sy = p.posY;
+        double sz = p.posZ;
+
+        // Clamp vertical movement so "looking straight up/down" doesn't fling the player.
+        double yDelta = dirY * dist;
+        if (yDelta > 2.0) yDelta = 2.0;
+        if (yDelta < -2.0) yDelta = -2.0;
+
+        double tx = sx + dirX * dist;
+        double tz = sz + dirZ * dist;
+        double tyBase = sy + yDelta;
+
+        // A few attempts around the intended Y.
+        double[] yTry = new double[]{tyBase, tyBase + 0.5, tyBase + 1.0, tyBase - 0.5, tyBase - 1.0,
+                sy, sy + 0.5, sy - 0.5};
+
+        boolean placed = false;
+
+        for (int i = 0; i < yTry.length; i++){
+            double yy = yTry[i];
+            if (yy < 1.0) yy = 1.0;
+            if (yy > 255.0) yy = 255.0;
+
+            if (isTeleportSpotFreeGeneric(p, w, tx, yy, tz)){
+                if (p instanceof EntityPlayerMP){
+                    ((EntityPlayerMP)p).setPositionAndUpdate(tx, yy, tz);
+                } else {
+                    p.setPosition(tx, yy, tz);
+                }
+                placed = true;
+                break;
+            }
+        }
+
+        if (!placed) return false;
+
+        p.fallDistance = 0f;
+
+        // Trail from start -> end (slightly above ground so it "reads" visually)
+        spawnNullShellTrail(p, sx, sy + 0.15, sz, p.posX, p.posY + 0.15, p.posZ);
+        return true;
+    }
+
+
+    /** Passive auto-dodge: returns true if we performed the dodge and the incoming hit should be negated. */
+    private static boolean tryNullShellPassiveDash(EntityPlayer victim, DamageSource src, VoidMatch match, long now){
+        if (victim == null || victim.worldObj == null || victim.worldObj.isRemote) return false;
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return false;
+
+        if (match == null || !match.found || !isVoidTypeNullShell(match.voidType)) return false;
+
+        // De-dupe Attack+Hurt in the same server tick so we only roll once per hit.
+        if (!markNullShellDodgeOncePerTick(victim, now)) return false;
+
+        if (victim.worldObj.rand.nextFloat() > NS_PASSIVE_PROC_CHANCE) return false;
+
+        if (!cooldownReady(victim, "HexOrbCD_VoidNullDash", NS_DASH_COOLDOWN_TICKS, now)) return false;
+        if (getNullShellChargeFrac(victim) < NS_PASSIVE_COST) return false;
+
+        Entity srcEnt = (src != null) ? src.getEntity() : null;
+
+        double dirX, dirZ;
+        if (srcEnt != null){
+            // Blend "away" + perpendicular for a sidestep feel.
+            double ax = victim.posX - srcEnt.posX;
+            double az = victim.posZ - srcEnt.posZ;
+
+            double alen = Math.sqrt(ax*ax + az*az);
+            if (alen > 1.0e-6){
+                ax /= alen;
+                az /= alen;
+            } else {
+                ax = 1.0; az = 0.0;
+            }
+
+            double px = -az;
+            double pz = ax;
+
+            int side = (victim.worldObj.rand.nextBoolean() ? 1 : -1);
+            dirX = ax * 0.85 + px * 0.35 * (double)side;
+            dirZ = az * 0.85 + pz * 0.35 * (double)side;
+        } else {
+            double ang = victim.worldObj.rand.nextDouble() * Math.PI * 2.0;
+            dirX = Math.cos(ang);
+            dirZ = Math.sin(ang);
+        }
+
+        boolean dashed = doNullShellDash(victim, dirX, dirZ, NS_PASSIVE_DISTANCE);
+        if (!dashed) return false;
+
+        consumeNullShellCharge(victim, NS_PASSIVE_COST);
+
+        if (match.debugStack != null){
+            stampVoidHud(victim, match.debugStack, "Null Shell", "Void Dash",
+                    now + (long)NS_DASH_COOLDOWN_TICKS,
+                    0L,
+                    NS_DASH_COOLDOWN_TICKS
+            );
+        }
+
+        return true;
+    }
+
+    /** Active dash (Left CTRL) - Step 2 will wire packet -> this method. */
+    public static boolean tryNullShellActiveDash(EntityPlayer p){
+        if (p == null || p.worldObj == null || p.worldObj.isRemote) return false;
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return false;
+
+        VoidMatch match = findVoidMatch(p);
+        if (match == null || !match.found){
+            nsDbg(p, "Dash: no void orb host found (held/armor).");
+            return false;
+        }
+        if (!isVoidTypeNullShell(match.voidType)){
+            nsDbg(p, "Dash: void type is '" + String.valueOf(match.voidType) + "' (not Null Shell).");
+            return false;
+        }
+
+        long now = serverNow(p.worldObj);
+        NBTTagCompound d = p.getEntityData();
+
+        // Cooldown check (NO stamp until we actually dash)
+        long next = (d != null) ? d.getLong("HexOrbCD_VoidNullDash") : 0L;
+        if (next != 0L && now < next){
+            int secs = (int) Math.ceil((next - now) / 20.0);
+            nsDbg(p, "Dash: on cooldown (" + secs + "s).");
+            return false;
+        }
+
+        float frac = getNullShellChargeFrac(p);
+        if (frac + 1.0e-4f < NS_ACTIVE_COST){
+            int pct = (int) Math.floor(frac * 100.0f);
+            nsDbg(p, "Dash: not enough charge (" + pct + "%, need " + (int)(NS_ACTIVE_COST * 100.0f) + "%).");
+            return false;
+        }
+
+        // Dash in the direction you're LOOKING (uses look vector; vertical movement is clamped for safety)
+        net.minecraft.util.Vec3 look = p.getLookVec();
+        double lx = (look != null) ? look.xCoord : 0.0;
+        double ly = (look != null) ? look.yCoord : 0.0;
+        double lz = (look != null) ? look.zCoord : 0.0;
+
+        boolean dashed = doNullShellDash3D(p, lx, ly, lz, NS_ACTIVE_DISTANCE);
+        if (!dashed){
+            nsDbg(p, "Dash: blocked (no safe spot).");
+            return false;
+        }
+
+        consumeNullShellCharge(p, NS_ACTIVE_COST);
+        cooldownStamp(d, "HexOrbCD_VoidNullDash", NS_DASH_COOLDOWN_TICKS, now);
+
+        if (match.debugStack != null){
+            stampVoidHud(p, match.debugStack, "Null Shell", "Void Dash",
+                    now + (long)NS_DASH_COOLDOWN_TICKS,
+                    0L,
+                    NS_DASH_COOLDOWN_TICKS
+            );
+        }
+
+        return true;
+    }
+    /** Defense buff (Void Protection) - triple CTRL (action 6). Consumes 50% charge and reduces incoming damage for a short duration. */
+    public static boolean tryNullShellDefenseBuff(EntityPlayer p){
+        if (p == null || p.worldObj == null || p.worldObj.isRemote) return false;
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return false;
+
+        VoidMatch match = findVoidMatch(p);
+        if (match == null || !match.found){
+            nsDbg(p, "Defense: no void orb host found (held/armor).");
+            return false;
+        }
+        if (!isVoidTypeNullShell(match.voidType)){
+            nsDbg(p, "Defense: void type is '" + String.valueOf(match.voidType) + "' (not Null Shell).");
+            return false;
+        }
+
+        long now = serverNow(p.worldObj);
+        NBTTagCompound data = p.getEntityData();
+        if (data == null) return false;
+
+        // Cooldown check (NO stamp until we actually activate)
+        long next = data.getLong("HexOrbCD_VoidNullDef");
+        if (next != 0L && now < next){
+            int secs = (int) Math.ceil((next - now) / 20.0);
+            nsDbg(p, "Defense: on cooldown (" + secs + "s).");
+            return false;
+        }
+
+        float frac = getNullShellChargeFrac(p);
+        if (frac + 1.0e-4f < NS_DEFENSE_COST){
+            int pct = (int) Math.floor(frac * 100.0f);
+            nsDbg(p, "Defense: not enough charge (" + pct + "%, need " + (int)(NS_DEFENSE_COST * 100.0f) + "%).");
+            return false;
+        }
+
+        // Activate protection
+        long end = now + (long)NS_DEFENSE_DURATION_TICKS;
+        data.setLong(VNS_KEY_DEF_END, end);
+        data.setLong(VNS_KEY_DEF_NEXT_FX, now); // start FX immediately
+
+        consumeNullShellCharge(p, NS_DEFENSE_COST);
+        cooldownStamp(data, "HexOrbCD_VoidNullDef", NS_DEFENSE_COOLDOWN_TICKS, now);
+
+        if (match.debugStack != null){
+            stampVoidHud(p, match.debugStack, "Null Shell", "Void Protection",
+                    now + (long)NS_DEFENSE_COOLDOWN_TICKS,
+                    end,
+                    NS_DEFENSE_COOLDOWN_TICKS
+            );
+        }
+
+        return true;
+    }
+
+// -------------------------------------------------------------------------
+// Null Shell: 100% "Void Push" (double-press then hold, server-side charge)
+// -------------------------------------------------------------------------
+
+    /** Start charging Void Push (sent by client once the user is holding after a double-press). */
+    public static boolean tryNullShellPushStart(EntityPlayer p){
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED || p == null) return false;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return false;
+
+        long now = serverNow(w);
+        NBTTagCompound d = p.getEntityData();
+        if (d == null) return false;
+
+        // already charging?
+        if (d.getByte(VNS_KEY_PUSH_CHARGING) != 0) { nsDbg(p, "Push: already charging."); return false; }
+
+        // cooldown gate (but don't stamp until we actually fire)
+        if (!cooldownReadyNoStamp(d, "HexOrbCD_VoidNullPush", now)) {
+            long nx = d.getLong("HexOrbCD_VoidNullPush");
+            int secs = (nx != 0L && now < nx) ? (int)Math.ceil((nx - now)/20.0) : 0;
+            nsDbg(p, "Push: on cooldown (" + secs + "s)." );
+            return false;
+        }
+
+        // must have full charge
+        if (getNullShellChargeFrac(p) + 1.0e-4f < NS_PUSH_COST) {
+            float f = getNullShellChargeFrac(p);
+            nsDbg(p, "Push: need 100% charge (have " + (int)Math.floor(f*100.0f) + "%).");
+            return false;
+        }
+
+        d.setLong(VNS_KEY_PUSH_START, now);
+        d.setByte(VNS_KEY_PUSH_CHARGING, (byte) 1);
+
+        // small tell + early particles so the user knows it's charging
+        if (w instanceof WorldServer){
+            WorldServer ws = (WorldServer) w;
+            ws.func_147487_a("portal", p.posX, p.posY + 0.9, p.posZ, 12, 0.35, 0.55, 0.35, 0.01);
+            ws.func_147487_a("mobSpell", p.posX, p.posY + 1.0, p.posZ, 10, 0.35, 0.55, 0.35, 0.01);
+        }
+        w.playSoundAtEntity(p, "random.fizz", 0.6f, 0.85f);
+
+        return true;
+    }
+
+    /** Release Void Push (sent by client on key-up after charging). */
+    public static boolean tryNullShellPushRelease(EntityPlayer p){
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED || p == null) return false;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return false;
+
+        long now = serverNow(w);
+        NBTTagCompound d = p.getEntityData();
+        if (d == null) return false;
+
+        if (d.getByte(VNS_KEY_PUSH_CHARGING) == 0) { nsDbg(p, "Push: not charging (release ignored)."); return false; }
+
+        long start = d.getLong(VNS_KEY_PUSH_START);
+        d.removeTag(VNS_KEY_PUSH_CHARGING);
+        d.removeTag(VNS_KEY_PUSH_START);
+
+        if (start <= 0L) return false;
+
+        long held = now - start;
+        if (held < (long) NS_PUSH_CHARGE_TICKS){
+            nsDbg(p, "Push: released too early (" + held + "t / " + NS_PUSH_CHARGE_TICKS + "t)." );
+            // not charged long enough: no cost, no cooldown
+            w.playSoundAtEntity(p, "random.click", 0.4f, 1.25f);
+            return false;
+        }
+
+        // Double-check resources + cooldown right at fire time (prevents dupes/exploits).
+        if (!cooldownReadyNoStamp(d, "HexOrbCD_VoidNullPush", now)) {
+            long nx = d.getLong("HexOrbCD_VoidNullPush");
+            int secs = (nx != 0L && now < nx) ? (int)Math.ceil((nx - now)/20.0) : 0;
+            nsDbg(p, "Push: on cooldown (" + secs + "s).");
+            return false;
+        }
+        if (getNullShellChargeFrac(p) + 1.0e-4f < NS_PUSH_COST) {
+            float f = getNullShellChargeFrac(p);
+            nsDbg(p, "Push: need 100% charge (have " + (int)Math.floor(f*100.0f) + "%).");
+            return false;
+        }
+
+        boolean over = held >= (long) (NS_PUSH_CHARGE_TICKS + NS_PUSH_OVERCHARGE_TICKS);
+        float mult = over ? NS_PUSH_OVERCHARGE_MULT : 1.0f;
+
+        consumeNullShellCharge(p, NS_PUSH_COST);
+        cooldownStamp(d, "HexOrbCD_VoidNullPush", NS_PUSH_COOLDOWN_TICKS, now);
+
+        doNullShellVoidPush(p, mult);
+
+        // HUD stamp for cooldown bar
+        VoidMatch m = findVoidMatch(p);
+        if (m != null && m.found && m.debugStack != null){
+            stampVoidHud(p, m.debugStack, m.voidType, "Void Push", d.getLong("HexOrbCD_VoidNullPush"), 0L, NS_PUSH_COOLDOWN_TICKS);
+        }
+
+        return true;
+    }
+
+    private static boolean cooldownReadyNoStamp(NBTTagCompound d, String key, long now){
+        if (d == null) return false;
+        long next = d.getLong(key);
+        return next == 0L || now >= next;
+    }
+
+    private static void cooldownStamp(NBTTagCompound d, String key, int cdTicks, long now){
+        if (d == null) return;
+        if (cdTicks <= 0) { d.removeTag(key); return; }
+        d.setLong(key, now + (long) cdTicks);
+    }
+
+
+
 
     private static final class EnergizedMatch {
         boolean hasFlat;
@@ -1118,9 +2429,9 @@ public final class HexOrbEffectsController {
         return true;
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // FLAT PROC: Rainbow Shockwave (AoE)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static void tryProcEnergizedFlat(EntityPlayer p, EntityLivingBase primary, float baseDamage){
         if (p == null || primary == null) return;
 
@@ -1169,9 +2480,9 @@ public final class HexOrbEffectsController {
         if (DEBUG_PROC) debugOncePerSecond(p, "[HexOrb] FLAT PROC!");
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // ANIM PROC: Rainbow Chain Arc
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static void tryProcEnergizedAnim(EntityPlayer p, EntityLivingBase primary, float baseDamage){
         if (p == null || primary == null) return;
 
@@ -1233,9 +2544,9 @@ public final class HexOrbEffectsController {
         if (DEBUG_PROC) debugOncePerSecond(p, "[HexOrb] ANIM PROC!");
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Heal proc: short regen on attacker (no script needed)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static void tryProcEnergizedHeal(EntityPlayer p, boolean isAnim){
         if (p == null) return;
         if (!ENERGIZED_HEAL_ENABLED) return;
@@ -1251,9 +2562,9 @@ public final class HexOrbEffectsController {
         startHealBuff(p, isAnim);
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Fractured: Low-Body Chaos Surge
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static void tryProcFracturedLowBody(EntityPlayer p, EntityLivingBase primary, float baseDamage, boolean isAnim){
         if (p == null || primary == null) return;
         if (!FRACTURED_ENABLED) return;
@@ -1483,9 +2794,9 @@ public final class HexOrbEffectsController {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // DBC heal bridge (reflection): DBCDataUniversal.get(player).stats.restoreHealthPercent(pct)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static boolean DBC_HEAL_LOOKED_UP = false;
     private static Method  DBC_GET_DATA = null;
     private static Field   DBC_STATS_FIELD = null;
@@ -1538,9 +2849,9 @@ public final class HexOrbEffectsController {
 
 
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Fire Pill: Fire Punch
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
 
     private static boolean isFirePunchActive(EntityPlayer p){
         if (p == null) return false;
@@ -1855,6 +3166,1556 @@ public final class HexOrbEffectsController {
             data.setLong(FD_KEY_NEXT, now + interval);
         }
     }
+
+
+    // -------------------------------------------------------------
+    // VOID: Gravity Well (defensive proc) + tick
+    // -------------------------------------------------------------
+
+    private static void tryProcVoidOnAttack(EntityPlayer attacker, EntityLivingBase target, float dealtDamage){
+        if (attacker == null || target == null) return;
+        World w = attacker.worldObj;
+        if (w == null || w.isRemote) return;
+
+        // must have a void gem equipped (held item or armor)
+        VoidMatch match = findVoidMatch(attacker);
+        if (!match.hasFlat && !match.hasAnim) return;
+
+        String type = match.voidType;
+
+        // Gravity Well: offensive version centers on the hit target
+        if (isVoidTypeGravityWell(type)){
+            if (!roll(attacker, VOID_GW_PROC_CHANCE_ON_HIT)) return;
+            if (!cooldownReady(attacker, "HexOrbCD_VoidGW", VOID_GW_COOLDOWN_TICKS)) return;
+
+            long now = serverNow(w);
+            stampVoidHud(attacker, match.debugStack, type, "Gravity Well",
+                    now + (long) VOID_GW_COOLDOWN_TICKS,
+                    now + (long) VOID_GW_DURATION_TICKS,
+                    VOID_GW_COOLDOWN_TICKS);
+
+            float base = dealtDamage;
+            if (Float.isNaN(base) || Float.isInfinite(base)) base = 1.0f;
+            if (base < 0.5f) base = 0.5f;
+
+            // center on the target you hit (feels offensive)
+            double cx = target.posX;
+            double cy = target.posY + (target.height * 0.5);
+            double cz = target.posZ;
+
+            startVoidGravityWellAt(attacker, cx, cy, cz, base, match.hasAnim);
+            return;
+        }
+
+        // Entropy: apply a DoT to the target (and heal you at the end)
+        if (isVoidTypeEntropy(type)){
+            if (!VOID_ENTROPY_ENABLED) return;
+            if (!roll(attacker, VOID_ENTROPY_PROC_CHANCE_ON_HIT)) return;
+            if (!cooldownReady(attacker, "HexOrbCD_VoidEntropy", VOID_ENTROPY_COOLDOWN_TICKS)) return;
+
+            long now = serverNow(w);
+            stampVoidHud(attacker, match.debugStack, type, "Entropy",
+                    now + (long) VOID_ENTROPY_COOLDOWN_TICKS,
+                    now + (long) VOID_ENTROPY_DURATION_TICKS,
+                    VOID_ENTROPY_COOLDOWN_TICKS);
+
+            applyVoidEntropy(attacker, target, match.hasAnim, now);
+            return;
+        }
+
+
+        // Abyss Mark: AoE marks (detonate after timer)
+        if (isVoidTypeAbyssMark(type)){
+            if (!VOID_ABYSS_MARK_ENABLED) return;
+            if (!roll(attacker, VOID_ABYSS_MARK_PROC_CHANCE_ON_HIT)) return;
+
+            long now = serverNow(w);
+            applyVoidAbyssMarkAoE(attacker, target, match.debugStack, type, match.hasAnim, now);
+            return;
+        }
+
+        // Null Shell: charge bonus on HIT (rare)
+        if (isVoidTypeNullShell(type)){
+            long now = serverNow(w);
+            tryBoostVoidNullShellCharge(attacker, match, now);
+            return;
+        }
+
+    }
+
+    private static void tryProcVoidOnDamaged(EntityPlayer victim, DamageSource src, float incomingDamage){
+        if (victim == null || src == null) return;
+        World w = victim.worldObj;
+        if (w == null || w.isRemote) return;
+
+        // prevent recursion / weird sources
+        String dt = src.getDamageType();
+        if ("hexorb".equals(dt)) return;
+        if ("thorns".equals(dt)) return;
+
+        // must have a void gem equipped (held item or armor)
+        VoidMatch match = findVoidMatch(victim);
+        if (!match.hasFlat && !match.hasAnim) return;
+
+        String type = match.voidType;
+
+        // Gravity Well: defensive proc centered on you
+        if (isVoidTypeGravityWell(type)){
+            if (!roll(victim, VOID_GW_PROC_CHANCE)) return;
+            if (!cooldownReady(victim, "HexOrbCD_VoidGW", VOID_GW_COOLDOWN_TICKS)) return;
+
+            long now = serverNow(w);
+            stampVoidHud(victim, match.debugStack, type, "Gravity Well",
+                    now + (long) VOID_GW_COOLDOWN_TICKS,
+                    now + (long) VOID_GW_DURATION_TICKS,
+                    VOID_GW_COOLDOWN_TICKS);
+
+            startVoidGravityWell(victim, incomingDamage, match.hasAnim);
+            return;
+        }
+
+        // Entropy: defensive version curses the attacker (if any)
+        if (isVoidTypeEntropy(type)){
+            if (!VOID_ENTROPY_ENABLED) return;
+
+            Entity srcEnt = src.getEntity();
+            EntityLivingBase attacker = (srcEnt instanceof EntityLivingBase) ? (EntityLivingBase) srcEnt : null;
+            if (attacker == null || attacker == victim) return;
+
+            if (!roll(victim, VOID_ENTROPY_PROC_CHANCE)) return;
+            if (!cooldownReady(victim, "HexOrbCD_VoidEntropy", VOID_ENTROPY_COOLDOWN_TICKS)) return;
+
+            long now = serverNow(w);
+            stampVoidHud(victim, match.debugStack, type, "Entropy",
+                    now + (long) VOID_ENTROPY_COOLDOWN_TICKS,
+                    now + (long) VOID_ENTROPY_DURATION_TICKS,
+                    VOID_ENTROPY_COOLDOWN_TICKS);
+
+            applyVoidEntropy(victim, attacker, match.hasAnim, now);
+            return;
+        }
+
+
+        // Abyss Mark: AoE marks (detonate after timer) - defensive proc is centered on YOU
+        if (isVoidTypeAbyssMark(type)){
+            if (!VOID_ABYSS_MARK_ENABLED) return;
+            if (!roll(victim, VOID_ABYSS_MARK_PROC_CHANCE)) return;
+
+            long now = serverNow(w);
+            applyVoidAbyssMarkAoE(victim, victim, match.debugStack, type, match.hasAnim, now);
+            return;
+        }
+
+        // Null Shell: (defensive) we do the TRUE dodge inside LivingAttack/LivingHurt so we can cancel damage.
+// Here we only handle the optional "gain extra charge when hit" behavior.
+        if (isVoidTypeNullShell(type)){
+            long now = serverNow(w);
+            tryBoostVoidNullShellCharge(victim, match, now);
+            return;
+        }
+
+        if (DEBUG_PROC && type == null){
+            debugOncePerSecond(victim, "[HexOrb][Void] type missing on host=" + itemLabel(match.debugStack));
+        }
+    }
+
+    private static boolean isVoidTypeGravityWell(String t){
+        if (t == null) return false;
+        String s = t.trim().toLowerCase();
+        // tolerate a few variants
+        return (s.contains("gravity") && s.contains("well")) || "gw".equals(s) || "gravitywell".equals(s);
+    }
+
+    private static boolean isVoidTypeEntropy(String t){
+        if (t == null) return false;
+        String s = t.trim().toLowerCase();
+        // tolerate common misspellings / shorthand
+        return s.contains("entropy") || s.contains("entrophy") || "ent".equals(s) || "voidentropy".equals(s);
+    }
+
+
+    private static boolean isVoidTypeAbyssMark(String t){
+        if (t == null) return false;
+        String s = t.trim().toLowerCase();
+        // tolerate variants: "Abyss Mark", "AbyssMark", "Void Abyss Mark", etc.
+        return (s.contains("abyss") && s.contains("mark")) || "am".equals(s) || "abyssmark".equals(s) || "voidabyssmark".equals(s);
+    }
+
+
+
+
+
+    private static boolean isVoidTypeNullShell(String t){
+        if (t == null) return false;
+        String s = t.trim().toLowerCase();
+        // tolerate variants: "Null Shell", "NullShell", "Void Null Shell", etc.
+        return (s.contains("null") && s.contains("shell")) || "ns".equals(s) || "nullshell".equals(s) || "voidnullshell".equals(s);
+    }
+
+    /** Attempt a Null Shell passive dodge. Returns true if the incoming hit should be negated. */
+    private static boolean tryVoidNullShellDodge(EntityPlayer victim, DamageSource src, long now){
+        if (victim == null || victim.worldObj == null || victim.worldObj.isRemote) return false;
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return false;
+
+        // prevent recursion / weird sources
+        if (src != null){
+            String dt = src.getDamageType();
+            if ("hexorb".equals(dt)) return false;
+            if ("thorns".equals(dt)) return false;
+        }
+
+        // must have a void gem equipped (held item or armor)
+        VoidMatch match = findVoidMatch(victim);
+        if (match == null || (!match.hasFlat && !match.hasAnim)) return false;
+        if (!match.found || !isVoidTypeNullShell(match.voidType)) return false;
+
+        // If it procs, this is a TRUE dodge: caller should cancel/zero the hit.
+        return tryNullShellPassiveDash(victim, src, match, now);
+    }
+
+    /** De-dupe Null Shell dodge roll across Attack+Hurt in the same tick. */
+    private static boolean markNullShellDodgeOncePerTick(EntityPlayer p, long now){
+        if (p == null) return true;
+        NBTTagCompound d = p.getEntityData();
+        long last = d.getLong("HexOrb_NSDodgeTick");
+        if (last == now) return false;
+        d.setLong("HexOrb_NSDodgeTick", now);
+        return true;
+    }
+
+
+
+
+    private static int getLightLevelAt(World w, EntityPlayer p){
+        if (w == null || p == null) return 15;
+        int x = (int) Math.floor(p.posX);
+        int y = (int) Math.floor(p.posY + 0.25);
+        int z = (int) Math.floor(p.posZ);
+        try {
+            return w.getBlockLightValue(x, y, z);
+        } catch (Throwable ignored) {
+            return 15;
+        }
+    }
+
+    /**
+     * Passive Null Shell charging (runs ~1x per second).
+     * Mirrors charge onto the active host item so the client HUD can draw it.
+     */
+    private static void tickVoidNullShellCharge(EntityPlayer p, World w, NBTTagCompound data, long now){
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return;
+        if (p == null || w == null || data == null || w.isRemote) return;
+
+        long next = data.getLong(VNS_KEY_NEXT_PASSIVE);
+        if (now < next) return;
+        data.setLong(VNS_KEY_NEXT_PASSIVE, now + 20);
+
+        VoidMatch match = findVoidMatch(p);
+        if (match == null || match.debugStack == null) return;
+
+        String type = match.voidType;
+        if (!isVoidTypeNullShell(type)) return;
+
+        int max = getNullShellMaxCharge();
+        if (max <= 0) max = 1000;
+
+        int charge = data.getInteger(VNS_KEY_CHARGE);
+        if (charge < 0) charge = 0;
+        if (charge > max) charge = max;
+
+        int light = getLightLevelAt(w, p);
+        boolean isDark = light <= VOID_NULL_SHELL_DARK_LIGHT_MAX;
+        boolean isBright = light >= VOID_NULL_SHELL_BRIGHT_LIGHT_MIN;
+
+        if (isDark){
+            charge += VOID_NULL_SHELL_PASSIVE_DARK_GAIN_PER_SEC;
+        } else if (isBright){
+            if (roll(p, VOID_NULL_SHELL_PASSIVE_LIGHT_CHANCE_PER_SEC)){
+                charge += VOID_NULL_SHELL_PASSIVE_LIGHT_GAIN;
+            }
+        } else {
+            // mid light: half of bright chance/gain
+            if (roll(p, VOID_NULL_SHELL_PASSIVE_LIGHT_CHANCE_PER_SEC * 0.5f)){
+                charge += Math.max(1, VOID_NULL_SHELL_PASSIVE_LIGHT_GAIN / 2);
+            }
+        }
+
+        if (charge < 0) charge = 0;
+        if (charge > max) charge = max;
+
+        data.setInteger(VNS_KEY_CHARGE, charge);
+        stampNullShellChargeHud(p, match.debugStack, type, charge, max, now, data);
+    }/** Spawns the Void Protection particles and clears the buff when it expires. */
+    private static void tickVoidNullShellDefenseBuff(EntityPlayer p, World w, NBTTagCompound data, long now){
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return;
+        if (p == null || w == null || data == null || w.isRemote) return;
+
+        long end = data.getLong(VNS_KEY_DEF_END);
+        if (end <= 0L) return;
+
+        // Expired?
+        if (now >= end){
+            data.removeTag(VNS_KEY_DEF_END);
+            data.removeTag(VNS_KEY_DEF_NEXT_FX);
+            return;
+        }
+
+        // Only keep the buff if the player still has Null Shell equipped
+        VoidMatch match = findVoidMatch(p);
+        if (match == null || !match.found || !isVoidTypeNullShell(match.voidType)){
+            data.removeTag(VNS_KEY_DEF_END);
+            data.removeTag(VNS_KEY_DEF_NEXT_FX);
+            return;
+        }
+
+        long nextFx = data.getLong(VNS_KEY_DEF_NEXT_FX);
+        if (now < nextFx) return;
+        data.setLong(VNS_KEY_DEF_NEXT_FX, now + 2L); // every 2 ticks
+
+        spawnNullShellProtectionParticles(w, p);
+    }
+
+    /** While charging Void Push, spawn a growing particle aura so everyone can see it. */
+    private static void tickVoidNullShellPushCharge(World w, EntityPlayer p, NBTTagCompound data, long now){
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return;
+        if (w == null || p == null || data == null) return;
+        if (w.isRemote) return;
+
+        if (data.getByte(VNS_KEY_PUSH_CHARGING) == 0) return;
+
+        long start = data.getLong(VNS_KEY_PUSH_START);
+        if (start <= 0L){
+            data.removeTag(VNS_KEY_PUSH_CHARGING);
+            return;
+        }
+
+        long held = now - start;
+        if (held < 0L) held = 0L;
+        if (held > (long) (NS_PUSH_CHARGE_TICKS + NS_PUSH_OVERCHARGE_TICKS)) held = (long) (NS_PUSH_CHARGE_TICKS + NS_PUSH_OVERCHARGE_TICKS);
+
+        float pct = held / (float) (NS_PUSH_CHARGE_TICKS + NS_PUSH_OVERCHARGE_TICKS);
+        if (pct < 0f) pct = 0f;
+        if (pct > 1f) pct = 1f;
+
+        // particle density ramps up with charge
+        if (w instanceof WorldServer){
+            WorldServer ws = (WorldServer) w;
+            int count = 6 + (int) (pct * 26f);
+
+            // tighter in first-person would require a client particle;
+            // this server aura is centered slightly above the camera to reduce blinding.
+            ws.func_147487_a("mobSpell", p.posX, p.posY + 1.05, p.posZ, count, 0.45, 0.70, 0.45, 0.01);
+            ws.func_147487_a("portal", p.posX, p.posY + 1.00, p.posZ, (int)(count * 0.6f), 0.40, 0.55, 0.40, 0.01);
+
+            // overcharge: add a stronger "end" sparkle
+            if (held >= (long) NS_PUSH_CHARGE_TICKS){
+                ws.func_147487_a("witchMagic", p.posX, p.posY + 1.10, p.posZ, 4 + (int)(pct * 8f), 0.45, 0.65, 0.45, 0.01);
+            }
+        }
+    }
+
+    private static void doNullShellVoidPush(EntityPlayer p, float mult){
+        if (p == null) return;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return;
+
+        float radius = NS_PUSH_RADIUS;
+        AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(
+                p.posX - radius, p.posY - 1.0, p.posZ - radius,
+                p.posX + radius, p.posY + 3.0, p.posZ + radius
+        );
+
+        @SuppressWarnings("unchecked")
+        List<EntityLivingBase> list = w.getEntitiesWithinAABB(EntityLivingBase.class, bb);
+        if (list == null || list.isEmpty()) list = Collections.emptyList();
+
+        // DEX scaling (Null Shell Push) - server-safe snapshot
+        HexPlayerStats.Snapshot s = HexPlayerStats.snapshot(p);
+        double dexEff = (s != null) ? ((double)s.dex * (double)s.currentMulti) : getDexterityEffective(p);
+        float scaled = NS_PUSH_BASE_DAMAGE + (float)(dexEff * (double)NS_PUSH_STAT_SCALE);
+        float dmg = scaled * mult;
+
+        if (w instanceof WorldServer){
+            WorldServer ws = (WorldServer) w;
+            ws.func_147487_a("largeexplode", p.posX, p.posY + 0.2, p.posZ, 1, 0, 0, 0, 0);
+            spawnVoidExplosionSphere(ws, p.posX, p.posY + 0.9, p.posZ, radius);
+            ws.func_147487_a("portal", p.posX, p.posY + 0.9, p.posZ, 70, radius * 0.20, 0.65, radius * 0.20, 0.04);
+            ws.func_147487_a("mobSpell", p.posX, p.posY + 1.0, p.posZ, 60, radius * 0.20, 0.65, radius * 0.20, 0.03);
+            ws.func_147487_a("witchMagic", p.posX, p.posY + 1.0, p.posZ, 35, radius * 0.18, 0.60, radius * 0.18, 0.03);
+        }
+        w.playSoundAtEntity(p, "random.explode", 0.9f, 0.75f);
+
+        for (EntityLivingBase t : list){
+            if (t == null || t == p) continue;
+            if (!isDamageable(t)) continue;
+
+            double dist = p.getDistanceToEntity(t);
+            if (dist > (double) radius + 0.25) continue;
+
+            float falloff = 1.0f - (float) (dist / (double) radius);
+            if (falloff < 0.10f) falloff = 0.10f;
+
+            float finalDmg = scaleForPvp(t, dmg * falloff);
+            dealNullShellProcDamage(p, t, finalDmg, "NullShellPush");
+
+            // Strong radial knockback
+            double kbH = NS_PUSH_KB_H * (double) falloff;
+            double kbY = NS_PUSH_KB_Y * (double) falloff;
+            applyKnockbackFrom(p, t, kbH, kbY);
+
+            if (w instanceof WorldServer){
+                WorldServer ws = (WorldServer) w;
+                ws.func_147487_a("portal", t.posX, t.posY + 0.6, t.posZ, 10, 0.35, 0.45, 0.35, 0.01);
+            }
+        }
+    }
+
+
+    private static void spawnNullShellProtectionParticles(World w, EntityPlayer p){
+        if (!(w instanceof WorldServer) || p == null) return;
+        WorldServer ws = (WorldServer) w;
+
+        // Spawn around torso to avoid blinding first-person too much
+        double x = p.posX;
+        double y = p.posY + 0.8;
+        double z = p.posZ;
+
+        double sx = 0.35;
+        double sy = 0.55;
+        double sz = 0.35;
+
+        // "mobSpell" is the voidy/purple spell look; portal adds some depth
+        ws.func_147487_a("mobSpell", x, y, z, 10, sx, sy, sz, 0.0);
+        if ((ws.getTotalWorldTime() & 1L) == 0L){
+            ws.func_147487_a("portal", x, y, z, 4, sx, sy, sz, 0.0);
+        }
+    }
+
+
+
+    /**
+     * Combat bonus charging (rare). Call on HIT and on HURT.
+     */
+    private static void tryBoostVoidNullShellCharge(EntityPlayer p, VoidMatch match, long now){
+        if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return;
+        if (p == null || match == null || match.debugStack == null) return;
+
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return;
+
+        NBTTagCompound data = p.getEntityData();
+        if (data == null) return;
+
+        String type = match.voidType;
+        if (!isVoidTypeNullShell(type)) return;
+
+        int max = getNullShellMaxCharge();
+        if (max <= 0) max = 1000;
+
+        int charge = data.getInteger(VNS_KEY_CHARGE);
+        if (charge < 0) charge = 0;
+        if (charge >= max) return;
+
+        int light = getLightLevelAt(w, p);
+        boolean dark = light <= VOID_NULL_SHELL_DARK_LIGHT_MAX;
+
+        float chance = dark ? VOID_NULL_SHELL_COMBAT_BONUS_CHANCE_DARK : VOID_NULL_SHELL_COMBAT_BONUS_CHANCE_LIGHT;
+        int gain = dark ? VOID_NULL_SHELL_COMBAT_BONUS_GAIN_DARK : VOID_NULL_SHELL_COMBAT_BONUS_GAIN_LIGHT;
+
+        if (!roll(p, chance)) return;
+
+        charge += gain;
+        if (charge > max) charge = max;
+
+        data.setInteger(VNS_KEY_CHARGE, charge);
+        stampNullShellChargeHud(p, match.debugStack, type, charge, max, now, data);
+    }
+
+    /**
+     * Writes Null Shell charge fields onto the host stack so the client HUD can read them.
+     * Throttled to avoid spamming inventory NBT sync.
+     */
+    private static void stampNullShellChargeHud(EntityPlayer owner, ItemStack host, String voidType, int charge, int max, long now, NBTTagCompound ownerData){
+        if (host == null || owner == null) return;
+
+        if (max <= 0) max = 1000;
+        if (charge < 0) charge = 0;
+        if (charge > max) charge = max;
+
+        int pct = (int) Math.floor((charge * 100.0) / (double) max);
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+
+        if (ownerData != null){
+            int lastPct = ownerData.getInteger(VNS_KEY_LAST_PCT);
+            long lastStamp = ownerData.getLong(VNS_KEY_LAST_STAMP);
+            if (pct == lastPct && (now - lastStamp) < (long) VOID_NULL_SHELL_STAMP_MIN_INTERVAL_TICKS){
+                return;
+            }
+            ownerData.setInteger(VNS_KEY_LAST_PCT, pct);
+            ownerData.setLong(VNS_KEY_LAST_STAMP, now);
+        }
+
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        String t = (voidType != null && voidType.length() > 0) ? voidType : "Null Shell";
+        tag.setString("HexVoidHudType", t);
+        tag.setInteger("HexVoidCharge", charge);
+        tag.setInteger("HexVoidChargeMax", max);
+        // Back-compat (older HUD builds)
+        tag.setInteger("HexNullShellCharge", charge);
+        tag.setInteger("HexNullShellChargeMax", max);
+        host.setTagCompound(tag);
+
+        if (owner instanceof EntityPlayerMP){
+            try {
+                ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void startVoidGravityWell(EntityPlayer caster, float incomingDamage, boolean isAnim){
+        if (caster == null) return;
+
+        float base = incomingDamage;
+        if (Float.isNaN(base) || Float.isInfinite(base)) base = 1.0f;
+        if (base < 0.5f) base = 0.5f;
+
+        startVoidGravityWellAt(caster, caster.posX, caster.posY + 0.85, caster.posZ, base, isAnim);
+    }
+
+    /**
+     * Starts a Gravity Well centered at (cx,cy,cz). Used by both defensive (center on you) and offensive (center on hit target) procs.
+     */
+    private static void startVoidGravityWellAt(EntityPlayer caster, double cx, double cy, double cz, float baseDamage, boolean isAnim){
+        if (caster == null) return;
+        World w = caster.worldObj;
+        if (w == null || w.isRemote) return;
+
+        NBTTagCompound data = caster.getEntityData();
+        if (data == null) return;
+
+        long now = serverNow(w);
+
+        float base = baseDamage;
+        if (Float.isNaN(base) || Float.isInfinite(base)) base = 1.0f;
+        if (base < 0.5f) base = 0.5f;
+
+        data.setBoolean(VOID_GW_KEY_ACTIVE, true);
+        data.setLong(VOID_GW_KEY_END, now + (long) VOID_GW_DURATION_TICKS);
+        data.setDouble(VOID_GW_KEY_X, cx);
+        data.setDouble(VOID_GW_KEY_Y, cy);
+        data.setDouble(VOID_GW_KEY_Z, cz);
+        data.setFloat(VOID_GW_KEY_BASE, base);
+        data.setBoolean(VOID_GW_KEY_ANIM, isAnim);
+        data.setInteger(VOID_GW_KEY_TICK, 0);
+
+        // a small sound cue (server)
+        try {
+            w.playSoundEffect(cx, cy, cz, "portal.trigger", 0.75f, isAnim ? 0.70f : 0.85f);
+        } catch (Throwable ignored) {}
+    }
+
+
+    private static void tickVoidGravityWell(EntityPlayer caster, NBTTagCompound data, World w, long now){
+        if (caster == null || data == null || w == null || w.isRemote) return;
+        if (!data.getBoolean(VOID_GW_KEY_ACTIVE)) return;
+
+        long end = data.getLong(VOID_GW_KEY_END);
+        if (end <= 0L){
+            clearVoidGravityWell(data);
+            return;
+        }
+
+        boolean isAnim = data.getBoolean(VOID_GW_KEY_ANIM);
+        double cx = data.getDouble(VOID_GW_KEY_X);
+        double cy = data.getDouble(VOID_GW_KEY_Y);
+        double cz = data.getDouble(VOID_GW_KEY_Z);
+
+        if (cx == 0 && cy == 0 && cz == 0){
+            cx = caster.posX;
+            cy = caster.posY + 0.85;
+            cz = caster.posZ;
+            data.setDouble(VOID_GW_KEY_X, cx);
+            data.setDouble(VOID_GW_KEY_Y, cy);
+            data.setDouble(VOID_GW_KEY_Z, cz);
+        }
+
+        float base = data.getFloat(VOID_GW_KEY_BASE);
+        if (base <= 0f) base = 1.0f;
+
+        float radius = isAnim ? VOID_GW_RADIUS_ANIM : VOID_GW_RADIUS;
+        float pull   = isAnim ? VOID_GW_PULL_STRENGTH_ANIM : VOID_GW_PULL_STRENGTH;
+
+        int tick = data.getInteger(VOID_GW_KEY_TICK) + 1;
+        data.setInteger(VOID_GW_KEY_TICK, tick);
+
+        // visuals (purple/black swirl)
+        spawnVoidGravityParticles(w, cx, cy, cz, radius, tick, isAnim);
+
+        // apply pull + periodic tick damage while active
+        if (tick % 2 == 0){
+            AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(cx - radius, cy - radius, cz - radius, cx + radius, cy + radius, cz + radius);
+            @SuppressWarnings("unchecked")
+            List<EntityLivingBase> list = w.getEntitiesWithinAABB(EntityLivingBase.class, bb);
+
+            if (list != null && !list.isEmpty()){
+                for (int i = 0; i < list.size(); i++){
+                    EntityLivingBase t = list.get(i);
+                    if (t == null || t == caster) continue;
+                    if (t.isDead) continue;
+
+                    // pull toward center
+                    pullTowardPoint(t, cx, cy, cz, pull, 0.02);
+                    // Entropy DoT (Void): tag pulled targets so they take void damage over time
+                    applyVoidEntropy(caster, t, isAnim, now);
+
+
+                    // periodic damage
+                    if (VOID_GW_DAMAGE_PERIOD_TICKS > 0 && (tick % VOID_GW_DAMAGE_PERIOD_TICKS) == 0){
+                        float dmg = base * VOID_GW_TICK_DAMAGE_SCALE;
+                        if (dmg > 0f){
+                            dealProcDamage(caster, t, dmg, "VoidGW");
+                        }
+                    }
+                }
+            }
+        }
+
+        // end: burst damage + extra particles
+        if (now >= end){
+            AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(cx - radius, cy - radius, cz - radius, cx + radius, cy + radius, cz + radius);
+            @SuppressWarnings("unchecked")
+            List<EntityLivingBase> list = w.getEntitiesWithinAABB(EntityLivingBase.class, bb);
+
+            if (list != null && !list.isEmpty()){
+                for (int i = 0; i < list.size(); i++){
+                    EntityLivingBase t = list.get(i);
+                    if (t == null || t == caster) continue;
+                    if (t.isDead) continue;
+
+                    // Refresh entropy on anything still inside when time resumes
+                    applyVoidEntropy(caster, t, isAnim, now);
+
+                    float dmg = base * VOID_GW_BURST_DAMAGE_SCALE;
+                    if (dmg > 0f){
+                        dealProcDamage(caster, t, dmg, "VoidGW_Burst");
+                    }
+
+                    // small vertical pop
+                    try {
+                        t.addVelocity(0.0, 0.12, 0.0);
+                        t.velocityChanged = true;
+                    } catch (Throwable ignored) {}
+                }
+            }
+
+            // final swirl burst
+            spawnVoidGravityBurstParticles(w, cx, cy, cz, radius, isAnim);
+            clearVoidGravityWell(data);
+        }
+    }
+
+    private static void clearVoidGravityWell(NBTTagCompound data){
+        if (data == null) return;
+        data.removeTag(VOID_GW_KEY_ACTIVE);
+        data.removeTag(VOID_GW_KEY_END);
+        data.removeTag(VOID_GW_KEY_X);
+        data.removeTag(VOID_GW_KEY_Y);
+        data.removeTag(VOID_GW_KEY_Z);
+        data.removeTag(VOID_GW_KEY_BASE);
+        data.removeTag(VOID_GW_KEY_ANIM);
+        data.removeTag(VOID_GW_KEY_TICK);
+    }
+
+    /**
+     * Null Shell: spawns a hollow "sphere shell" of void particles at the given radius.
+     * Called on the 100% push explosion so players can see the true AoE size.
+     */
+    private static void spawnVoidExplosionSphere(WorldServer ws, double cx, double cy, double cz, float radius){
+        if (ws == null) return;
+        if (radius <= 0.25f) return;
+
+        // Keep it lightweight: scale point density with radius, but clamp for performance.
+        int rings = (int) Math.ceil(radius * 2.0f);
+        if (rings < 6) rings = 6;
+        if (rings > 18) rings = 18;
+
+        int basePts = (int) Math.ceil(radius * 6.0f);
+        if (basePts < 16) basePts = 16;
+        if (basePts > 48) basePts = 48;
+
+        // "Our" void palette (matches /voidsphere): portal + witch shimmer + deep purple mobSpell glow.
+        final double GLOW_R = 0.55D;
+        final double GLOW_G = 0.06D;
+        final double GLOW_B = 0.78D;
+
+        for (int i = 0; i <= rings; i++){
+            double v = (double) i / (double) rings;          // 0..1
+            double phi = Math.acos(1.0 - 2.0 * v);           // 0..pi (roughly uniform)
+            double y = Math.cos(phi);
+            double sinPhi = Math.sin(phi);
+
+            int ringPts = (int) Math.round(basePts * sinPhi);
+            if (ringPts < 8) ringPts = 8;
+
+            for (int j = 0; j < ringPts; j++){
+                double theta = (2.0 * Math.PI * (double) j) / (double) ringPts;
+                double x = Math.cos(theta) * sinPhi;
+                double z = Math.sin(theta) * sinPhi;
+
+                // Slight thickness so the shell reads better at high speed
+                double rr = (double) radius + ((ws.getTotalWorldTime() & 1L) == 0L ? 0.12D : -0.12D);
+
+                double px = cx + (x * rr);
+                double py = cy + (y * rr);
+                double pz = cz + (z * rr);
+
+                // Exact point particles (dx/dy/dz = 0). Speed is tiny so they appear "alive".
+                ws.func_147487_a("portal", px, py, pz, 1, 0, 0, 0, 0.01);
+                if ((j & 3) == 0){
+                    ws.func_147487_a("witchMagic", px, py, pz, 1, 0, 0, 0, 0.01);
+                }
+                // mobSpell uses RGB when count=0 and dx/dy/dz are set to color components.
+                if ((j & 1) == 0){
+                    ws.func_147487_a("mobSpell", px, py, pz, 0, GLOW_R, GLOW_G, GLOW_B, 1.0D);
+                }
+            }
+        }
+    }
+
+    private static void spawnVoidGravityParticles(World w, double cx, double cy, double cz, float radius, int tick, boolean isAnim){
+        if (!(w instanceof WorldServer)) return;
+        WorldServer ws = (WorldServer) w;
+
+        // Guaranteed center swirl so you always see the "hole" even if ring particles are subtle
+        try {
+            ws.func_147487_a("portal", cx, cy, cz, isAnim ? 14 : 10, 0.28, 0.18, 0.28, 0.02);
+            ws.func_147487_a("witchMagic", cx, cy, cz, isAnim ? 10 : 6, 0.22, 0.12, 0.22, 0.01);
+        } catch (Throwable ignored) {}
+
+        int rings = isAnim ? 10 : 7;
+        double t = (double) tick * 0.35;
+        for (int i = 0; i < rings; i++){
+            double ang = t + (6.283185307179586 * (double) i / (double) rings);
+            double r = radius * (0.35 + 0.25 * ws.rand.nextDouble());
+            double px = cx + Math.cos(ang) * r;
+            double pz = cz + Math.sin(ang) * r;
+            double py = cy + (ws.rand.nextDouble() * 0.25 - 0.12);
+
+            // deep purple glow (mobSpell uses RGB in dx/dy/dz)
+            ws.func_147487_a("mobSpell", px, py, pz, 0, 0.45, 0.08, 0.62, 1.0);
+            // dark core specks
+            ws.func_147487_a("mobSpell", cx, cy, cz, 0, 0.02, 0.00, 0.03, 1.0);
+
+            // subtle portal wisps
+            if (ws.rand.nextInt(3) == 0){
+                ws.func_147487_a("portal", px, py, pz, 2, 0.05, 0.05, 0.05, 0.01);
+            }
+        }
+    }
+
+    private static void spawnVoidGravityBurstParticles(World w, double cx, double cy, double cz, float radius, boolean isAnim){
+        if (!(w instanceof WorldServer)) return;
+        WorldServer ws = (WorldServer) w;
+
+        // Burst flash at the center
+        try {
+            ws.func_147487_a("portal", cx, cy, cz, isAnim ? 28 : 20, radius * 0.35, radius * 0.18, radius * 0.35, 0.06);
+            ws.func_147487_a("witchMagic", cx, cy, cz, isAnim ? 18 : 12, radius * 0.25, radius * 0.12, radius * 0.25, 0.02);
+        } catch (Throwable ignored) {}
+
+        int total = isAnim ? 80 : 55;
+        for (int i = 0; i < total; i++){
+            double px = cx + (ws.rand.nextDouble() * 2.0 - 1.0) * radius;
+            double py = cy + (ws.rand.nextDouble() * 2.0 - 1.0) * (radius * 0.55);
+            double pz = cz + (ws.rand.nextDouble() * 2.0 - 1.0) * radius;
+
+            ws.func_147487_a("mobSpell", px, py, pz, 0, 0.55, 0.06, 0.78, 1.0);
+            if (ws.rand.nextInt(2) == 0){
+                ws.func_147487_a("portal", px, py, pz, 2, 0.08, 0.08, 0.08, 0.02);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------
+    // VOID ORB: Entropy (DoT)
+    // -------------------------------------------------------------
+    private static void applyVoidEntropy(EntityPlayer owner, EntityLivingBase target, boolean isAnim, long now){
+        if (!VOID_ENABLED || !VOID_ENTROPY_ENABLED) return;
+        if (owner == null || target == null) return;
+        if (target == owner) return;
+        if ((target instanceof EntityPlayer) && !VOID_ENTROPY_AFFECT_PLAYERS) return;
+
+        World w = target.worldObj;
+        if (w == null || w.isRemote) return;
+
+        NBTTagCompound td = target.getEntityData();
+        if (td == null) return;
+
+        long end = td.getLong(VE_KEY_END);
+        boolean active = (end > 0L) && (now < end);
+
+        int ownerIdPrev = td.getInteger(VE_KEY_OWNER);
+        boolean animPrev = td.getBoolean(VE_KEY_ANIM);
+
+        int dur = Math.max(1, VOID_ENTROPY_DURATION_TICKS);
+        long newEnd = now + (long) dur;
+
+        // start / refresh
+        if (!active){
+            td.setFloat(VE_KEY_TOTAL, 0f);
+            td.setLong(VE_KEY_NEXT, now);
+        }
+        if (newEnd > end){
+            td.setLong(VE_KEY_END, newEnd);
+        }
+
+        td.setInteger(VE_KEY_OWNER, owner.getEntityId());
+        td.setBoolean(VE_KEY_ANIM, isAnim);
+        td.setInteger(VE_KEY_INT, Math.max(1, VOID_ENTROPY_INTERVAL_TICKS));
+
+        // cache tick damage when starting or when the owner/anim state changes
+        if (!active || ownerIdPrev != owner.getEntityId() || animPrev != isAnim){
+            float tickDmg = computeVoidEntropyTickDamage(owner, isAnim);
+            td.setFloat(VE_KEY_DMG, tickDmg);
+        }
+    }
+
+    private static void tickVoidEntropy(EntityLivingBase ent, NBTTagCompound data, World w, long now){
+        if (ent == null || data == null || w == null || w.isRemote) return;
+
+        long end = data.getLong(VE_KEY_END);
+        if (end <= 0L) return;
+
+        boolean isAnim = data.getBoolean(VE_KEY_ANIM);
+
+        // finished -> lifesteal payout + cleanup
+        if (now >= end){
+            float total = data.getFloat(VE_KEY_TOTAL);
+            int ownerId = data.getInteger(VE_KEY_OWNER);
+            Entity ownerEnt = (ownerId != 0) ? w.getEntityByID(ownerId) : null;
+            EntityPlayer owner = (ownerEnt instanceof EntityPlayer) ? (EntityPlayer) ownerEnt : null;
+
+            if (owner != null && total > 0f && VOID_ENTROPY_LIFESTEAL_FRACTION > 0f){
+                float healAbs = total * VOID_ENTROPY_LIFESTEAL_FRACTION;
+                if (healAbs > 0f){
+                    // Prefer DBC Body healing via percent bridge; fallback to vanilla heal
+                    if (!dbcAddBodyAbsViaNbt(owner, healAbs)){
+                        try { owner.heal(healAbs); } catch (Throwable ignored) {}
+                    }
+
+                    // small owner VFX
+                    try {
+                        spawnVoidGravityParticles(w, owner.posX, owner.posY + owner.height * 0.55, owner.posZ, isAnim ? 1.10f : 0.90f, (int)(now & 0x7fffffff), isAnim);
+                    } catch (Throwable ignored) {}
+                }
+            }
+
+            // end burst on target
+            try {
+                spawnVoidGravityBurstParticles(w, ent.posX, ent.posY + ent.height * 0.55, ent.posZ, isAnim ? 1.15f : 0.95f, isAnim);
+            } catch (Throwable ignored) {}
+
+            clearVoidEntropy(ent);
+            return;
+        }
+
+        // tick window
+        long next = data.getLong(VE_KEY_NEXT);
+        int interval = data.getInteger(VE_KEY_INT);
+        if (interval <= 0) interval = Math.max(1, VOID_ENTROPY_INTERVAL_TICKS);
+
+        // light particles even between damage ticks
+        try {
+            if ((now & 1L) == 0L){
+                spawnVoidGravityParticles(w, ent.posX, ent.posY + ent.height * 0.55, ent.posZ, isAnim ? 0.95f : 0.75f, (int)(now & 0x7fffffff), isAnim);
+            }
+        } catch (Throwable ignored) {}
+
+        if (now < next) return;
+
+        float dmg = data.getFloat(VE_KEY_DMG);
+        if (dmg <= 0f){
+            int ownerId = data.getInteger(VE_KEY_OWNER);
+            Entity ownerEnt = (ownerId != 0) ? w.getEntityByID(ownerId) : null;
+            EntityPlayer owner = (ownerEnt instanceof EntityPlayer) ? (EntityPlayer) ownerEnt : null;
+            dmg = computeVoidEntropyTickDamage(owner, isAnim);
+            data.setFloat(VE_KEY_DMG, dmg);
+        }
+
+        if (dmg > 0f){
+            int ownerId = data.getInteger(VE_KEY_OWNER);
+            Entity ownerEnt = (ownerId != 0) ? w.getEntityByID(ownerId) : null;
+            EntityPlayer owner = (ownerEnt instanceof EntityPlayer) ? (EntityPlayer) ownerEnt : null;
+
+            // Only the FINAL tick should knock targets back.
+            // The vanilla damage source (and some mod hooks) apply knockback on each hit,
+            // so for intermediate ticks we restore motion after applying damage.
+            // If the next scheduled tick would reach or pass the end time,
+            // treat THIS tick as the final one.
+            boolean finalTick = (now + (long) interval) >= end;
+
+            float finalDmg = dmg;
+            if (ent instanceof EntityPlayer){
+                finalDmg = finalDmg * DAMAGE_VS_PLAYERS_SCALE;
+            }
+
+            if (owner != null){
+                if (!finalTick) {
+                    // suppress per-tick knockback; keep final tick knockback intact
+                    double mx0 = ent.motionX;
+                    double mz0 = ent.motionZ;
+                    dealProcDamage(owner, ent, finalDmg, "VoidEntropy");
+                    ent.motionX = mx0;
+                    ent.motionZ = mz0;
+                } else {
+                    dealProcDamage(owner, ent, finalDmg, "VoidEntropy");
+                }
+            } else {
+                try { ent.attackEntityFrom(DamageSource.magic, finalDmg); } catch (Throwable ignored) {}
+            }
+
+            float total = data.getFloat(VE_KEY_TOTAL);
+            data.setFloat(VE_KEY_TOTAL, total + finalDmg);
+        }
+
+        data.setLong(VE_KEY_NEXT, now + (long)interval);
+    }
+
+    // -------------------------------------------------------------
+    // VOID: Abyss Mark (AoE mark -> delayed detonation)
+    // -------------------------------------------------------------
+
+    /**
+     * Applies Abyss Mark to nearby entities around {@code center}. Each marked entity detonates
+     * after {@link #VOID_ABYSS_MARK_DURATION_TICKS}.
+     *
+     * HUD: we reuse HexVoidHudCDEnd/CDMax to show "detonation in Xs".
+     */
+    private static void applyVoidAbyssMarkAoE(EntityPlayer owner, EntityLivingBase center, ItemStack hudHost, String type, boolean isAnim, long now){
+        if (owner == null || center == null) return;
+        World w = owner.worldObj;
+        if (w == null || w.isRemote) return;
+
+        float radius = isAnim ? VOID_ABYSS_MARK_MARK_RADIUS_ANIM : VOID_ABYSS_MARK_MARK_RADIUS;
+        if (radius < 0.25f) radius = 0.25f;
+        if (radius > 24.0f) radius = 24.0f;
+
+        long expireTick = now + (long) VOID_ABYSS_MARK_DURATION_TICKS;
+
+        double r = (double) radius;
+        double ox = center.posX;
+        double oy = center.posY + (double)center.height * 0.5D;
+        double oz = center.posZ;
+
+        AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(
+                ox - r, oy - r, oz - r,
+                ox + r, oy + r, oz + r
+        );
+
+        List list = null;
+        try {
+            list = w.getEntitiesWithinAABB(EntityLivingBase.class, bb);
+        } catch (Throwable ignored) {}
+
+        // If the scan fails, still try to mark the center.
+        if (list == null || list.isEmpty()){
+            boolean applied = applyVoidAbyssMarkSingle(owner, center, isAnim, now, expireTick);
+            if (applied){
+                stampVoidHud(owner, hudHost, type, "Abyss Mark", expireTick, expireTick, VOID_ABYSS_MARK_DURATION_TICKS);
+            }
+            return;
+        }
+
+        int appliedCount = 0;
+        int cap = VOID_ABYSS_MARK_MAX_TARGETS;
+        if (cap <= 0) cap = 12;
+        if (cap > 64) cap = 64; // sanity
+
+        double r2 = r * r;
+
+        for (int i = 0; i < list.size(); i++){
+            Object o = list.get(i);
+            if (!(o instanceof EntityLivingBase)) continue;
+            EntityLivingBase t = (EntityLivingBase) o;
+
+            if (t == owner) continue;
+            if (t.isDead) continue;
+            if (!VOID_ABYSS_MARK_AFFECT_PLAYERS && (t instanceof EntityPlayer)) continue;
+
+            double dx = (t.posX) - ox;
+            double dy = (t.posY + (double)t.height * 0.5D) - oy;
+            double dz = (t.posZ) - oz;
+            if ((dx*dx + dy*dy + dz*dz) > r2) continue;
+
+            if (applyVoidAbyssMarkSingle(owner, t, isAnim, now, expireTick)){
+                // Immediate visible cue
+                spawnVoidGravityParticles(w,
+                        t.posX,
+                        t.posY + t.height * 0.55,
+                        t.posZ,
+                        isAnim ? 1.35f : 1.10f,
+                        (int) (now & 0x7FFFFFFF),
+                        isAnim);
+
+                appliedCount++;
+                if (appliedCount >= cap) break;
+            }
+        }
+
+        if (appliedCount > 0){
+            stampVoidHud(owner, hudHost, type, "Abyss Mark", expireTick, expireTick, VOID_ABYSS_MARK_DURATION_TICKS);
+
+            // "cast" burst at the center so it feels like an AoE application
+            spawnVoidGravityBurstParticles(w, ox, oy, oz, isAnim ? 2.05f : 1.65f, isAnim);
+            try {
+                w.playSoundEffect(ox, oy, oz, "portal.travel", 0.55f, isAnim ? 0.70f : 0.85f);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    /**
+     * Marks a single entity. Returns true only if the mark was newly applied.
+     *
+     * We intentionally do NOT refresh the timer if this entity is already marked by the same owner,
+     * so the detonation can't be "stalled" by repeated procs.
+     */
+    private static boolean applyVoidAbyssMarkSingle(EntityPlayer owner, EntityLivingBase target, boolean isAnim, long now, long expireTick){
+        if (owner == null || target == null) return false;
+        World w = owner.worldObj;
+        if (w == null || w.isRemote) return false;
+
+        if (!VOID_ABYSS_MARK_AFFECT_PLAYERS && (target instanceof EntityPlayer)) return false;
+
+        NBTTagCompound data = target.getEntityData();
+        if (data == null) return false;
+
+        int ownerId = owner.getEntityId();
+
+        int curOwner = data.getInteger(VAM_KEY_OWNER);
+        long curExpire = data.getLong(VAM_KEY_EXPIRE);
+
+        if (curOwner == ownerId && curExpire > 0L && now < curExpire){
+            return false;
+        }
+
+        data.setInteger(VAM_KEY_OWNER, ownerId);
+        data.setLong(VAM_KEY_EXPIRE, expireTick);
+        data.setBoolean(VAM_KEY_ANIM, isAnim);
+
+        // legacy (old stacking design)
+        data.setInteger(VAM_KEY_STACKS, 1);
+
+        return true;
+    }
+
+    private static float computeVoidAbyssDetonationDamage(EntityPlayer owner, boolean isAnim){
+        // "Will explosion" style scaling (DBC -> vanilla fallback)
+        float baseWill = getVoidAbyssEffectiveWill(owner);
+
+        // uses the existing field name (historical) - we scale by WILL here
+        float dmg = (baseWill * VOID_ABYSS_MARK_DETONATE_STR_SCALE) + VOID_ABYSS_MARK_DETONATE_BONUS_DMG;
+
+        if (isAnim) dmg *= VOID_ABYSS_MARK_ANIM_MULT;
+        if (dmg < 1f) dmg = 1f;
+        return dmg;
+    }
+
+    private static float getVoidAbyssEffectiveWill(EntityPlayer owner){
+        if (owner == null) return 0f;
+
+        // DBC: include form multipliers etc if available
+        try {
+            if (owner instanceof EntityPlayerMP){
+                return frbGetEffectiveWill((EntityPlayerMP) owner);
+            }
+        } catch (Throwable ignored) {}
+
+        // Vanilla fallback: use base max HP as a rough "power" proxy
+        float hp = 0f;
+        try {
+            hp = owner.getMaxHealth();
+        } catch (Throwable ignored) {}
+
+        // map 20hp -> 60 "will-ish" baseline, so low-power players don't get 0 damage
+        if (hp < 1f) hp = 1f;
+        float approx = 60f + (hp - 20f) * 2.0f;
+        if (approx < 60f) approx = 60f;
+        return approx;
+    }
+
+    // Legacy AoE detonation helper (not used by the AoE/delay design, but kept for back-compat).
+    private static void voidAbyssDetonateAoE(EntityPlayer owner, EntityLivingBase center, boolean isAnim, float dmg){
+        if (owner == null || center == null) return;
+        World w = owner.worldObj;
+        if (w == null || w.isRemote) return;
+
+        float r = isAnim ? VOID_ABYSS_MARK_DETONATE_RADIUS_ANIM : VOID_ABYSS_MARK_DETONATE_RADIUS;
+        if (r <= 0f) r = 0f;
+
+        double kb = isAnim ? VOID_ABYSS_MARK_DETONATE_KB_ANIM : VOID_ABYSS_MARK_DETONATE_KB;
+
+        // Burst visuals at the center
+        spawnVoidGravityBurstParticles(w,
+                center.posX,
+                center.posY + center.height * 0.55,
+                center.posZ,
+                isAnim ? 2.25f : 1.75f,
+                isAnim);
+
+        if (r <= 0f){
+            // single target fallback
+            try { dealProcDamage(owner, center, dmg, "abyssMarkSingle"); } catch (Throwable ignored) {}
+            return;
+        }
+
+        AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(
+                center.posX - r, center.posY - r, center.posZ - r,
+                center.posX + r, center.posY + r, center.posZ + r
+        );
+
+        List list;
+        try {
+            list = w.getEntitiesWithinAABB(EntityLivingBase.class, bb);
+        } catch (Throwable t){
+            return;
+        }
+
+        if (list == null) return;
+
+        double r2 = (double)r * (double)r;
+        for (int i = 0; i < list.size(); i++){
+            Object o = list.get(i);
+            if (!(o instanceof EntityLivingBase)) continue;
+            EntityLivingBase t = (EntityLivingBase) o;
+
+            if (t == owner) continue;
+            if (t.isDead) continue;
+            if (!VOID_ABYSS_MARK_AFFECT_PLAYERS && (t instanceof EntityPlayer)) continue;
+
+            double dx = t.posX - center.posX;
+            double dy = (t.posY + t.height * 0.5D) - (center.posY + center.height * 0.5D);
+            double dz = t.posZ - center.posZ;
+
+            double d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 > r2) continue;
+
+            double dist = Math.sqrt(d2);
+
+            float falloff = (float)(1.0D - (dist / (double)r));
+            if (falloff < 0.25f) falloff = 0.25f;
+            if (falloff > 1.0f) falloff = 1.0f;
+
+            float hit = dmg * falloff;
+
+            try {
+                dealProcDamage(owner, t, hit, "abyssMarkAoE");
+            } catch (Throwable ignored) {}
+
+            if (kb > 0D){
+                try {
+                    double inv = (dist > 0.0001D) ? (1.0D / dist) : 1.0D;
+                    double nx = dx * inv;
+                    double nz = dz * inv;
+
+                    double k = kb * 0.85D * (double)falloff;
+                    double vy = 0.10D + (kb * 0.05D) * (double)falloff;
+
+                    t.addVelocity(nx * k, vy, nz * k);
+                    t.velocityChanged = true;
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    private static void tickVoidAbyssMark(EntityLivingBase ent, NBTTagCompound data, World w, long now){
+        if (ent == null || data == null || w == null || w.isRemote) return;
+
+        long expire = data.getLong(VAM_KEY_EXPIRE);
+        if (expire <= 0L) return;
+
+        boolean isAnim = false;
+        try { isAnim = data.getBoolean(VAM_KEY_ANIM); } catch (Throwable ignored) {}
+
+        // While marked: visible particles
+        if (now < expire){
+            if ((now & 1L) == 0L){
+                spawnVoidGravityParticles(w,
+                        ent.posX,
+                        ent.posY + ent.height * 0.55,
+                        ent.posZ,
+                        isAnim ? 1.35f : 1.10f,
+                        (int) (now & 0x7FFFFFFF),
+                        isAnim);
+            }
+            return;
+        }
+
+        // Detonation time
+        int ownerId = data.getInteger(VAM_KEY_OWNER);
+        EntityPlayer owner = null;
+        if (ownerId != 0){
+            Entity o = w.getEntityByID(ownerId);
+            if (o instanceof EntityPlayer){
+                owner = (EntityPlayer) o;
+            }
+        }
+
+        // Always clear the mark (even if owner is offline)
+        clearVoidAbyssMark(data);
+
+        if (owner != null && !ent.isDead){
+            float dmg = computeVoidAbyssDetonationDamage(owner, isAnim);
+            dmg = scaleForPvp(ent, dmg);
+
+            if (dmg > 0f){
+                try {
+                    dealProcDamage(owner, ent, dmg, "abyssMarkDet");
+                } catch (Throwable ignored) {}
+            }
+
+            // light knockback (optional)
+            double kb = isAnim ? VOID_ABYSS_MARK_DETONATE_KB_ANIM : VOID_ABYSS_MARK_DETONATE_KB;
+            if (kb > 0D){
+                try {
+                    double dx = ent.posX - owner.posX;
+                    double dz = ent.posZ - owner.posZ;
+                    double dist = Math.sqrt(dx*dx + dz*dz);
+                    if (dist < 0.001D) dist = 0.001D;
+                    double nx = dx / dist;
+                    double nz = dz / dist;
+                    ent.addVelocity(nx * kb, 0.10D + kb * 0.08D, nz * kb);
+                    ent.velocityChanged = true;
+                } catch (Throwable ignored) {}
+            }
+        }
+
+        // Burst particles + sound on detonation (visible regardless of owner presence)
+        spawnVoidGravityBurstParticles(w,
+                ent.posX,
+                ent.posY + ent.height * 0.55,
+                ent.posZ,
+                isAnim ? 2.15f : 1.75f,
+                isAnim);
+
+        try {
+            w.playSoundEffect(ent.posX, ent.posY, ent.posZ, "random.explode", 0.50f, isAnim ? 1.15f : 1.05f);
+            w.playSoundEffect(ent.posX, ent.posY, ent.posZ, "portal.travel", 0.45f, isAnim ? 0.75f : 0.90f);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void clearVoidAbyssMark(NBTTagCompound data){
+        if (data == null) return;
+        data.removeTag(VAM_KEY_OWNER);
+        data.removeTag(VAM_KEY_STACKS);
+        data.removeTag(VAM_KEY_EXPIRE);
+        data.removeTag(VAM_KEY_ANIM);
+    }
+
+    private static void stampVoidHudMarks(EntityPlayer owner, ItemStack host, int stacks, int maxStacks, int targetId, long expireTick){
+        if (host == null) return;
+
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        tag.setInteger("HexVoidHudMarks", Math.max(0, stacks));
+        tag.setInteger("HexVoidHudMarkMax", Math.max(0, maxStacks));
+        tag.setInteger("HexVoidHudMarkTarget", targetId);
+        tag.setLong("HexVoidHudMarkExpire", expireTick);
+
+        host.setTagCompound(tag);
+
+        // push changes to client ASAP in MP
+        if (owner instanceof EntityPlayerMP){
+            try {
+                ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+
+
+    private static void clearVoidEntropy(EntityLivingBase ent){
+        if (ent == null) return;
+        NBTTagCompound d = ent.getEntityData();
+        if (d == null) return;
+        d.removeTag(VE_KEY_END);
+        d.removeTag(VE_KEY_NEXT);
+        d.removeTag(VE_KEY_OWNER);
+        d.removeTag(VE_KEY_DMG);
+        d.removeTag(VE_KEY_INT);
+        d.removeTag(VE_KEY_TOTAL);
+        d.removeTag(VE_KEY_ANIM);
+    }
+
+    private static float computeVoidEntropyTickDamage(EntityPlayer p, boolean isAnim){
+        if (p == null) return VOID_ENTROPY_BONUS_DAMAGE;
+        double str = getStrengthEffective(p);
+        float dmg = (float)(str * (double)VOID_ENTROPY_STRENGTH_SCALE) + VOID_ENTROPY_BONUS_DAMAGE;
+        if (isAnim) dmg *= VOID_ENTROPY_ANIM_MULT;
+        if (dmg < 0f) dmg = 0f;
+        return dmg;
+    }
+
+    /** DBC Strength-aware stat read; falls back to vanilla attack damage if DBC attrs aren't present. */
+    private static double getStrengthEffective(EntityPlayer p){
+        if (p == null) return 0.0;
+        // Prefer our provider if it exists (keeps your multi/form logic centralized)
+        try {
+            Class<?> c = Class.forName("com.example.examplemod.server.HexDBCProcDamageProvider");
+            try {
+                Method m = c.getMethod("getStrengthEffective", EntityPlayer.class);
+                Object r = m.invoke(null, p);
+                if (r instanceof Number){
+                    double v = ((Number) r).doubleValue();
+                    if (v > 0.0) return v;
+                }
+            } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {}
+
+        double v = 0.0;
+        try {
+            net.minecraft.entity.ai.attributes.IAttributeInstance inst =
+                    p.getAttributeMap().getAttributeInstanceByName("dbc.Strength");
+            if (inst != null) v = inst.getAttributeValue();
+        } catch (Throwable ignored) {}
+
+        // Apply STR multi when it looks meaningful
+        try {
+            if (v > 0.0){
+                net.minecraft.entity.ai.attributes.IAttributeInstance mi =
+                        p.getAttributeMap().getAttributeInstanceByName("dbc.Strength.Multi");
+                if (mi != null){
+                    double mul = mi.getAttributeValue();
+                    if (mul > 1.05D && v < 50000D) v = v * mul;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        if (v > 0.0) return v;
+
+        // Vanilla fallback
+        try {
+            net.minecraft.entity.ai.attributes.IAttributeInstance ad = p.getEntityAttribute(net.minecraft.entity.SharedMonsterAttributes.attackDamage);
+            if (ad != null) return ad.getAttributeValue();
+        } catch (Throwable ignored) {}
+        return 0.0;
+    }
+
+    /**
+     * Heal DBC "Body" by an absolute amount using the existing percent-bridge when possible.
+     * Falls back to vanilla heal if DBC bridge isn't available.
+     */
+    private static boolean dbcRestoreHealthAbs(EntityPlayer p, float abs){
+        if (p == null) return false;
+        if (abs <= 0f) return true;
+
+        // Compute % from max BODY if present
+        float max = Float.NaN;
+        try {
+            NBTTagCompound root = p.getEntityData();
+            max = readFirstNumber(root, DBC_BODY_MAX_KEYS);
+            if (!(max > 0f) && root != null && root.hasKey("PlayerPersisted", 10)){
+                NBTTagCompound pp = root.getCompoundTag("PlayerPersisted");
+                float m2 = readFirstNumber(pp, DBC_BODY_MAX_KEYS);
+                if (m2 > 0f) max = m2;
+            }
+        } catch (Throwable ignored) {}
+
+        if (max > 0f){
+            float pct = abs / max;
+            if (pct < 0f) pct = 0f;
+            if (pct > 1f) pct = 1f;
+            return dbcRestoreHealthPercent(p, pct);
+        }
+
+        // If we can't determine DBC max, try a small percent guess (won't be perfect)
+        return false;
+    }
+
+
+    /** Adds to DBC "Body" directly via NBT (mirrors the Fractured-style damage bridge, but healing). */
+    private static boolean dbcAddBodyAbsViaNbt(EntityLivingBase ent, float abs){
+        if (ent == null) return false;
+        if (abs <= 0f) return true;
+
+        try {
+            NBTTagCompound ed = ent.getEntityData();
+            if (ed == null) return false;
+
+            // Match the damage bridge selection logic:
+            // Prefer PlayerPersisted if it already stores Body, otherwise use root entity data.
+            NBTTagCompound store = null;
+            boolean storeIsPersisted = false;
+
+            if (ed.hasKey("PlayerPersisted", 10)){
+                NBTTagCompound pp = ed.getCompoundTag("PlayerPersisted");
+                if (pp != null && pp.hasKey("jrmcBdy", 99)){
+                    store = pp;
+                    storeIsPersisted = true;
+                }
+            }
+            if (store == null && ed.hasKey("jrmcBdy", 99)){
+                store = ed;
+            }
+            if (store == null) return false;
+
+            // Numeric-safe read (type 99 == any numeric)
+            double body = store.getDouble("jrmcBdy");
+            if (Double.isNaN(body) || Double.isInfinite(body)) return false;
+
+            // Optional clamp to max if present
+            double max = Double.NaN;
+            if (store.hasKey("jrmcBdyF", 99)){
+                max = store.getDouble("jrmcBdyF");
+            } else if (store.hasKey("jrmcBdyMax", 99)){
+                max = store.getDouble("jrmcBdyMax");
+            } else if (store.hasKey("jrmcBdyM", 99)){
+                max = store.getDouble("jrmcBdyM");
+            }
+
+            double nb = body + (double) abs;
+            if (nb < 0D) nb = 0D;
+            if (max > 0D && nb > max) nb = max;
+            if (nb > 2.147e9D) nb = 2.147e9D; // keep in int-ish range, DBC uses ints in many builds
+
+            // Write as float + mark changed (DBC uses this to sync).
+            store.setFloat("jrmcBdy", (float) nb);
+            store.setBoolean("jrmcDamaged", true);
+
+            // If we modified PlayerPersisted, ensure it stays attached.
+            if (storeIsPersisted){
+                ed.setTag("PlayerPersisted", store);
+            }
+
+            return true;
+        } catch (Throwable ignored){
+            return false;
+        }
+    }
+
+
+    /** Pull 'to' toward a fixed point. (Void GW uses this; other procs use knockback helpers.) */
+    private static void pullTowardPoint(EntityLivingBase to, double cx, double cy, double cz, double horiz, double yBoost){
+        if (to == null) return;
+
+        double dx = cx - to.posX;
+        double dz = cz - to.posZ;
+        double d2 = dx * dx + dz * dz;
+        if (d2 < 1.0e-6) return;
+
+        double inv = 1.0 / Math.sqrt(d2);
+        dx *= inv;
+        dz *= inv;
+
+        try {
+            to.addVelocity(dx * horiz, yBoost, dz * horiz);
+            to.velocityChanged = true;
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Best-effort void type discovery:
+     * - First scans the host item's NBT recursively for known keys
+     * - Then tries to inspect actual socketed gem ItemStacks via reflection (if available)
+     */
+    private static String readVoidTypeFromHostItem(ItemStack host){
+        if (host == null) return null;
+
+        // 1) Deep scan host NBT (fast + works if socket system stores gem NBT inside host)
+        try {
+            NBTTagCompound tag = host.getTagCompound();
+            if (tag != null){
+                String v =
+                        findStringDeep(tag, "HexVoidType",
+                                findStringDeep(tag, "HexVoidOrbType",
+                                        findStringDeep(tag, "VoidType",
+                                                findStringDeep(tag, "VoidOrbType", null))));
+                if (v != null && v.trim().length() > 0) return v;
+            }
+        } catch (Throwable ignored) {}
+
+        // 2) Try to inspect socketed gem ItemStacks
+        try {
+            int filled = getSocketsFilled(host);
+            for (int i = 0; i < filled; i++){
+                Object out = null;
+                try { out = M_getGemAt.invoke(null, host, Integer.valueOf(i)); } catch (Throwable ignored) {}
+
+                if (out instanceof ItemStack){
+                    ItemStack gem = (ItemStack) out;
+                    String key = normalizeGemKeyForCompare(gem);
+                    if (GEM_VOID_FLAT.equals(key) || GEM_VOID_ANIM.equals(key)){
+                        NBTTagCompound gt = gem.getTagCompound();
+                        if (gt != null){
+                            String v = gt.getString("HexVoidType");
+                            if (v != null && v.trim().length() > 0) return v;
+                            v = gt.getString("HexVoidOrbType");
+                            if (v != null && v.trim().length() > 0) return v;
+                            v = gt.getString("VoidType");
+                            if (v != null && v.trim().length() > 0) return v;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        return null;
+    }
+
+    private static String normalizeGemKeyForCompare(ItemStack gem){
+        if (gem == null) return "";
+        // In many builds, the gem key is stored in gem.getTagCompound().getString("HexGemKey").
+        // If not present, this returns empty and we can't match; host deep-scan usually covers that.
+        try {
+            NBTTagCompound t = gem.getTagCompound();
+            if (t != null){
+                String k = t.getString("HexGemKey");
+                if (k != null) return k.trim();
+            }
+        } catch (Throwable ignored) {}
+        return "";
+    }
+
+    private static String findStringDeep(NBTTagCompound root, String key, String fallback){
+        if (root == null || key == null) return fallback;
+
+        try {
+            if (root.hasKey(key)){
+                String v = root.getString(key);
+                if (v != null && v.trim().length() > 0) return v;
+            }
+
+            // recurse into compounds/lists
+            @SuppressWarnings("unchecked")
+            java.util.Set<String> keys = root.func_150296_c();
+            for (String k : keys){
+                NBTBase b = root.getTag(k);
+                if (b == null) continue;
+
+                byte id = b.getId();
+                if (id == 10){ // compound
+                    String v = findStringDeep((NBTTagCompound) b, key, null);
+                    if (v != null) return v;
+                } else if (id == 9){ // list
+                    net.minecraft.nbt.NBTTagList list = (net.minecraft.nbt.NBTTagList) b;
+                    int n = list.tagCount();
+                    for (int i = 0; i < n; i++){
+                        NBTBase li = list.getCompoundTagAt(i);
+                        if (li instanceof NBTTagCompound){
+                            String v = findStringDeep((NBTTagCompound) li, key, null);
+                            if (v != null) return v;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        return fallback;
+    }
+
 
 
     /**
@@ -2200,9 +5061,9 @@ public final class HexOrbEffectsController {
         return new EntityDamageSource("hexorb", attacker);
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // SWIRL UPDATE (server tick while a target is marked)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     @SubscribeEvent
     public void onLivingUpdate(LivingUpdateEvent e){
         if (e == null || e.entityLiving == null) return;
@@ -2225,12 +5086,24 @@ public final class HexOrbEffectsController {
         if (ent instanceof EntityPlayer){
             tickHealBuff((EntityPlayer) ent, data, w, now);
             tickFirePunchBuff((EntityPlayer) ent, data, w, now);
+            tickVoidGravityWell((EntityPlayer) ent, data, w, now);
         }
 
         // Rainbow Rush update (independent of swirl)
         tickRainbowRush(ent, data, w, now);
         tickFireDot(ent, data, w, now);
+        tickVoidEntropy(ent, data, w, now);
+        tickVoidAbyssMark(ent, data, w, now);
 
+
+        if (ent instanceof EntityPlayer){
+            EntityPlayer p = (EntityPlayer) ent;
+            tickVoidNullShellCharge(p, w, data, now);
+            tickVoidNullShellDefenseBuff(p, w, data, now);
+            tickVoidNullShellPushCharge(w, p, data, now);
+            // Step 1: Null Shell trail tick
+            maybeTickNullShellTrailsOncePerWorld(w);
+        }
         long end = data.getLong(SW_KEY_END);
         if (end <= 0L) return;
         if (now >= end){
@@ -2462,15 +5335,15 @@ public final class HexOrbEffectsController {
 
 
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // RAINBOW RUSH (sequence proc)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
 
     /** Returns true if the rush was started. */
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Variant: Rainbow Fist (instant mega punch)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static void doRainbowFist(EntityPlayer attacker, EntityLivingBase primary, float baseDamage, boolean isAnim){
         if (attacker == null || primary == null) return;
         World w = primary.worldObj;
@@ -2988,9 +5861,9 @@ public final class HexOrbEffectsController {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // COOLDOWN / RNG
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static boolean roll(EntityPlayer p, double chance){
         if (chance <= 0) return false;
         if (chance >= 1) return true;
@@ -3027,6 +5900,17 @@ public final class HexOrbEffectsController {
         data.setLong(key, now + cdTicks);
         return true;
     }
+    /** Overload when the caller already computed serverNow(). */
+    private static boolean cooldownReady(EntityPlayer p, String key, int cdTicks, long now){
+        if (cdTicks <= 0) return true;
+        if (p == null) return true;
+        NBTTagCompound data = p.getEntityData();
+        long next = data.getLong(key);
+        if (next != 0L && now < next) return false;
+        data.setLong(key, now + cdTicks);
+        return true;
+    }
+
 
     /** de-dupe Attack+Hurt in the same tick for the same target. */
     private static boolean markOncePerTick(EntityPlayer p, EntityLivingBase target){
@@ -3044,9 +5928,9 @@ public final class HexOrbEffectsController {
         return true;
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // VFX helpers
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static void playRainbowBurst(World w, double x, double y, double z){
         if (!(w instanceof WorldServer)) return;
         WorldServer ws = (WorldServer) w;
@@ -3259,9 +6143,9 @@ public final class HexOrbEffectsController {
         return v < 0f ? 0f : (v > 1f ? 1f : v);
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Knockback
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static void applyKnockbackFrom(EntityPlayer from, EntityLivingBase to){
         applyKnockbackFrom(from, to, KB_H, KB_Y);
     }
@@ -3284,9 +6168,9 @@ public final class HexOrbEffectsController {
     }
 
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Socket detection (reflection, supports older/newer HexSocketAPI)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static Method M_getFilled;
     private static Method M_getSocketsFilled;
     private static Method M_getGemKeyAt;
@@ -3338,6 +6222,57 @@ public final class HexOrbEffectsController {
         return 0;
     }
 
+    // Some code paths call this name; keep it as an alias of getFilled().
+    private static int getSocketsFilled(ItemStack stack){
+        return getFilled(stack);
+    }
+
+    private static String itemLabel(ItemStack s){
+        if (s == null) return "null";
+        try {
+            Item it = s.getItem();
+            String id = (it != null && Item.itemRegistry != null) ? String.valueOf(Item.itemRegistry.getNameForObject(it)) : "?";
+            return s.getDisplayName() + " (" + id + ") x" + s.stackSize;
+        } catch (Throwable ignored) {
+            return String.valueOf(s);
+        }
+    }
+
+    /**
+     * Stores HUD-friendly fields on the host ItemStack so the CLIENT can render the type/ability + cooldown bar
+     * without needing a custom S2C packet.
+     *
+     * NOTE: Inventory stack NBT is synced to the client when it changes, so we only write this on proc (not every tick).
+     */
+    private static void stampVoidHud(EntityPlayer owner, ItemStack host, String voidType, String abilityName, long cdEndTick, long activeEndTick, int cdMaxTicks){
+        if (host == null) return;
+
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        if (voidType != null && voidType.length() > 0){
+            tag.setString("HexVoidHudType", voidType);
+        }
+        if (abilityName != null && abilityName.length() > 0){
+            tag.setString("HexVoidHudAbility", abilityName);
+        }
+
+        tag.setLong("HexVoidHudCDEnd", cdEndTick);
+        tag.setLong("HexVoidHudActiveEnd", activeEndTick);
+        tag.setInteger("HexVoidHudCDMax", cdMaxTicks);
+
+        host.setTagCompound(tag);
+
+        // push changes to client ASAP in MP
+        if (owner instanceof EntityPlayerMP){
+            try {
+                ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+
+
     private static String getGemKeyAt(ItemStack stack, int idx){
         try {
             Object out = null;
@@ -3372,9 +6307,9 @@ public final class HexOrbEffectsController {
         return k;
     }
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     // Debug helpers
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static void debugOncePerSecond(EntityPlayer p, String msg){
         if (!DEBUG_PROC || p == null) return;
 
@@ -3419,7 +6354,7 @@ public final class HexOrbEffectsController {
     }
 
 
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
 
     // Returns MODIFIED WillPower (includes form multipliers) when DBC exposes it as an attribute.
     // Used only for FRACTURED flying-blast dynamic scaling.
@@ -3463,7 +6398,7 @@ public final class HexOrbEffectsController {
 
 
     // FRACTURED: Flying blast tick (server-side)
-    // ─────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------
     private static void tickFracturedFlyingBlast(net.minecraft.entity.player.EntityPlayerMP p){
         if (p == null || p.worldObj == null || p.worldObj.isRemote) return;
 
@@ -3511,13 +6446,10 @@ public final class HexOrbEffectsController {
         }
 
 
-        boolean endBoom = (!data.hasKey(FRB_KEY_END_BOOM)) || data.getBoolean(FRB_KEY_END_BOOM);
-
-
         // Expired -> explode/dissipate at current position (and AoE if configured)
         if (ticksLeft <= 0){
             spawnFrbImpactFX(p, x, y, z);
-            if (aoeRad > 0D && aoeDmg > 0f && endBoom){
+            if (aoeRad > 0D && aoeDmg > 0f){
                 frbExplode(p, x, y, z, aoeRad, aoeDmg, kb, null);
             }
             clearFrb(data);
@@ -3643,7 +6575,6 @@ public final class HexOrbEffectsController {
         if (p.worldObj instanceof net.minecraft.world.WorldServer){
             ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("spell", x, y, z, 3, 0.04D, 0.04D, 0.04D, 0.01D);
             ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("fireworksSpark", x, y, z, 1, 0.02D, 0.02D, 0.02D, 0.02D);
-            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("reddust", x, y, z, 2, 1.00D, 0.95D, 0.20D, 0.0D);
         }
     }
 
@@ -3690,12 +6621,6 @@ public final class HexOrbEffectsController {
             if (blue < 2) blue = 2;
             if (blue > 20) blue = 20;
             ws.func_147487_a("reddust", x, y, z, blue, 0.20D, 0.75D, 1.00D, 0.0D);
-
-            // Warm yellow tint (reddust uses offsets as RGB on the client)
-            int gold = (int) Math.round(2.0D + rad * 9.0D);
-            if (gold < 2) gold = 2;
-            if (gold > 18) gold = 18;
-            ws.func_147487_a("reddust", x, y, z, gold, 1.00D, 0.95D, 0.20D, 0.0D);
 
             if (rad >= 1.10D){
                 int crit = (int) Math.round(rad * 4.0D);
@@ -3791,9 +6716,6 @@ public final class HexOrbEffectsController {
         if (p.worldObj instanceof net.minecraft.world.WorldServer){
             ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("crit", x, y, z, 16, 0.25D, 0.25D, 0.25D, 0.12D);
             ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("spell", x, y, z, 24, 0.35D, 0.35D, 0.35D, 0.04D);
-            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("fireworksSpark", x, y, z, 12, 0.30D, 0.30D, 0.30D, 0.10D);
-            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("reddust", x, y, z, 26, 1.00D, 0.95D, 0.20D, 0.0D);
-            ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("flame", x, y, z, 8, 0.22D, 0.18D, 0.22D, 0.02D);
         }
     }
 

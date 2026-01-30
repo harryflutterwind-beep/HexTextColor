@@ -1,5 +1,7 @@
 package com.example.examplemod.network;
 
+import com.example.examplemod.server.HexOrbEffectsController;
+
 import cpw.mods.fml.common.network.simpleimpl.IMessage;
 import cpw.mods.fml.common.network.simpleimpl.IMessageHandler;
 import cpw.mods.fml.common.network.simpleimpl.MessageContext;
@@ -18,6 +20,7 @@ import java.util.List;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import com.example.examplemod.server.HexDBCProcDamageProvider;
+import com.example.examplemod.server.HexDBCBridgeDamageApplier;
 import cpw.mods.fml.common.network.NetworkRegistry;
 import cpw.mods.fml.common.network.NetworkRegistry.TargetPoint;
 import java.lang.reflect.Field;
@@ -155,6 +158,28 @@ public class PacketFracturedAction implements IMessage {
     private static void handleOrbAction(EntityPlayerMP p, int action) {
         if (p == null || p.worldObj == null || p.worldObj.isRemote) return;
 
+        // ------------------------------------------------------------------------
+        // Void Orb (Null Shell) actions (5-8)
+        // ------------------------------------------------------------------------
+        if (action >= 5 && action <= 8) {
+            boolean ok = false;
+            try {
+                if (action == 5) ok = HexOrbEffectsController.tryNullShellActiveDash(p);
+                else if (action == 6) ok = HexOrbEffectsController.tryNullShellDefenseBuff(p);
+                else if (action == 7) ok = HexOrbEffectsController.tryNullShellPushStart(p);
+                else if (action == 8) ok = HexOrbEffectsController.tryNullShellPushRelease(p);
+            } catch (Throwable t) {
+                ok = false;
+            }
+
+            // Quick packet debugger: if we get here but the action is denied, print once.
+            if (!ok && HexOrbEffectsController.VOID_NULL_SHELL_DEBUG) {
+                p.addChatMessage(new net.minecraft.util.ChatComponentText("§8[NSDBG] §7Action " + action + " received (denied)."));
+            }
+            return;
+        }
+
+
         // Prefer FRACTURED if equipped; otherwise allow SOLAR (Light type) beams.
         ItemStack stack = findFirstEquippedFractured(p);
         if (stack != null) {
@@ -283,9 +308,11 @@ public class PacketFracturedAction implements IMessage {
     private static ItemStack findFirstEquippedSolarLight(EntityPlayerMP p) {
         if (p == null) return null;
 
+        // Held
         ItemStack held = p.getCurrentEquippedItem();
         if (isSolarLight(held)) return held;
 
+        // Armor
         if (p.inventory != null && p.inventory.armorInventory != null) {
             for (int i = 0; i < p.inventory.armorInventory.length; i++) {
                 ItemStack s = p.inventory.armorInventory[i];
@@ -349,21 +376,65 @@ public class PacketFracturedAction implements IMessage {
         return v;
     }
 
+    private static double getWillPowerEffective(EntityPlayerMP p){
+        double v = 0D;
+        try { v = HexDBCProcDamageProvider.getWillPowerEffective(p); } catch (Throwable ignored) {}
+        if (v < 0D) v = 0D;
+        return v;
+    }
+
     private static float computeSolarBeamDamage(EntityPlayerMP p, boolean superBeam){
-        double str = getStrengthEffective(p);
-        double base = 32000D + (str * 24.0D);
+        // Match Entropy's scaling philosophy: compute a REAL DBC "Body" damage number
+        // from an effective stat (includes form multies when available), then feed that
+        // through the same DBC bridge damage applier.
+        //
+        // We use WillPower here (requested), not event damage.
+        double wil = Math.floor(getWillPowerEffective(p));
+
+        // Tuned to land in the "few thousand" range for mid/high WIL,
+        // without exploding into millions like the old raw proc-scale numbers.
+        double base = 1100D + (wil * 0.14D);
+
         if (superBeam) base *= 3.35D;
-        if (base < 18000D) base = 18000D;
+
+        // sane clamps in DBC Body units
+        if (base < 1500D) base = 1500D;
         if (superBeam) {
-            if (base > 26000000D) base = 26000000D;
+            if (base > 450000D) base = 450000D;
         } else {
-            if (base > 9000000D) base = 9000000D;
+            if (base > 160000D) base = 160000D;
         }
         return (float) base;
     }
 
+
     private static final String TAG_PLAYER_PERSISTED = "PlayerPersisted";
     private static final String TAG_DBC_BODY = "jrmcBdy";
+
+    // Same DBC bridge applier used by Entropy proc damage (via HexOrbEffectsController.DAMAGE_APPLIER)
+    private static final HexDBCBridgeDamageApplier SOLAR_DAMAGE_APPLIER = new HexDBCBridgeDamageApplier();
+
+    /**
+     * Apply Solar Beam damage using the same DBC bridge path that Entropy uses.
+     * (Body damage for DBC targets; vanilla fallback for non-DBC.)
+     */
+    private static void applySolarBeamDamageOrFallback(EntityPlayerMP src, EntityLivingBase target, float bodyDamage){
+        if (src == null || target == null || bodyDamage <= 0f) return;
+
+        // Entropy's proc path bypasses i-frames so effects always land; we do the same here.
+        try {
+            target.hurtResistantTime = 0;
+            target.hurtTime = 0;
+        } catch (Throwable ignored) {}
+
+        try {
+            SOLAR_DAMAGE_APPLIER.deal(src, target, bodyDamage);
+            return;
+        } catch (Throwable ignored) {}
+
+        // Last resort fallback (direct body subtraction / vanilla hearts)
+        applyDbcBodyDamageOrFallback(src, target, bodyDamage);
+    }
 
     // DBC-first body damage; vanilla fallback
     private static void applyDbcBodyDamageOrFallback(EntityPlayerMP src, EntityLivingBase target, float dbcDamage){
@@ -409,6 +480,146 @@ public class PacketFracturedAction implements IMessage {
         if (vanilla < 2.0F) vanilla = 2.0F;
         if (vanilla > 22.0F) vanilla = 22.0F;
         try { target.attackEntityFrom(DamageSource.causePlayerDamage(src), vanilla); } catch (Throwable ignored) {}
+    }
+
+    // ---------------------------------------------------------------------
+    // Entropy-style proc damage (uses your shared provider if present)
+    // ---------------------------------------------------------------------
+
+    private static volatile Method CACHED_PROC_DAMAGE;
+
+    /**
+     * Tries to apply damage using HexDBCProcDamageProvider's "proc" damage method (the same path your Entropy uses).
+     * If we can't find/invoke it, we fall back to direct DBC body subtraction (and then vanilla hearts).
+     */
+    private static void applyEntropyStyleDamageOrFallback(EntityPlayerMP src, EntityLivingBase target, float rawDamage){
+        if (src == null || target == null || rawDamage <= 0f) return;
+        if (tryProcDamageProvider(src, target, rawDamage)) return;
+
+        // Fallback safety: the proc path usually interprets "rawDamage" in your orb-proc scale.
+        // If that method can't be resolved for some reason, convert to a reasonable BODY hit.
+        float fallbackBody = rawDamage * 0.0060F; // ~4.9k from ~820k raw
+        if (fallbackBody < 800.0F) fallbackBody = 800.0F;
+        if (fallbackBody > 45000.0F) fallbackBody = 45000.0F;
+        applyDbcBodyDamageOrFallback(src, target, fallbackBody);
+    }
+
+    private static boolean tryProcDamageProvider(EntityPlayerMP src, EntityLivingBase target, float rawDamage){
+        try {
+            Method m = CACHED_PROC_DAMAGE;
+            if (m == null) {
+                m = resolveProcDamageProviderMethod();
+                CACHED_PROC_DAMAGE = m;
+            }
+            if (m == null) return false;
+
+            Class<?>[] pt = m.getParameterTypes();
+            Object[] args = new Object[pt.length];
+
+            // We only resolve methods that match (src, target, amount[, extra])
+            args[0] = src;
+            args[1] = target;
+
+            // amount
+            if (pt[2] == float.class || pt[2] == Float.class) {
+                args[2] = rawDamage;
+            } else if (pt[2] == double.class || pt[2] == Double.class) {
+                args[2] = (double) rawDamage;
+            } else if (pt[2] == int.class || pt[2] == Integer.class) {
+                args[2] = (int) Math.round(rawDamage);
+            } else {
+                return false;
+            }
+
+            // optional 4th param (best-effort)
+            if (pt.length >= 4) {
+                Class<?> extra = pt[3];
+                if (extra == boolean.class || extra == Boolean.class) {
+                    args[3] = Boolean.TRUE;
+                } else if (DamageSource.class.isAssignableFrom(extra)) {
+                    args[3] = DamageSource.causePlayerDamage(src);
+                } else if (extra == int.class || extra == Integer.class) {
+                    args[3] = 0;
+                } else if (extra == float.class || extra == Float.class) {
+                    args[3] = 0.0F;
+                } else if (extra == double.class || extra == Double.class) {
+                    args[3] = 0.0D;
+                } else {
+                    // Unknown extra param type
+                    return false;
+                }
+            }
+
+            Object ret = m.invoke(null, args);
+            if (ret instanceof Boolean) return ((Boolean) ret).booleanValue();
+            return true; // void / numeric / other => assume it succeeded
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
+     * Resolve a static "proc damage" style method on HexDBCProcDamageProvider.
+     * We do this reflectively so your provider can rename it without breaking compilation.
+     */
+    private static Method resolveProcDamageProviderMethod(){
+        try {
+            Method[] ms = HexDBCProcDamageProvider.class.getMethods();
+            Method best = null;
+            int bestScore = -1;
+
+            for (int i = 0; i < ms.length; i++) {
+                Method m = ms[i];
+                if (m == null) continue;
+                if (!Modifier.isStatic(m.getModifiers())) continue;
+
+                Class<?>[] pt = m.getParameterTypes();
+                if (pt == null || pt.length < 3 || pt.length > 4) continue;
+
+                // (EntityPlayerMP src, EntityLivingBase target, number amount[, extra])
+                if (!EntityPlayerMP.class.isAssignableFrom(pt[0])) continue;
+                if (!EntityLivingBase.class.isAssignableFrom(pt[1])) continue;
+
+                Class<?> amt = pt[2];
+                boolean okAmt = (amt == float.class || amt == Float.class || amt == double.class || amt == Double.class || amt == int.class || amt == Integer.class);
+                if (!okAmt) continue;
+
+                int score = 0;
+                String n = m.getName();
+                if (n != null) {
+                    String ln = n.toLowerCase();
+                    if (ln.equals("applyowneddamage")) score += 1200;
+                    if (ln.contains("entropy")) score += 1100;
+                    if (ln.contains("owned")) score += 900;
+                    if (ln.contains("proc")) score += 800;
+                    if (ln.contains("damage")) score += 700;
+                    if (ln.contains("apply")) score += 200;
+                    if (ln.contains("do")) score += 80;
+                }
+
+                if (pt.length == 3) score += 60;
+                if (amt == float.class || amt == Float.class) score += 30;
+                if (amt == double.class || amt == Double.class) score += 20;
+
+                // If there's an extra param, only accept common safe types
+                if (pt.length == 4) {
+                    Class<?> extra = pt[3];
+                    boolean okExtra = (extra == boolean.class || extra == Boolean.class || DamageSource.class.isAssignableFrom(extra)
+                            || extra == int.class || extra == Integer.class || extra == float.class || extra == Float.class
+                            || extra == double.class || extra == Double.class);
+                    if (!okExtra) continue;
+                }
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = m;
+                }
+            }
+            if (best != null) {
+                try { best.setAccessible(true); } catch (Throwable ignored) {}
+            }
+            return best;
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     private static void fireSolarBeam(EntityPlayerMP p, boolean superBeam) {
@@ -492,7 +703,7 @@ public class PacketFracturedAction implements IMessage {
         float dmg = computeSolarBeamDamage(p, superBeam);
 
         if (hit != null) {
-            applyDbcBodyDamageOrFallback(p, hit, dmg);
+            applySolarBeamDamageOrFallback(p, hit, dmg);
 
             // knockback
             double kb = superBeam ? 0.95D : 0.55D;
@@ -525,7 +736,7 @@ public class PacketFracturedAction implements IMessage {
                         if (dist > aoe || dist < 0.001D) continue;
 
                         float falloff = (float) Math.max(0.15D, 1.0D - (dist / aoe));
-                        applyDbcBodyDamageOrFallback(p, elb, dmg * 0.70F * falloff);
+                        applySolarBeamDamageOrFallback(p, elb, dmg * 0.70F * falloff);
 
                         double kbo = 0.60D * falloff;
                         elb.motionX += (ddx / dist) * kbo;
