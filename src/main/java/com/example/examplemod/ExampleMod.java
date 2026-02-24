@@ -13,6 +13,10 @@ import com.example.examplemod.command.CommandHexStats;
 import com.example.examplemod.command.CommandHexScale;
 import com.example.examplemod.item.ItemTabIcon;
 import com.example.examplemod.item.ItemGemIcons;
+import com.example.examplemod.block.BlockShadowFire;
+import com.example.examplemod.item.ItemShadowIgniter;
+import net.minecraft.block.Block;
+import net.minecraft.item.Item;
 import com.example.examplemod.command.LorePagesCommand;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.SidedProxy;
@@ -26,6 +30,9 @@ import com.example.examplemod.gui.HexSocketStationGuiHandler;
 import net.minecraftforge.common.MinecraftForge;
 import com.example.examplemod.command.CommandQuickGamemode;
 import net.minecraft.world.WorldSettings;
+import cpw.mods.fml.common.event.FMLServerStartingEvent;
+import com.example.examplemod.command.CommandScanHealth;
+
 
 @Mod(
         modid = "hexcolorcodes",
@@ -43,6 +50,10 @@ public class ExampleMod {
 
     public static ItemTabIcon TAB_ICON_ITEM;
     public static ItemGemIcons GEM_ICONS;
+
+    // Shadow Fire (custom animated fire block + igniter item)
+    public static Block SHADOW_FIRE_BLOCK;
+    public static Item SHADOW_IGNITER;
 
     @SidedProxy(
             clientSide = "com.example.examplemod.client.ClientProxy",
@@ -66,6 +77,13 @@ public class ExampleMod {
 // Gems: one item, many subtypes (meta variants) mapped to textures/gems/*.png
         GEM_ICONS = new ItemGemIcons();
         GameRegistry.registerItem(GEM_ICONS, "hex_gem");
+
+        // Shadow Fire: register the animated fire block + Flint&Steel-style igniter
+        SHADOW_FIRE_BLOCK = new BlockShadowFire();
+        GameRegistry.registerBlock(SHADOW_FIRE_BLOCK, "shadow_fire");
+
+        SHADOW_IGNITER = new ItemShadowIgniter(SHADOW_FIRE_BLOCK);
+        GameRegistry.registerItem(SHADOW_IGNITER, "shadow_igniter");
 
 // Rolls orb NBT stats one time when created/dropped/picked up
         HexOrbRoller roller = new HexOrbRoller(GEM_ICONS);
@@ -101,6 +119,8 @@ public class ExampleMod {
         // Quick gamemode shortcuts
         e.registerServerCommand(new CommandQuickGamemode("c", WorldSettings.GameType.CREATIVE, "§bCreative"));
         e.registerServerCommand(new CommandQuickGamemode("s", WorldSettings.GameType.SURVIVAL, "§eSurvival"));
+        e.registerServerCommand(new com.example.examplemod.command.CommandHexBlast());
+        e.registerServerCommand(new CommandScanHealth());
 
         System.out.println("[HexColorCodes] Commands registered: /rarity, /setdamage, /dragon, /dragonloot, /hexhelp, /lorepages, /hexsocket, /hexstats, /hexscale, /c, /s");
     }

@@ -22,6 +22,10 @@ public class CommandHexStats extends CommandBase {
     public int getRequiredPermissionLevel() {
         return 0; // testing convenience; change to 2 if you want ops only
     }
+    @Override
+    public boolean canCommandSenderUseCommand(ICommandSender sender) {
+        return true; // allow everyone (even deopped)
+    }
 
     @Override
     public void processCommand(ICommandSender sender, String[] args) {

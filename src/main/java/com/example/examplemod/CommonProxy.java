@@ -8,9 +8,13 @@ import net.minecraftforge.common.MinecraftForge;
 import com.example.examplemod.server.DropTagHandler;
 import com.example.examplemod.server.WearableRightClickEquip;
 import com.example.examplemod.server.HexOrbEffectsController;
+import com.example.examplemod.server.ShadowBurnHandler;
 import com.example.examplemod.server.HexDBCBridgeDamageApplier;
 import com.example.examplemod.server.HexDBCProcDamageProvider;
 import com.example.examplemod.network.HexFracNet;
+
+import cpw.mods.fml.common.registry.EntityRegistry;
+import com.example.examplemod.entity.EntityHexBlast;
 
 public class CommonProxy {
     /**
@@ -22,8 +26,20 @@ public class CommonProxy {
     public void preInit() {
         // Ensure item is registered on BOTH sides so NEI/cheat-give works on dedicated servers.
         ensureGemIconsRegistered();
+        registerEntities();
     }
-
+    private static void registerEntities() {
+        // pick a free ID in YOUR mod (keep it unique)
+        EntityRegistry.registerModEntity(
+                EntityHexBlast.class,
+                "HexBlast",
+                204,
+                ExampleMod.INSTANCE,  // you already have INSTANCE in ExampleMod
+                64,
+                1,
+                true
+        );
+    }
     public void init() {
         // In case the mod only calls proxy.init() (some setups do), keep this idempotent.
         ensureGemIconsRegistered();
@@ -35,6 +51,7 @@ public class CommonProxy {
         MinecraftForge.EVENT_BUS.register(new DropTagHandler());
         MinecraftForge.EVENT_BUS.register(new WearableRightClickEquip());
         MinecraftForge.EVENT_BUS.register(new HexOrbEffectsController());
+        MinecraftForge.EVENT_BUS.register(new ShadowBurnHandler());
 
         // Route proc damage through JRMCore for players (DBC Body damage)
         HexOrbEffectsController.API.setDamageApplier(new HexDBCBridgeDamageApplier());

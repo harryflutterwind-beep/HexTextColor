@@ -3,79 +3,65 @@ package com.example.examplemod.client;
 import net.minecraft.item.ItemStack;
 
 /**
- * Tracks the active lore page while the player is hovering an item tooltip.
- * Polls keys (works inside GUIs) and uses a debounce so holding PgUp/PgDn
- * doesn't blast through pages.
+ * Tracks per-hovered-item tooltip page selection while the "view lore pages" key is held.
  *
- * Paging model:
- *  - Page 0 = the item's normal tooltip/lore (shown when NOT holding the view key)
- *  - Page 1 = intentionally blank placeholder (we'll populate later)
- *  - Page 2+ = extra pages from LorePagesAPI
+ * This MUST use rebindable KeyBindings (LoreKeybinds), not hard-coded PgUp/PgDn.
  */
-public final class LorePageController {
-
-    private static int page = 1; // first "view" page is blank placeholder
+public class LorePageController {
     private static ItemStack lastStack = null;
 
-    private static long nextAllowedSwitchMs = 0L;
-    private static boolean lastNextDown = false;
-    private static boolean lastPrevDown = false;
+    // 0-based index into VISIBLE pages (not necessarily raw stored pages).
+    private static int viewPage = 0;
 
-    private LorePageController() {}
+    private static boolean wasPrevDown = false;
+    private static boolean wasNextDown = false;
 
-    public static int getPage() {
-        return page;
+    public static int getViewPage() {
+        return viewPage;
     }
 
-    /** Reset paging when hovering a different item. */
+    public static void reset() {
+        viewPage = 0;
+        lastStack = null;
+        wasPrevDown = false;
+        wasNextDown = false;
+    }
+
     public static void trackHovered(ItemStack stack) {
-        if (stack == null) return;
+        if (stack == null) {
+            reset();
+            return;
+        }
 
+        // Reset page when hovering a different stack (item or NBT differs).
         if (lastStack == null || !ItemStack.areItemStacksEqual(stack, lastStack)) {
+            viewPage = 0;
             lastStack = stack.copy();
-            page = 1; // always start at placeholder page when you hold the key
-            nextAllowedSwitchMs = 0L;
-            lastNextDown = false;
-            lastPrevDown = false;
+            wasPrevDown = false;
+            wasNextDown = false;
         }
     }
 
-    /** Poll PgUp/PgDn with debounce + edge detection. */
-    public static void pollKeys(int maxPages) {
-        if (maxPages <= 1) return;
+    /** Poll rebindable keys and update viewPage within [0, viewPages-1]. */
+    public static void pollKeys(int viewPages) {
+        if (viewPages <= 1) return;
 
-        boolean nextDown = LoreKeybinds.isNextDown();
-        boolean prevDown = LoreKeybinds.isPrevDown();
+        boolean prev = LoreKeybinds.isPrevDown();
+        boolean next = LoreKeybinds.isNextDown();
 
-        long now = System.currentTimeMillis();
-
-        // Rising-edge detection so you can tap to switch, plus debounce for hold.
-        boolean nextPressed = nextDown && !lastNextDown;
-        boolean prevPressed = prevDown && !lastPrevDown;
-
-        lastNextDown = nextDown;
-        lastPrevDown = prevDown;
-
-        if (!nextPressed && !prevPressed) {
-            // allow hold-scrolling after debounce window
-            if (now >= nextAllowedSwitchMs) {
-                // if holding, treat as pressed
-                if (nextDown) nextPressed = true;
-                if (prevDown) prevPressed = true;
-            } else {
-                return;
-            }
+        // Only advance once per key press (debounce).
+        if (prev && !wasPrevDown) {
+            viewPage--;
+        }
+        if (next && !wasNextDown) {
+            viewPage++;
         }
 
-        if (now < nextAllowedSwitchMs) return;
+        wasPrevDown = prev;
+        wasNextDown = next;
 
-        if (nextPressed) page++;
-        if (prevPressed) page--;
-
-        // clamp to "view pages" (1..maxPages-1). page 0 is never shown while held.
-        if (page < 1) page = 1;
-        if (page > maxPages - 1) page = maxPages - 1;
-
-        nextAllowedSwitchMs = now + 120L;
+        // Clamp.
+        if (viewPage < 0) viewPage = 0;
+        if (viewPage > viewPages - 1) viewPage = viewPages - 1;
     }
 }

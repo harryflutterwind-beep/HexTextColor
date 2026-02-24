@@ -27,6 +27,8 @@ public class ItemGemIcons extends Item {
     // Keep in sync with HexOrbRoller.
     private static final int META_SWIRLY_FLAT = 18;
     private static final int META_SWIRLY_ANIM = 19;
+    private static final int META_PILL_DARKFIRE_FLAT = 24;
+    private static final int META_PILL_DARKFIRE_ANIM = 25;
     private static final int META_PILL_FIRE_ANIM = 26;
     private static final int META_PILL_FIRE_FLAT = 27;
 
@@ -80,6 +82,7 @@ public class ItemGemIcons extends Item {
     private static final String G_FRACTURE_OPEN  = "<grad #b84dff #7a5cff #00ffd5 #ff4fd8 scroll=0.30>";
     private static final String G_CHAOS_OPEN     = "<grad #ff4fd8 #7a5cff #00ffd5 #ffe66d scroll=0.38>";
     private static final String G_LIGHT_OPEN     = "<grad #fff7d6 #ffeaa8 #ffffff #ffd36b scroll=0.22>";
+    private static final String G_DARKFIRE_OPEN  = "<grad #ff2b2b #ff3b00 #ff00aa #7a5cff #120018 scroll=0.32>";
     private static final String G_CLOSE          = "</grad>";
 
     private static final String EFFECT_NA = "\u00a77Effect: \u00a78N/A";
@@ -89,6 +92,7 @@ public class ItemGemIcons extends Item {
     private static final String EFFECT_FRACTURED= "\u00a77Effect: " + G_FRACTURE_OPEN + "Fractured" + G_CLOSE;
     private static final String EFFECT_VOID_RANDOM= "\u00a77Effect: <pulse amp=0.55 speed=0.85>" + G_VOID_OPEN + "Randomized Void Type" + G_CLOSE + "</pulse>";
     private static final String EFFECT_LIGHT = "\u00a77Effect: <pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + "Light" + G_CLOSE + "</pulse>";
+    private static final String EFFECT_DARKFIRE = "\u00a77Effect: <pulse amp=0.55 speed=0.85>" + G_DARKFIRE_OPEN + "Random Darkflame Type" + G_CLOSE + "</pulse>";
     private static final String EFFECT_FIRE   = "\u00a77Effect: \u00a76Inferno Punch \u00a78(timed hits + finisher)";
 
     /** Texture base names (no .png). Meta index == array index. */
@@ -144,6 +148,12 @@ public class ItemGemIcons extends Item {
     }
 
     @Override
+    public String getItemStackDisplayName(ItemStack stack) {
+        return super.getItemStackDisplayName(stack);
+    }
+
+
+    @Override
     @SideOnly(Side.CLIENT)
     public void registerIcons(IIconRegister reg) {
         icons = new IIcon[VARIANTS.length];
@@ -197,6 +207,15 @@ public class ItemGemIcons extends Item {
         // Effect line
         if (meta == META_SWIRLY_FLAT || meta == META_SWIRLY_ANIM) {
             tooltip.add(EFFECT_SWIRLY);
+        } else if (meta == META_PILL_DARKFIRE_ANIM || meta == META_PILL_DARKFIRE_FLAT) {
+            // Darkfire pill: show rolled type name only (no extra summary text).
+            String dfType = null;
+            try {
+                NBTTagCompound t = (stack != null ? stack.getTagCompound() : null);
+                if (t != null && t.hasKey("HexDarkFireType")) dfType = t.getString("HexDarkFireType");
+            } catch (Throwable ignored) {}
+            if (dfType == null || dfType.length() == 0) dfType = "Darkflame";
+            tooltip.add("§7Effect: <pulse amp=0.55 speed=0.85>" + G_DARKFIRE_OPEN + dfType + G_CLOSE + "</pulse>");
         } else if (meta == META_PILL_FIRE_ANIM || meta == META_PILL_FIRE_FLAT) {
             tooltip.add(EFFECT_FIRE);
         } else if (meta == META_CHAOTIC_FLAT || meta == META_CHAOTIC_MULTI) {
@@ -206,8 +225,19 @@ public class ItemGemIcons extends Item {
         } else if (meta == META_VOID_FLAT || meta == META_VOID_MULTI) {
             tooltip.add(EFFECT_VOID_RANDOM);
         } else if (meta == META_LIGHT_FLAT || meta == META_LIGHT_MULTI) {
-            // Preview-only Light tooltip for unrolled/creative stacks
-            tooltip.add(EFFECT_LIGHT);
+            // Preview-only Light tooltip for unrolled/creative stacks.
+            // If the server already rolled a type but lore hasn't synced yet, show it here too.
+            String lt = null;
+            try {
+                NBTTagCompound t = (stack != null ? stack.getTagCompound() : null);
+                if (t != null && t.hasKey("HexLightType")) lt = t.getString("HexLightType");
+            } catch (Throwable ignored) {}
+            if (lt != null && lt.length() > 0) {
+                tooltip.add("§7Effect: <pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + "Light" + G_CLOSE + "</pulse> §7+ "
+                        + "<pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + lt + G_CLOSE + "</pulse>");
+            } else {
+                tooltip.add(EFFECT_LIGHT);
+            }
         } else {
             tooltip.add(EFFECT_NA);
         }
@@ -268,6 +298,21 @@ public class ItemGemIcons extends Item {
             case META_LIGHT_MULTI:
                 // Testing/preview line for the Light orb (unrolled stacks)
                 return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_LIGHT_OPEN + "Radiance \u2022 Light Abilities" + G_CLOSE + "</pulse>";
+
+            case META_PILL_DARKFIRE_FLAT:
+                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_DARKFIRE_OPEN + "2 Random Positive Stats (Flat)" + G_CLOSE + "</pulse>";
+
+            case META_PILL_DARKFIRE_ANIM:
+                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_DARKFIRE_OPEN + "2 Random Positive Stats (% Rolls)" + G_CLOSE + "</pulse>";
+
+            case META_PILL_FIRE_FLAT:
+                // Fire Pill now rolls 2 distinct positive stats (flat)
+                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_FIERY_OPEN + "2 Random Positive Stats (Flat)" + G_CLOSE + "</pulse>";
+
+            case META_PILL_FIRE_ANIM:
+                // Enhanced/animated Fire Pill rolls 2 distinct positive stats (% rolls)
+                return "\u00a77Bonus: <pulse amp=0.55 speed=0.85>" + G_FIERY_OPEN + "2 Random Positive Stats (% Rolls)" + G_CLOSE + "</pulse>";
+
         }
         return null;
     }

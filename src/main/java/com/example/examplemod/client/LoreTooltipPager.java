@@ -62,17 +62,27 @@ public class LoreTooltipPager {
 
         // Build pages (API-first; legacy fallback)
         List<List<String>> pages = getAllPages(stack, player);
-        int maxPages = (pages == null) ? 0 : pages.size();
-        if (maxPages <= 0) return;
+        int rawPages = (pages == null) ? 0 : pages.size();
+        if (rawPages <= 0) return;
 
-        // Poll PgUp/PgDn to adjust the active page
-        LorePageController.pollKeys(maxPages);
+        // Some builders keep an invisible placeholder page at index 0 (empty).
+        // Hide it from the UI and from PgUp/PgDn navigation.
+        int offset = (rawPages > 0 && isPlaceholderPage(pages.get(0))) ? 1 : 0;
+        int viewPages = rawPages - offset;
+        if (viewPages <= 0) return;
 
-        int page = LorePageController.getPage();
+        // Poll rebindable lore keys to adjust the ACTIVE VISIBLE page
+        LorePageController.pollKeys(viewPages);
+
+        int viewPage = LorePageController.getViewPage();
+        if (viewPage < 0) viewPage = 0;
+        if (viewPage > viewPages - 1) viewPage = viewPages - 1;
+
+        int page = viewPage + offset;
         if (page < 0) page = 0;
-        if (page > maxPages - 1) page = maxPages - 1;
+        if (page > rawPages - 1) page = rawPages - 1;
 
-        // Preserve the item header (name + optional 2nd line like an ID)
+// Preserve the item header (name + optional 2nd line like an ID)
         List<String> header = new ArrayList<String>();
         if (!tip.isEmpty()) {
             header.add(tip.get(0));
@@ -82,7 +92,7 @@ public class LoreTooltipPager {
             }
         }
 
-        applyPageToTooltip(tip, header, pages.get(page), page, maxPages);
+        applyPageToTooltip(tip, header, pages.get(page), viewPage, viewPages);
     }
 
     // ─────────────────────────────────────────────
@@ -202,6 +212,17 @@ public class LoreTooltipPager {
     // Tooltip renderer (keeps your HR format exactly)
     // ─────────────────────────────────────────────
 
+
+    /** Returns true if this page is an intentionally blank placeholder (all lines empty/whitespace). */
+    private static boolean isPlaceholderPage(List<String> page) {
+        if (page == null || page.isEmpty()) return true;
+        for (int i = 0; i < page.size(); i++) {
+            String s = page.get(i);
+            if (s != null && s.trim().length() > 0) return false;
+        }
+        return true;
+    }
+
     private static void applyPageToTooltip(List<String> tip, List<String> header, List<String> body, int page, int maxPages) {
         final String IT = "§o";
         final String A  = "§b";
@@ -239,7 +260,7 @@ public class LoreTooltipPager {
 
         int viewTotal = Math.max(1, maxPages);
         int viewIndex = Math.max(1, page + 1);
-        out.add(A + IT + "View " + viewIndex + "/" + viewTotal + "  (PgUp/PgDn)");
+        out.add(A + IT + "View " + viewIndex + "/" + viewTotal + "  (" + safeLorePrevKeyName() + "/" + safeLoreNextKeyName() + ")");
 
         // Bottom spacer so it doesn't touch the border
         out.add("");
@@ -253,5 +274,28 @@ public class LoreTooltipPager {
     private static String stripColor(String s) {
         if (s == null || s.isEmpty()) return "";
         return s.replaceAll("(?i)§[0-9A-FK-OR]", "");
+    }
+
+    // --- Key hint helpers (follow Controls bindings) ---
+    private static String safeLorePrevKeyName() {
+        try {
+            if (LoreKeybinds.KB_LORE_PREV != null) {
+                int code = LoreKeybinds.KB_LORE_PREV.getKeyCode();
+                if (code == 0) return "Unbound";
+                return net.minecraft.client.settings.GameSettings.getKeyDisplayString(code);
+            }
+        } catch (Throwable ignored) {}
+        return "PgUp";
+    }
+
+    private static String safeLoreNextKeyName() {
+        try {
+            if (LoreKeybinds.KB_LORE_NEXT != null) {
+                int code = LoreKeybinds.KB_LORE_NEXT.getKeyCode();
+                if (code == 0) return "Unbound";
+                return net.minecraft.client.settings.GameSettings.getKeyDisplayString(code);
+            }
+        } catch (Throwable ignored) {}
+        return "PgDn";
     }
 }

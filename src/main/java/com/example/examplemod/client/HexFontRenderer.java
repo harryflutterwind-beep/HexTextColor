@@ -48,6 +48,12 @@ public class HexFontRenderer extends FontRenderer {
     // Ampersand color codes (&a, &l, etc.) support (we convert to § at render-time)
     private static final Pattern AMP_COLOR_CODE = Pattern.compile("(?i)&[0-9a-fk-or]");
 
+    // Ampersand macro shortcuts (expanded in applyHexShortcuts)
+    //  &pw  → neon-pink (#ff007e) bold wave
+    //  &/pw → closes the neon-pink wave
+    private static final Pattern AMP_PW_OPEN  = Pattern.compile("(?i)&pw");
+    private static final Pattern AMP_PW_CLOSE = Pattern.compile("(?i)&/pw");
+
 
     // Inline icon tag: <ico:gems/dark_fire_face 12x12> or <ico:gems/dark_fire_face 12>
 // Also supports chevrons: «ico:gems/dark_fire_face 12x12»
@@ -507,12 +513,24 @@ public class HexFontRenderer extends FontRenderer {
 
 
     private static String applyHexShortcuts(String s) {
-        if (s != null && s.indexOf(60) >= 0) {
-            s = s.replace("<g_fire>", "<grad #FF2000 #FF5A00 #FFCC00 #FF5A00 #FF2000 scroll=0.20>");
-            return s;
-        } else {
+        if (s == null || s.isEmpty()) {
             return s;
         }
+
+        // &-macro shortcuts (lets you avoid angle-brackets in restricted contexts)
+        if (s.indexOf('&') >= 0) {
+            // &pw  → neon-pink (#ff007e) bold wave
+            // &/pw → closes it
+            s = AMP_PW_CLOSE.matcher(s).replaceAll("</wave></#>");
+            s = AMP_PW_OPEN.matcher(s).replaceAll("<#ff007el><wave>");
+        }
+
+        // Existing tag shortcuts
+        if (s.indexOf('<') >= 0) {
+            s = s.replace("<g_fire>", "<grad #FF2000 #FF5A00 #FFCC00 #FF5A00 #FF2000 scroll=0.20>");
+        }
+
+        return s;
     }
 
     private static String sanitize(String s) {
@@ -1121,6 +1139,13 @@ public class HexFontRenderer extends FontRenderer {
         // Legacy ampersand codes (e.g. &a, &l, &r)
         try {
             if (AMP_COLOR_CODE.matcher(s).find()) return true;
+        } catch (Throwable t) {
+            // ignore
+        }
+
+        // Custom &-macros (expanded via applyHexShortcuts)
+        try {
+            if (AMP_PW_OPEN.matcher(s).find() || AMP_PW_CLOSE.matcher(s).find()) return true;
         } catch (Throwable t) {
             // ignore
         }
@@ -2179,7 +2204,19 @@ public class HexFontRenderer extends FontRenderer {
         }
 
         List<Op> ops = this.parseToOps(text);
-        return drawOps(ops, x, y, fallbackColor, shadow);
+
+        // HUD/overlay safety: our tag rendering may touch GL state (icons, zoom, etc).
+        // Guard it so a styled line never corrupts subsequent renders (special item renders, bars, other HUDs).
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_COLOR_BUFFER_BIT | GL11.GL_TEXTURE_BIT);
+        GL11.glPushMatrix();
+        try {
+            return drawOps(ops, x, y, fallbackColor, shadow);
+        } finally {
+            GL11.glPopMatrix();
+            GL11.glPopAttrib();
+            // hard reset color (some renderers rely on it)
+            GL11.glColor4f(1f, 1f, 1f, 1f);
+        }
 
     }
 
@@ -2221,49 +2258,62 @@ public class HexFontRenderer extends FontRenderer {
 
         mc.getTextureManager().bindTexture(rl);
 
-        GL11.glDisable(GL11.GL_LIGHTING);
-        GL11.glEnable(GL11.GL_BLEND);
-        GL11.glColor4f(1f, 1f, 1f, 1f);
+        // Defensive GL guard: icons are drawn inside chat/HUD, and must not leak state.
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_COLOR_BUFFER_BIT | GL11.GL_TEXTURE_BIT);
+        GL11.glPushMatrix();
+        try {
+            GL11.glDisable(GL11.GL_LIGHTING);
+            GL11.glDisable(GL11.GL_DEPTH_TEST);
+            GL11.glEnable(GL11.GL_TEXTURE_2D);
+            GL11.glEnable(GL11.GL_BLEND);
+            GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+            GL11.glColor4f(1f, 1f, 1f, 1f);
 
-        // Treat these as animated sheets
-        boolean anim = (p.indexOf("_anim") >= 0) || (p.indexOf("_loop") >= 0);
+// Treat these as animated sheets
+            boolean anim = (p.indexOf("_anim") >= 0) || (p.indexOf("_loop") >= 0);
 
-        // If you want it even more robust without ImageIO: assume any "swirly_loop" is a sheet.
-        // anim = anim || (p.indexOf("swirly_loop") >= 0);
+            // If you want it even more robust without ImageIO: assume any "swirly_loop" is a sheet.
+            // anim = anim || (p.indexOf("swirly_loop") >= 0);
 
-        if (!anim) {
+            if (!anim) {
+                if (shadow) {
+                    GL11.glColor4f(0f, 0f, 0f, 0.35f);
+                    drawInlineIconQuad(x + 1, y + 1, w, h);
+                    GL11.glColor4f(1f, 1f, 1f, 1f);
+                }
+                drawInlineIconQuad(x, y, w, h);
+                return;
+            }
+
+            // Your gem sheets are 64x(64*FRAMES)
+            final int FRAMES = 8;
+
+            // Match your mcmeta: frametime = 3 ticks per frame
+            final int FRAME_TICKS = 3;
+
+            long ticks;
+            if (mc.theWorld != null) ticks = mc.theWorld.getTotalWorldTime();
+            else ticks = (Minecraft.getSystemTime() / 50L); // fallback
+
+            int frame = (int)((ticks / (long)Math.max(1, FRAME_TICKS)) % (long)FRAMES);
+
+            float u0 = 0f, u1 = 1f;
+            float v0 = (float)frame / (float)FRAMES;
+            float v1 = (float)(frame + 1) / (float)FRAMES;
+
             if (shadow) {
                 GL11.glColor4f(0f, 0f, 0f, 0.35f);
-                drawInlineIconQuad(x + 1, y + 1, w, h);
+                drawInlineIconQuadUV(x + 1, y + 1, w, h, u0, v0, u1, v1);
                 GL11.glColor4f(1f, 1f, 1f, 1f);
             }
-            drawInlineIconQuad(x, y, w, h);
-            return;
-        }
 
-        // Your gem sheets are 64x(64*FRAMES)
-        final int FRAMES = 8;
+            drawInlineIconQuadUV(x, y, w, h, u0, v0, u1, v1);
 
-        // Match your mcmeta: frametime = 3 ticks per frame
-        final int FRAME_TICKS = 3;
-
-        long ticks;
-        if (mc.theWorld != null) ticks = mc.theWorld.getTotalWorldTime();
-        else ticks = (Minecraft.getSystemTime() / 50L); // fallback
-
-        int frame = (int)((ticks / (long)Math.max(1, FRAME_TICKS)) % (long)FRAMES);
-
-        float u0 = 0f, u1 = 1f;
-        float v0 = (float)frame / (float)FRAMES;
-        float v1 = (float)(frame + 1) / (float)FRAMES;
-
-        if (shadow) {
-            GL11.glColor4f(0f, 0f, 0f, 0.35f);
-            drawInlineIconQuadUV(x + 1, y + 1, w, h, u0, v0, u1, v1);
+        } finally {
+            GL11.glPopMatrix();
+            GL11.glPopAttrib();
             GL11.glColor4f(1f, 1f, 1f, 1f);
         }
-
-        drawInlineIconQuadUV(x, y, w, h, u0, v0, u1, v1);
     }
 
     private static void drawInlineIconQuad(int x, int y, int w, int h) {
@@ -2676,9 +2726,11 @@ public class HexFontRenderer extends FontRenderer {
     }
 
     private int drawWavePlain(String s, int x, int y, int color, boolean shadow,
-                              float amp, float speed, java.util.List<Op> kids) {
+                              float amp, float speed, java.util.List<Op> kids, String legacyFmt) {
 
         if (s == null || s.length() == 0) return 0;
+
+        String fmt = (legacyFmt == null ? "" : legacyFmt);
 
         float a = (amp <= 0.0F ? 2.0F : amp);
         float sp = (speed <= 0.0F ? 6.0F : speed);
@@ -2700,8 +2752,11 @@ public class HexFontRenderer extends FontRenderer {
             float dy = (float)Math.sin((t * sp) + (i * 0.55F)) * a;
             int col = (colors != null ? colors[i] : color);
 
-            this.base.drawString(String.valueOf(c), (int)fx, (int)(y + dy), applyForcedMul(col), shadow);
-            fx += this.base.getCharWidth(c);
+            String draw = fmt.length() == 0 ? String.valueOf(c) : (fmt + c);
+            this.base.drawString(draw, (int)fx, (int)(y + dy), applyForcedMul(col), shadow);
+
+            // Respect bold/italic/etc when active (FontRenderer width changes with §l)
+            fx += (fmt.length() == 0 ? this.base.getCharWidth(c) : this.base.getStringWidth(draw));
         }
 
         return (int)(fx - x);
@@ -5419,7 +5474,7 @@ public class HexFontRenderer extends FontRenderer {
 
                     // ✅ If we have kids, inherit colors from them
                     if (op.children != null && op.children.size() > 0) {
-                        int adv = drawWavePlain(op.payload, cursorX, y, col, shadow, amp, sp, op.children);
+                        int adv = drawWavePlain(op.payload, cursorX, y, col, shadow, amp, sp, op.children, legacyPrefix(legacy));
                         cursorX += adv;
                         maxRight = Math.max(maxRight, cursorX);
                         break;
@@ -5428,7 +5483,7 @@ public class HexFontRenderer extends FontRenderer {
                     // ✅ If kids are missing, NEVER render raw tags — wave the plain payload only
                     // (payload should already be plain from the parser; this is just extra safety)
                     String plain = stripAllTagsToPlainText(op.payload);
-                    int adv = drawWavePlain(plain, cursorX, y, col, shadow, amp, sp, null);
+                    int adv = drawWavePlain(plain, cursorX, y, col, shadow, amp, sp, null, legacyPrefix(legacy));
                     cursorX += adv;
                     maxRight = Math.max(maxRight, cursorX);
                     break;

@@ -1,6 +1,7 @@
 package com.example.examplemod.network;
 
 import com.example.examplemod.server.HexOrbEffectsController;
+import com.example.examplemod.api.HexSocketAPI;
 
 import cpw.mods.fml.common.network.simpleimpl.IMessage;
 import cpw.mods.fml.common.network.simpleimpl.IMessageHandler;
@@ -27,6 +28,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import cpw.mods.fml.common.network.simpleimpl.SimpleNetworkWrapper;
 import net.minecraft.nbt.NBTTagList;
+import com.example.examplemod.ExampleMod;
 
 /**
  * Server-bound action packet for orb actions triggered by LCTRL double/triple taps. (MC/Forge 1.7.10)
@@ -36,10 +38,39 @@ import net.minecraft.nbt.NBTTagList;
  *  2 = FRACTURED: spend all shards (big flying blast; requires max shards)
  *  3 = SOLAR: fire Solar Beam (costs 10% radiance; uses beam cooldown bar)
  *  4 = SOLAR: fire Super Solar Beam (costs 80% radiance; uses beam cooldown bar)
+ *  9  = DARKFIRE: Blackfire Burn (costs 25% Darkfire charge; applies 10s DoT)
+ *  10 = DARKFIRE: Big Blackfire Burn (costs 50% Darkfire charge; bigger flame + more damage)
+ *  16 = DARKFIRE: Shadowflame Trail dash (costs 25% Darkfire charge; dash + void trail + black flames)
  */
 public class PacketFracturedAction implements IMessage {
 
     public int action;
+
+    // ---------------------------
+    // Dark Fire Pill: Ember Detonation actions
+    // (Keep explicit IDs so HUD/keybinds can reference them)
+    // ---------------------------
+    public static final int ACTION_EMBER_MARK_SINGLE   = 13;  // costs 10% charge, marks 1 target
+    public static final int ACTION_EMBER_MARK_MULTI    = 14;  // costs 10% charge, marks nearby targets
+    public static final int ACTION_EMBER_DETONATE_HELD = 15;  // sneak + hold ~5s -> detonate marked targets
+    public static final int ACTION_DARKFIRE_SHADOWFLAME_TRAIL = 16;  // costs 25% charge, dash + void trail + black flames
+
+    /**
+     * Client helper: send an action packet to the server.
+     * Safe to call only on client (HUD/key handler). No-ops on server side.
+     */
+    public static void sendActionToServer(int actionId) {
+        try {
+            // Guard: never attempt to send-to-server from dedicated server thread
+            if (FMLCommonHandler.instance().getEffectiveSide().isServer()) return;
+
+            SimpleNetworkWrapper net = resolveNetWrapper();
+            if (net != null) {
+                net.sendToServer(new PacketFracturedAction(actionId));
+            }
+        } catch (Throwable ignored) {}
+    }
+
 
     // Required by Forge SimpleNetworkWrapper (reflective instantiation)
     public PacketFracturedAction() {
@@ -118,9 +149,14 @@ public class PacketFracturedAction implements IMessage {
     private static final String TAG_ROLLED  = "HexOrbRolled";
     private static final String TAG_PROFILE = "HexOrbProfile";
 
+
+    private static final String FRACTURED_PREFIX = "FRACTURED_";
     private static final String TAG_FR_SHARDS   = "HexFracShards";      // int 0..5
     private static final String TAG_FR_SNAP     = "HexFracSnapTicks";   // int
     private static final String TAG_FR_SNAP_MAX = "HexFracSnapMax";     // int
+
+    // Fractured snap cooldown (ticks). Client HUD reads TAG_FR_SNAP/TAG_FR_SNAP_MAX.
+    private static final int FRB_COOLDOWN_TICKS = 120; // 6s @ 20t/s
 
 
     // Light/Solar tags (stored on LIGHT_* orbs)
@@ -179,15 +215,90 @@ public class PacketFracturedAction implements IMessage {
             return;
         }
 
+        // ------------------------------------------------------------------------
+        // Darkfire Pill action (9): Blackflame Burn
+        // ------------------------------------------------------------------------
+        if (action == 9) {
+            // Blackflame Spray (Action 9)
+            // Use the SAME hitscan sweep pattern as our Solar Beam so point-blank hits register
+            // reliably (Thermos included) instead of passing through entities.
+            if (!HexOrbEffectsController.tryConsumeDarkfireBlackfireBurn(p)) return;
 
-        // Prefer FRACTURED if equipped; otherwise allow SOLAR (Light type) beams.
-        ItemStack stack = findFirstEquippedFractured(p);
-        if (stack != null) {
+            fireBlackflameSpray(p);
+            return;
+        }
+
+        // Darkfire Pill action (10): Big Blackflame Burn (50%)
+        if (action == 10) {
+            if (!HexOrbEffectsController.tryConsumeDarkfireBlackfireBurnBig(p)) return;
+            fireBlackflameSprayBig(p);
+            return;
+        }
+
+        // Darkfire Pill action (11): Rapid Fire shot (100% hold CTRL)
+        if (action == 11) {
+            if (!HexOrbEffectsController.tryConsumeDarkfireRapidFireShot(p)) return;
+            fireDarkfireRapidFireShot(p);
+            return;
+        }
+
+        // Darkfire Pill action (12): Rapid Fire stop (release / cancel)
+        if (action == 12) {
+            HexOrbEffectsController.stopDarkfireRapidFire(p);
+            return;
+        }
+
+
+
+        // Darkfire Pill action (13): Ember Detonation mark shot (single) (10% charge)
+        if (action == 13) {
+            if (HexOrbEffectsController.tryConsumeDarkfireEmberMarkShot(p)) {
+                fireEmberMarkShot(p, false);
+            }
+            return;
+        }
+
+        // Darkfire Pill action (14): Ember Detonation mark shot (multi) (10% charge)
+        if (action == 14) {
+            if (HexOrbEffectsController.tryConsumeDarkfireEmberMarkShot(p)) {
+                fireEmberMarkShot(p, true);
+            }
+            return;
+        }
+
+        // Darkfire Pill action (15): Ember Detonation detonate (client holds action key ~5s, then sends this)
+        if (action == 15) {
+            HexOrbEffectsController.detonateDarkfireEmberMarks(p);
+            return;
+        }
+
+        // Darkfire Pill action (16): Shadowflame Trail dash (25% charge)
+        // NOTE: implemented in HexOrbEffectsController; this packet just routes the action.
+        // Action 16: Darkfire Shadowflame Trail
+        if (action == ACTION_DARKFIRE_SHADOWFLAME_TRAIL) {
+            try { HexOrbEffectsController.tryDarkfireShadowflameTrailDash(p); } catch (Throwable ignored) {}
+            return;
+        }
+
+// ------------------------------------------------------------------------
+// FRACTURED actions (1-2): flying blasts
+// NOTE: Do NOT let a Fractured orb "steal" Solar actions (3-4) when both are equipped.
+// ------------------------------------------------------------------------
+        if (action == 1 || action == 2) {
+            OrbRef fr = findFirstEquippedFracturedRef(p);
+            if (fr == null) return;
+            ItemStack stack = fr.stack;
+
+            // Socketed fractured gems sometimes lose HexOrbRolled/HexOrbProfile;
+            // restamp the identity tags if the shard markers are present.
+            if (!isFractured(stack)) return;
+
+            boolean fixed = ensureFracturedTags(stack);
             NBTTagCompound tag = stack.getTagCompound();
-            if (tag == null || !tag.getBoolean(TAG_ROLLED)) return;
-
-            String prof = tag.getString(TAG_PROFILE);
-            if (prof == null || !prof.startsWith("FRACTURED_")) return;
+            if (fixed && fr.socketed) {
+                try { HexSocketAPI.setGemAt(fr.host, fr.socketIndex, stack); } catch (Throwable ignored) {}
+            }
+            if (tag == null) return;
 
             int shards = tag.getInteger(TAG_FR_SHARDS);
 
@@ -213,7 +324,7 @@ public class PacketFracturedAction implements IMessage {
                 // Collision size (visual size is handled by particles in HexOrbEffectsController)
                 double rad = 0.60D;
 
-// Add a small AOE burst on impact, and also use it for end-of-path explosion if nothing is hit.
+                // Add a small AOE burst on impact, and also use it for end-of-path explosion if nothing is hit.
                 double aoeRad = 3.65D;
                 float  aoeDmg = dmg * 0.60F;
 
@@ -251,6 +362,11 @@ public class PacketFracturedAction implements IMessage {
             tag.setInteger(TAG_FR_SHARDS, shards);
             stack.setTagCompound(tag);
 
+            // If socketed: persist the modified orb back into the host socket
+            if (fr.socketed) {
+                try { HexSocketAPI.setGemAt(fr.host, fr.socketIndex, stack); } catch (Throwable ignored) {}
+            }
+
             p.inventory.markDirty();
             p.inventoryContainer.detectAndSendChanges();
             return;
@@ -259,14 +375,18 @@ public class PacketFracturedAction implements IMessage {
 // Not fractured -> try SOLAR Light orb
         if (action != 3 && action != 4) return;
 
-        ItemStack solar = findFirstEquippedSolarLight(p);
+        OrbRef sr = findFirstEquippedSolarLightRef(p);
+        ItemStack solar = (sr != null) ? sr.stack : null;
         if (solar == null) return;
 
         NBTTagCompound tag = solar.getTagCompound();
-        if (tag == null || !tag.getBoolean(TAG_ROLLED)) return;
+        if (tag == null) return;
 
-        String prof = tag.getString(TAG_PROFILE);
-        if (prof == null || !prof.startsWith("LIGHT_")) return;
+        // Socket stations can strip TAG_ROLLED / TAG_PROFILE while keeping Light keys.
+        // Restamp so both client HUD and server validators keep behaving.
+        ensureSolarTags(solar);
+        tag = solar.getTagCompound();
+        if (tag == null) return;
 
         String type = tag.getString(TAG_LIGHT_TYPE);
         if (type == null || !"Solar".equalsIgnoreCase(type.trim())) return;
@@ -281,7 +401,7 @@ public class PacketFracturedAction implements IMessage {
         int cost = (action == 4) ? L_COST_SUPER_SOLAR_BEAM : L_COST_SOLAR_BEAM;
         if (rad < cost) return;
 
-// Spend radiance and start cooldown
+        // Spend radiance and start cooldown
         rad -= cost;
         if (rad < 0) rad = 0;
         tag.setInteger(TAG_LIGHT_RAD, rad);
@@ -290,13 +410,18 @@ public class PacketFracturedAction implements IMessage {
         tag.setInteger(TAG_L_BEAM_CD, cdTicks);
         tag.setInteger(TAG_L_BEAM_CD_MAX, cdTicks);
 
-// Fire beam (instant ray + DBC-scaled damage)
+        // Fire beam (instant ray + DBC-scaled damage)
         fireSolarBeam(p, action == 4);
 
         solar.setTagCompound(tag);
+
+        // If socketed: persist back into host socket
+        if (sr != null && sr.socketed) {
+            try { HexSocketAPI.setGemAt(sr.host, sr.socketIndex, solar); } catch (Throwable ignored) {}
+        }
+
         p.inventory.markDirty();
         p.inventoryContainer.detectAndSendChanges();
-
     }
 
 
@@ -305,6 +430,95 @@ public class PacketFracturedAction implements IMessage {
 // SOLAR beam (instant ray; DBC-first damage)
 // ---------------------------------------------------------------------
 
+
+    // ---------------------------------------------------------------------
+    // Socket-aware orb lookup (so actions work when orbs are stored in sockets)
+    // ---------------------------------------------------------------------
+
+    private static final class OrbRef {
+        public final ItemStack stack;   // the orb stack (stackSize expected 1)
+        public final ItemStack host;    // host item containing the socket (null if directly held/worn)
+        public final int socketIndex;   // socket index in host (only valid if socketed)
+        public final boolean socketed;
+
+        public OrbRef(ItemStack stack, ItemStack host, int socketIndex, boolean socketed) {
+            this.stack = stack;
+            this.host = host;
+            this.socketIndex = socketIndex;
+            this.socketed = socketed;
+        }
+    }
+
+    private static OrbRef findFirstEquippedSolarLightRef(EntityPlayerMP p) {
+        if (p == null) return null;
+
+        // Held
+        ItemStack held = p.getCurrentEquippedItem();
+        if (isSolarLight(held)) return new OrbRef(held, null, -1, false);
+
+        OrbRef r = findSolarInSockets(held);
+        if (r != null) return r;
+
+        // Armor
+        if (p.inventory != null && p.inventory.armorInventory != null) {
+            for (int i = 0; i < p.inventory.armorInventory.length; i++) {
+                ItemStack s = p.inventory.armorInventory[i];
+                if (isSolarLight(s)) return new OrbRef(s, null, -1, false);
+
+                r = findSolarInSockets(s);
+                if (r != null) return r;
+            }
+        }
+        return null;
+    }
+
+    private static OrbRef findSolarInSockets(ItemStack host) {
+        if (host == null) return null;
+        try {
+            int filled = HexSocketAPI.getSocketsFilled(host);
+            for (int i = 0; i < filled; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(host, i);
+                if (isSolarLight(gem)) return new OrbRef(gem, host, i, true);
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static OrbRef findFirstEquippedFracturedRef(EntityPlayerMP p) {
+        if (p == null) return null;
+
+        // Held
+        ItemStack cur = p.getCurrentEquippedItem();
+        if (isFractured(cur)) return new OrbRef(cur, null, -1, false);
+
+        OrbRef r = findFracturedInSockets(cur);
+        if (r != null) return r;
+
+        // Armor
+        if (p.inventory != null && p.inventory.armorInventory != null) {
+            for (int i = 0; i < p.inventory.armorInventory.length; i++) {
+                ItemStack s = p.inventory.armorInventory[i];
+                if (isFractured(s)) return new OrbRef(s, null, -1, false);
+
+                r = findFracturedInSockets(s);
+                if (r != null) return r;
+            }
+        }
+        return null;
+    }
+
+    private static OrbRef findFracturedInSockets(ItemStack host) {
+        if (host == null) return null;
+        try {
+            int filled = HexSocketAPI.getSocketsFilled(host);
+            for (int i = 0; i < filled; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(host, i);
+                if (isFractured(gem)) return new OrbRef(gem, host, i, true);
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
     private static ItemStack findFirstEquippedSolarLight(EntityPlayerMP p) {
         if (p == null) return null;
 
@@ -312,11 +526,28 @@ public class PacketFracturedAction implements IMessage {
         ItemStack held = p.getCurrentEquippedItem();
         if (isSolarLight(held)) return held;
 
-        // Armor
+        // Socketed on held host
+        try {
+            int filled = HexSocketAPI.getSocketsFilled(held);
+            for (int i = 0; i < filled; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(held, i);
+                if (isSolarLight(gem)) return gem;
+            }
+        } catch (Throwable ignored) {}
+
+        // Armor (+ sockets)
         if (p.inventory != null && p.inventory.armorInventory != null) {
             for (int i = 0; i < p.inventory.armorInventory.length; i++) {
                 ItemStack s = p.inventory.armorInventory[i];
                 if (isSolarLight(s)) return s;
+
+                try {
+                    int filled = HexSocketAPI.getSocketsFilled(s);
+                    for (int j = 0; j < filled; j++) {
+                        ItemStack gem = HexSocketAPI.getGemAt(s, j);
+                        if (isSolarLight(gem)) return gem;
+                    }
+                } catch (Throwable ignored) {}
             }
         }
         return null;
@@ -324,16 +555,26 @@ public class PacketFracturedAction implements IMessage {
 
     private static boolean isSolarLight(ItemStack stack) {
         if (stack == null) return false;
-        if (!stack.hasTagCompound()) return false;
         NBTTagCompound tag = stack.getTagCompound();
         if (tag == null) return false;
-        if (!tag.getBoolean(TAG_ROLLED)) return false;
 
-        String prof = tag.getString(TAG_PROFILE);
-        if (prof == null || !prof.startsWith("LIGHT_")) return false;
+        // Minimal identity check: it must claim to be a Solar Light orb.
+        String type = null;
+        try { type = tag.getString(TAG_LIGHT_TYPE); } catch (Throwable ignored) {}
+        if (type == null || !"Solar".equalsIgnoreCase(type.trim())) return false;
 
-        String type = tag.getString(TAG_LIGHT_TYPE);
-        return (type != null && "Solar".equalsIgnoreCase(type.trim()));
+        // Normal path: fully rolled light orb.
+        if (tag.getBoolean(TAG_ROLLED)) {
+            String prof = tag.getString(TAG_PROFILE);
+            if (prof != null && prof.startsWith("LIGHT_")) return true;
+        }
+
+        // Socket-stripped path: stations sometimes keep Light keys but drop TAG_ROLLED / TAG_PROFILE.
+        // If it has any Light payload key, accept it (server will still validate radiance/cooldown).
+        if (tag.hasKey(TAG_LIGHT_RAD) || tag.hasKey(TAG_L_BEAM_CD) || tag.hasKey(TAG_L_BEAM_CD_MAX)) return true;
+
+        // Last resort: if it at least has the type key, treat as Solar (server logic is safe).
+        return tag.hasKey(TAG_LIGHT_TYPE);
     }
 
 
@@ -408,11 +649,33 @@ public class PacketFracturedAction implements IMessage {
     }
 
 
+    // Darkfire (Blackflame Burn) tick damage.
+    // This is intentionally a "small but real" DBC Body hit so action 9 always hurts even if the
+    // burn/DoT system is temporarily disabled. Your main DoT can still be handled inside HexOrbEffectsController.
+    private static float computeBlackfireBurnTickDamage(EntityPlayerMP p){
+        double str = 0D;
+        try { str = HexDBCProcDamageProvider.getStrengthEffective(p); } catch (Throwable ignored) {}
+        if (str < 0D) str = 0D;
+
+        // Per-second-ish body damage (moderate). Tune here if you want hotter/cooler burn.
+        double base = 4000D + (str * 0.90D);
+
+        // clamps in DBC Body units
+        if (base < 6000D) base = 6000D;
+        if (base > 180000D) base = 180000D;
+
+        return (float) base;
+    }
+
+
     private static final String TAG_PLAYER_PERSISTED = "PlayerPersisted";
     private static final String TAG_DBC_BODY = "jrmcBdy";
 
     // Same DBC bridge applier used by Entropy proc damage (via HexOrbEffectsController.DAMAGE_APPLIER)
     private static final HexDBCBridgeDamageApplier SOLAR_DAMAGE_APPLIER = new HexDBCBridgeDamageApplier();
+
+    // Reuse the same bridge applier for Darkfire burn hits (DBC body first; vanilla fallback).
+    private static final HexDBCBridgeDamageApplier DARKFIRE_DAMAGE_APPLIER = new HexDBCBridgeDamageApplier();
 
     /**
      * Apply Solar Beam damage using the same DBC bridge path that Entropy uses.
@@ -433,6 +696,26 @@ public class PacketFracturedAction implements IMessage {
         } catch (Throwable ignored) {}
 
         // Last resort fallback (direct body subtraction / vanilla hearts)
+        applyDbcBodyDamageOrFallback(src, target, bodyDamage);
+    }
+
+    /**
+     * Apply the guaranteed "Blackflame Burn" hit damage (DBC body first; vanilla fallback).
+     * This is a single tick-sized hit; your actual DoT can live in HexOrbEffectsController.
+     */
+    private static void applyDarkfireBurnDamageOrFallback(EntityPlayerMP src, EntityLivingBase target, float bodyDamage){
+        if (src == null || target == null || bodyDamage <= 0f) return;
+
+        try {
+            target.hurtResistantTime = 0;
+            target.hurtTime = 0;
+        } catch (Throwable ignored) {}
+
+        try {
+            DARKFIRE_DAMAGE_APPLIER.deal(src, target, bodyDamage);
+            return;
+        } catch (Throwable ignored) {}
+
         applyDbcBodyDamageOrFallback(src, target, bodyDamage);
     }
 
@@ -748,6 +1031,569 @@ public class PacketFracturedAction implements IMessage {
             }
         }
     }
+    private static void fireBlackflameSpray(EntityPlayerMP p) {
+        if (p == null || p.worldObj == null) return;
+        if (p.worldObj.isRemote) return;
+
+        final double maxRange = (double) HexOrbEffectsController.DARKFIRE_BURN_RANGE_BLOCKS;
+        final double stepSize = 0.65D;     // sweep resolution (smaller = more reliable point-blank hits)
+        final double hitRadius = 0.90D;    // sphere radius used to detect entities along the ray
+
+        Vec3 look = null;
+        try { look = p.getLookVec(); } catch (Throwable ignored) {}
+        if (look == null) look = Vec3.createVectorHelper(0, 0, 1);
+
+        double lx = look.xCoord, ly = look.yCoord, lz = look.zCoord;
+        double llen = Math.sqrt(lx*lx + ly*ly + lz*lz);
+        if (llen < 1.0E-6D) { lx = 0; ly = 0; lz = 1; llen = 1; }
+        lx /= llen; ly /= llen; lz /= llen;
+
+        // Eye position + a small forward offset so we don't start inside the player.
+        Vec3 eye = Vec3.createVectorHelper(p.posX, p.posY + (double) p.getEyeHeight(), p.posZ);
+        Vec3 start = Vec3.createVectorHelper(
+                eye.xCoord + lx * 0.55D,
+                eye.yCoord + ly * 0.55D,
+                eye.zCoord + lz * 0.55D
+        );
+
+        Vec3 intendedEnd = Vec3.createVectorHelper(
+                start.xCoord + lx * maxRange,
+                start.yCoord + ly * maxRange,
+                start.zCoord + lz * maxRange
+        );
+
+        // Clamp end to first solid block (ignore blocks without bounding boxes like tall grass).
+        net.minecraft.util.MovingObjectPosition mopBlock = null;
+        Vec3 end = intendedEnd;
+        try {
+            mopBlock = p.worldObj.rayTraceBlocks(eye, intendedEnd);
+            if (mopBlock != null && mopBlock.hitVec != null) {
+                end = mopBlock.hitVec;
+            }
+        } catch (Throwable ignored) {}
+
+        // Sweep for the first living entity along the segment start->end (Solar Beam style).
+        EntityLivingBase hitEnt = null;
+        Vec3 hitVec = null;
+
+        double dx = end.xCoord - start.xCoord;
+        double dy = end.yCoord - start.yCoord;
+        double dz = end.zCoord - start.zCoord;
+        double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist < 1.0E-4D) dist = 1.0E-4D;
+
+        int steps = (int) Math.ceil(dist / stepSize);
+        if (steps < 1) steps = 1;
+
+        // Pre-check at the start sphere (helps true point-blank).
+        try {
+            AxisAlignedBB bb0 = AxisAlignedBB.getBoundingBox(
+                    start.xCoord - hitRadius, start.yCoord - hitRadius, start.zCoord - hitRadius,
+                    start.xCoord + hitRadius, start.yCoord + hitRadius, start.zCoord + hitRadius
+            );
+            List l0 = p.worldObj.getEntitiesWithinAABB(EntityLivingBase.class, bb0);
+            if (l0 != null && !l0.isEmpty()) {
+                double best = 9.9E9D;
+                for (int i = 0; i < l0.size(); i++) {
+                    Object o = l0.get(i);
+                    if (!(o instanceof EntityLivingBase)) continue;
+                    EntityLivingBase e = (EntityLivingBase) o;
+                    if (e == p || e.isDead || e.getHealth() <= 0.0F) continue;
+                    double d = e.getDistanceSqToEntity(p);
+                    if (d < best) { best = d; hitEnt = e; hitVec = start; }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        // Sweep forward if not already found.
+        if (hitEnt == null) {
+            for (int s = 0; s <= steps; s++) {
+                double t = (double) s / (double) steps;
+                double px = start.xCoord + dx * t;
+                double py = start.yCoord + dy * t;
+                double pz = start.zCoord + dz * t;
+
+                AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(
+                        px - hitRadius, py - hitRadius, pz - hitRadius,
+                        px + hitRadius, py + hitRadius, pz + hitRadius
+                );
+
+                List list = null;
+                try { list = p.worldObj.getEntitiesWithinAABB(EntityLivingBase.class, bb); } catch (Throwable ignored) {}
+                if (list == null || list.isEmpty()) continue;
+
+                double best = 9.9E9D;
+                EntityLivingBase bestEnt = null;
+                for (int i = 0; i < list.size(); i++) {
+                    Object o = list.get(i);
+                    if (!(o instanceof EntityLivingBase)) continue;
+                    EntityLivingBase e = (EntityLivingBase) o;
+                    if (e == p || e.isDead || e.getHealth() <= 0.0F) continue;
+                    double d = e.getDistanceSq(px, py, pz);
+                    if (d < best) { best = d; bestEnt = e; }
+                }
+
+                if (bestEnt != null) {
+                    hitEnt = bestEnt;
+                    hitVec = Vec3.createVectorHelper(px, py, pz);
+                    // Stop the visual at the hit point.
+                    end = hitVec;
+                    break;
+                }
+            }
+        }
+
+        // Broadcast FX (line + a "burst" at the hit point).
+        try {
+            SimpleNetworkWrapper net = resolveNetWrapper();
+            if (net != null) {
+                net.sendToAllAround(
+                        new PacketBlackflameSprayFX(
+                                (float) start.xCoord, (float) start.yCoord, (float) start.zCoord,
+                                (float) end.xCoord,   (float) end.yCoord,   (float) end.zCoord
+                        ),
+                        new NetworkRegistry.TargetPoint(p.dimension, p.posX, p.posY, p.posZ, 64.0D)
+                );
+
+                if (hitVec != null) {
+                    net.sendToAllAround(
+                            new PacketBlackflameSprayFX(
+                                    (float) hitVec.xCoord, (float) hitVec.yCoord, (float) hitVec.zCoord,
+                                    (float) hitVec.xCoord, (float) hitVec.yCoord, (float) hitVec.zCoord
+                            ),
+                            new NetworkRegistry.TargetPoint(p.dimension, p.posX, p.posY, p.posZ, 64.0D)
+                    );
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        // Apply hit / burn
+        if (hitEnt != null) {
+            try { HexOrbEffectsController.applyDarkfireBlackfireBurnHit(p, hitEnt); } catch (Throwable ignored) {}
+
+            // "Fire explode": small AoE burst that tags nearby living entities too (optional, non-griefing).
+            if (hitVec != null) {
+                try {
+                    final double r = 2.75D;
+                    AxisAlignedBB aoe = AxisAlignedBB.getBoundingBox(
+                            hitVec.xCoord - r, hitVec.yCoord - r, hitVec.zCoord - r,
+                            hitVec.xCoord + r, hitVec.yCoord + r, hitVec.zCoord + r
+                    );
+                    List near = p.worldObj.getEntitiesWithinAABB(EntityLivingBase.class, aoe);
+                    if (near != null && !near.isEmpty()) {
+                        for (int i = 0; i < near.size(); i++) {
+                            Object o = near.get(i);
+                            if (!(o instanceof EntityLivingBase)) continue;
+                            EntityLivingBase e = (EntityLivingBase) o;
+                            if (e == p || e == hitEnt || e.isDead || e.getHealth() <= 0.0F) continue;
+                            try { HexOrbEffectsController.applyDarkfireBlackfireBurnHit(p, e); } catch (Throwable ignored2) {}
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } else {
+            // Missed entity: place shadow fire where we hit a block (if any).
+            if (mopBlock != null) {
+                tryPlaceShadowFireAtImpact(p, mopBlock);
+            }
+        }
+    }
+    private static void fireBlackflameSprayBig(EntityPlayerMP p) {
+        if (p == null || p.worldObj == null) return;
+        if (p.worldObj.isRemote) return;
+
+        // Slightly more range and a much fatter hit tube than action 9.
+        final double maxRange = (double) HexOrbEffectsController.DARKFIRE_BURN_RANGE_BLOCKS * 1.10D;
+        final double stepSize = 0.55D;    // sweep resolution (more reliable close range)
+        final double hitRadius = 1.35D;   // larger sphere radius used to detect entities along the ray
+
+        Vec3 look = null;
+        try { look = p.getLookVec(); } catch (Throwable ignored) {}
+        if (look == null) look = Vec3.createVectorHelper(0, 0, 1);
+
+        double lx = look.xCoord, ly = look.yCoord, lz = look.zCoord;
+        double llen = Math.sqrt(lx*lx + ly*ly + lz*lz);
+        if (llen < 1.0E-6D) { lx = 0; ly = 0; lz = 1; llen = 1; }
+        lx /= llen; ly /= llen; lz /= llen;
+
+        Vec3 eye = Vec3.createVectorHelper(p.posX, p.posY + (double) p.getEyeHeight(), p.posZ);
+        Vec3 start = Vec3.createVectorHelper(
+                eye.xCoord + lx * 0.55D,
+                eye.yCoord + ly * 0.55D,
+                eye.zCoord + lz * 0.55D
+        );
+
+        Vec3 intendedEnd = Vec3.createVectorHelper(
+                start.xCoord + lx * maxRange,
+                start.yCoord + ly * maxRange,
+                start.zCoord + lz * maxRange
+        );
+
+        net.minecraft.util.MovingObjectPosition mopBlock = null;
+        Vec3 end = intendedEnd;
+        try {
+            mopBlock = p.worldObj.rayTraceBlocks(eye, intendedEnd);
+            if (mopBlock != null && mopBlock.hitVec != null) {
+                end = mopBlock.hitVec;
+            }
+
+
+        } catch (Throwable ignored) {}
+
+        EntityLivingBase hitEnt = null;
+        Vec3 hitVec = null;
+
+        double dx = end.xCoord - start.xCoord;
+        double dy = end.yCoord - start.yCoord;
+        double dz = end.zCoord - start.zCoord;
+        double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist < 1.0E-4D) dist = 1.0E-4D;
+
+        int steps = (int) Math.ceil(dist / stepSize);
+        if (steps < 1) steps = 1;
+
+        // Pre-check at the start sphere (helps true point-blank).
+        try {
+            AxisAlignedBB bb0 = AxisAlignedBB.getBoundingBox(
+                    start.xCoord - hitRadius, start.yCoord - hitRadius, start.zCoord - hitRadius,
+                    start.xCoord + hitRadius, start.yCoord + hitRadius, start.zCoord + hitRadius
+            );
+            List l0 = p.worldObj.getEntitiesWithinAABB(EntityLivingBase.class, bb0);
+            if (l0 != null && !l0.isEmpty()) {
+                double best = 9.9E9D;
+                for (int i = 0; i < l0.size(); i++) {
+                    Object o = l0.get(i);
+                    if (!(o instanceof EntityLivingBase)) continue;
+                    EntityLivingBase e = (EntityLivingBase) o;
+                    if (e == p || e.isDead || e.getHealth() <= 0.0F) continue;
+                    double d = e.getDistanceSqToEntity(p);
+                    if (d < best) { best = d; hitEnt = e; hitVec = start; }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        if (hitEnt == null) {
+            for (int s = 0; s <= steps; s++) {
+                double t = (double) s / (double) steps;
+                double px = start.xCoord + dx * t;
+                double py = start.yCoord + dy * t;
+                double pz = start.zCoord + dz * t;
+
+                AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(
+                        px - hitRadius, py - hitRadius, pz - hitRadius,
+                        px + hitRadius, py + hitRadius, pz + hitRadius
+                );
+
+                List list = null;
+                try { list = p.worldObj.getEntitiesWithinAABB(EntityLivingBase.class, bb); } catch (Throwable ignored) {}
+                if (list == null || list.isEmpty()) continue;
+
+                double best = 9.9E9D;
+                EntityLivingBase bestEnt = null;
+                for (int i = 0; i < list.size(); i++) {
+                    Object o = list.get(i);
+                    if (!(o instanceof EntityLivingBase)) continue;
+                    EntityLivingBase e = (EntityLivingBase) o;
+                    if (e == p || e.isDead || e.getHealth() <= 0.0F) continue;
+                    double d = e.getDistanceSq(px, py, pz);
+                    if (d < best) { best = d; bestEnt = e; }
+                }
+
+                if (bestEnt != null) {
+                    hitEnt = bestEnt;
+                    hitVec = Vec3.createVectorHelper(px, py, pz);
+                    end = hitVec;
+                    break;
+                }
+            }
+        }
+
+        // FX: multiple offset streaks so it looks like a thicker flame.
+        try {
+            SimpleNetworkWrapper net = resolveNetWrapper();
+            if (net != null) {
+                double ux = 0D, uy = 1D, uz = 0D;
+
+                double rx = ly*uz - lz*uy;
+                double ry = lz*ux - lx*uz;
+                double rz = lx*uy - ly*ux;
+                double rlen = Math.sqrt(rx*rx + ry*ry + rz*rz);
+                if (rlen < 1.0E-6D) { rx = 1; ry = 0; rz = 0; rlen = 1; }
+                rx /= rlen; ry /= rlen; rz /= rlen;
+
+                double vx = ry*lz - rz*ly;
+                double vy = rz*lx - rx*lz;
+                double vz = rx*ly - ry*lx;
+                double vlen = Math.sqrt(vx*vx + vy*vy + vz*vz);
+                if (vlen < 1.0E-6D) { vx = 0; vy = 1; vz = 0; vlen = 1; }
+                vx /= vlen; vy /= vlen; vz /= vlen;
+
+                double offR = 0.22D;
+                double offU = 0.18D;
+
+                sendBlackflameSprayFX(net, p, start, end, 0D, 0D, 0D);
+                sendBlackflameSprayFX(net, p, start, end, rx*offR, ry*offR, rz*offR);
+                sendBlackflameSprayFX(net, p, start, end, -rx*offR, -ry*offR, -rz*offR);
+                sendBlackflameSprayFX(net, p, start, end, vx*offU, vy*offU, vz*offU);
+                sendBlackflameSprayFX(net, p, start, end, -vx*offU, -vy*offU, -vz*offU);
+
+                if (hitVec != null) {
+                    net.sendToAllAround(
+                            new PacketBlackflameSprayFX(
+                                    (float) hitVec.xCoord, (float) hitVec.yCoord, (float) hitVec.zCoord,
+                                    (float) hitVec.xCoord, (float) hitVec.yCoord, (float) hitVec.zCoord
+                            ),
+                            new NetworkRegistry.TargetPoint(p.dimension, p.posX, p.posY, p.posZ, 64.0D)
+                    );
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        if (hitEnt != null) {
+            try { HexOrbEffectsController.applyDarkfireBlackfireBurnHitBig(p, hitEnt); } catch (Throwable ignored) {}
+
+            if (hitVec != null) {
+                try {
+                    final double r = 4.25D;
+                    AxisAlignedBB aoe = AxisAlignedBB.getBoundingBox(
+                            hitVec.xCoord - r, hitVec.yCoord - r, hitVec.zCoord - r,
+                            hitVec.xCoord + r, hitVec.yCoord + r, hitVec.zCoord + r
+                    );
+                    List near = p.worldObj.getEntitiesWithinAABB(EntityLivingBase.class, aoe);
+                    if (near != null && !near.isEmpty()) {
+                        for (int i = 0; i < near.size(); i++) {
+                            Object o = near.get(i);
+                            if (!(o instanceof EntityLivingBase)) continue;
+                            EntityLivingBase e = (EntityLivingBase) o;
+                            if (e == p || e == hitEnt || e.isDead || e.getHealth() <= 0.0F) continue;
+                            try { HexOrbEffectsController.applyDarkfireBlackfireBurnHitBig(p, e); } catch (Throwable ignored2) {}
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } else {
+            if (mopBlock != null) {
+                try { tryPlaceShadowFireAtImpact(p, mopBlock); } catch (Throwable ignored) {}
+            }
+        }
+    }
+    // -------------------------------------------------------------------------
+    // Ember Detonation: 10% mark shot (single / multi)
+    // - Raycasts to the first living entity along the player's look vector
+    // - Always spawns a visible shot trail
+    // - On hit, applies "Ember Mark" to the impact target (+ nearby targets if multi)
+    //   Mark ticking / persistent VFX is handled in HexOrbEffectsController
+    // -------------------------------------------------------------------------
+    private static void fireEmberMarkShot(EntityPlayerMP p, boolean multi) {
+        if (p == null || p.worldObj == null) return;
+        if (p.worldObj.isRemote) return;
+
+        net.minecraft.world.World w = p.worldObj;
+        if (!(w instanceof net.minecraft.world.WorldServer)) return;
+        net.minecraft.world.WorldServer ws = (net.minecraft.world.WorldServer) w;
+
+        // Prefer the controller constant if present.
+        double range = 16.0D;
+        try {
+            java.lang.reflect.Field f = HexOrbEffectsController.class.getDeclaredField("DARKFIRE_EMBER_MARK_RANGE_BLOCKS");
+            f.setAccessible(true);
+            Object v = f.get(null);
+            if (v instanceof Number) range = ((Number) v).doubleValue();
+        } catch (Throwable ignored) {}
+
+        Vec3 start = Vec3.createVectorHelper(p.posX, p.posY + (double) p.getEyeHeight(), p.posZ);
+
+        Vec3 look = null;
+        try { look = p.getLookVec(); } catch (Throwable ignored) {}
+        if (look == null) {
+            try { look = p.getLook(1.0F); } catch (Throwable ignored) {}
+        }
+        if (look == null) look = Vec3.createVectorHelper(0, 0, 1);
+
+        Vec3 end = start.addVector(look.xCoord * range, look.yCoord * range, look.zCoord * range);
+
+        // Broad-phase query along the look ray
+        AxisAlignedBB scan = p.boundingBox
+                .addCoord(look.xCoord * range, look.yCoord * range, look.zCoord * range)
+                .expand(1.5D, 1.5D, 1.5D);
+
+        List ents = null;
+        try { ents = w.getEntitiesWithinAABBExcludingEntity(p, scan); } catch (Throwable ignored) {}
+        if (ents == null) ents = java.util.Collections.emptyList();
+
+        EntityLivingBase best = null;
+        Vec3 bestHit = null;
+        double bestDist = range * range;
+
+        for (int i = 0; i < ents.size(); i++) {
+            Object o = ents.get(i);
+            if (!(o instanceof EntityLivingBase)) continue;
+
+            EntityLivingBase e = (EntityLivingBase) o;
+            if (e == p) continue;
+            if (e.isDead) continue;
+            try { if (e.getHealth() <= 0.0F) continue; } catch (Throwable ignored) {}
+
+            AxisAlignedBB bb = e.boundingBox.expand(0.30D, 0.30D, 0.30D);
+            net.minecraft.util.MovingObjectPosition mop = null;
+            try { mop = bb.calculateIntercept(start, end); } catch (Throwable ignored) {}
+            if (mop == null || mop.hitVec == null) continue;
+
+            double d = start.squareDistanceTo(mop.hitVec);
+            if (d < bestDist) {
+                bestDist = d;
+                best = e;
+                bestHit = mop.hitVec;
+            }
+        }
+
+        // Visual shot trail (always show; feels like "launching" a particle)
+        Vec3 trailEnd = (bestHit != null ? bestHit : end);
+        spawnEmberShotTrail(ws, start, trailEnd, multi);
+
+        if (best == null) return;
+
+        // Apply marks (AoE "grab") on impact
+        try { HexOrbEffectsController.applyDarkfireEmberMarkImpact(p, best, multi); } catch (Throwable ignored) {}
+
+        // Extra impact burst at the actual hit vec (if we have it)
+        if (bestHit != null) {
+            try {
+                ws.func_147487_a("flame", bestHit.xCoord, bestHit.yCoord, bestHit.zCoord, multi ? 10 : 6, 0.25, 0.20, 0.25, 0.01);
+                ws.func_147487_a("smoke", bestHit.xCoord, bestHit.yCoord, bestHit.zCoord, multi ? 8 : 5, 0.25, 0.20, 0.25, 0.01);
+                ws.func_147487_a("mobSpell", bestHit.xCoord, bestHit.yCoord, bestHit.zCoord, multi ? 8 : 5, 1.0, 0.30, 0.05, 0.75);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void spawnEmberShotTrail(net.minecraft.world.WorldServer ws, Vec3 start, Vec3 end, boolean multi) {
+        if (ws == null || start == null || end == null) return;
+
+        int steps = multi ? 16 : 12;
+
+        double dx = (end.xCoord - start.xCoord) / (double) steps;
+        double dy = (end.yCoord - start.yCoord) / (double) steps;
+        double dz = (end.zCoord - start.zCoord) / (double) steps;
+
+        for (int i = 0; i <= steps; i++) {
+            double px = start.xCoord + dx * (double) i;
+            double py = start.yCoord + dy * (double) i;
+            double pz = start.zCoord + dz * (double) i;
+
+            try {
+                ws.func_147487_a("mobSpell", px, py, pz, 1, 1.0, 0.28, 0.05, 0.45);
+                if ((i & 1) == 0) ws.func_147487_a("flame", px, py, pz, 1, 0.02, 0.02, 0.02, 0.0);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+
+    /**
+     * Darkfire 100%: Rapid-fire shot. Chooses small/medium/big flame sizes and applies stronger
+     * impact damage + a moderate DoT. Overcharge (up to 2x) is handled server-side.
+     */
+    static void fireDarkfireRapidFireShot(EntityPlayerMP p) {
+        if (p == null || p.worldObj == null) return;
+        if (p.worldObj.isRemote) return;
+
+        // Vary size: mostly small/medium, occasional big shots.
+        // 0 = small, 1 = medium, 2 = big
+        int roll = p.worldObj.rand.nextInt(100);
+        int size;
+        if (roll < 45) size = 0;
+        else if (roll < 85) size = 1;
+        else size = 2;
+
+        double range = (size == 2 ? 18.0D : (size == 1 ? 16.0D : 14.0D));
+        double hitRadius = (size == 2 ? 1.45D : (size == 1 ? 1.05D : 0.75D));
+        double step = 0.65D;
+
+        Vec3 look = p.getLookVec();
+        if (look == null) return;
+
+        Vec3 start = Vec3.createVectorHelper(p.posX, p.posY + 1.52D, p.posZ);
+        Vec3 end = start.addVector(look.xCoord * range, look.yCoord * range, look.zCoord * range);
+
+        // Find nearest hit along the ray (same approach as the 25%/50% sprays)
+        EntityLivingBase hitEnt = null;
+        Vec3 hitVec = null;
+
+        int steps = (int) Math.ceil(range / step);
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (int i = 1; i <= steps; i++) {
+            double t = (i * step);
+            Vec3 pt = start.addVector(look.xCoord * t, look.yCoord * t, look.zCoord * t);
+            AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(
+                    pt.xCoord - hitRadius, pt.yCoord - hitRadius, pt.zCoord - hitRadius,
+                    pt.xCoord + hitRadius, pt.yCoord + hitRadius, pt.zCoord + hitRadius
+            );
+
+            List list = p.worldObj.getEntitiesWithinAABB(EntityLivingBase.class, bb);
+            if (list == null || list.isEmpty()) continue;
+
+            for (Object o : list) {
+                if (!(o instanceof EntityLivingBase)) continue;
+                EntityLivingBase e = (EntityLivingBase) o;
+                if (e == p) continue;
+                if (e.isDead) continue;
+
+                // Quick LoS-ish: prioritize nearest
+                double dx = e.posX - p.posX;
+                double dy = (e.posY + e.getEyeHeight()) - (p.posY + 1.52D);
+                double dz = e.posZ - p.posZ;
+                double dsq = dx*dx + dy*dy + dz*dz;
+                if (dsq < bestDistSq) {
+                    bestDistSq = dsq;
+                    hitEnt = e;
+                    hitVec = pt;
+                }
+            }
+
+            if (hitEnt != null) break;
+        }
+
+        if (hitEnt != null) {
+            HexOrbEffectsController.applyDarkfireRapidFireHit(p, hitEnt, size);
+        }
+
+        // Small AoE splash to let it feel like a "blast" instead of a single poke
+        if (hitVec != null) {
+            double aoe = (size == 2 ? 2.6D : (size == 1 ? 2.1D : 1.6D));
+            List around = p.worldObj.getEntitiesWithinAABB(EntityLivingBase.class, AxisAlignedBB.getBoundingBox(
+                    hitVec.xCoord - aoe, hitVec.yCoord - aoe, hitVec.zCoord - aoe,
+                    hitVec.xCoord + aoe, hitVec.yCoord + aoe, hitVec.zCoord + aoe
+            ));
+            if (around != null && !around.isEmpty()) {
+                for (Object o : around) {
+                    if (!(o instanceof EntityLivingBase)) continue;
+                    EntityLivingBase e = (EntityLivingBase) o;
+                    if (e == p) continue;
+                    if (e.isDead) continue;
+                    if (hitEnt != null && e == hitEnt) continue; // already applied
+
+                    // Don't double-apply to a huge crowd: cap soft
+                    HexOrbEffectsController.applyDarkfireRapidFireHit(p, e, Math.min(1, size)); // AoE never uses "big"
+                }
+            }
+        }
+    }
+
+
+
+    private static void sendBlackflameSprayFX(SimpleNetworkWrapper net, EntityPlayerMP p, Vec3 start, Vec3 end, double ox, double oy, double oz) {
+        if (net == null || p == null || start == null || end == null) return;
+        net.sendToAllAround(
+                new PacketBlackflameSprayFX(
+                        (float) (start.xCoord + ox), (float) (start.yCoord + oy), (float) (start.zCoord + oz),
+                        (float) (end.xCoord + ox),   (float) (end.yCoord + oy),   (float) (end.zCoord + oz)
+                ),
+                new NetworkRegistry.TargetPoint(p.dimension, p.posX, p.posY, p.posZ, 64.0D)
+        );
+    }
+
+
+
 
     // Damage scaling for Fractured flying blast.
     // Uses effective WillPower (includes form multipliers when available).
@@ -893,12 +1739,33 @@ public class PacketFracturedAction implements IMessage {
     private static ItemStack findFirstEquippedFractured(EntityPlayerMP p) {
         if (p == null) return null;
 
-        ItemStack cur = p.getCurrentEquippedItem();
-        if (isFractured(cur)) return cur;
+        // Held
+        ItemStack held = p.getCurrentEquippedItem();
+        if (isFractured(held)) return held;
 
-        for (int i = 0; i < p.inventory.armorInventory.length; i++) {
-            ItemStack s = p.inventory.armorInventory[i];
-            if (isFractured(s)) return s;
+        // Socketed on held host
+        try {
+            int filled = HexSocketAPI.getSocketsFilled(held);
+            for (int i = 0; i < filled; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(held, i);
+                if (isFractured(gem)) return gem;
+            }
+        } catch (Throwable ignored) {}
+
+        // Armor (+ sockets)
+        if (p.inventory != null && p.inventory.armorInventory != null) {
+            for (int i = 0; i < p.inventory.armorInventory.length; i++) {
+                ItemStack s = p.inventory.armorInventory[i];
+                if (isFractured(s)) return s;
+
+                try {
+                    int filled = HexSocketAPI.getSocketsFilled(s);
+                    for (int j = 0; j < filled; j++) {
+                        ItemStack gem = HexSocketAPI.getGemAt(s, j);
+                        if (isFractured(gem)) return gem;
+                    }
+                } catch (Throwable ignored) {}
+            }
         }
         return null;
     }
@@ -907,9 +1774,97 @@ public class PacketFracturedAction implements IMessage {
         if (s == null) return false;
         NBTTagCompound tag = s.getTagCompound();
         if (tag == null) return false;
-        if (!tag.getBoolean(TAG_ROLLED)) return false;
+
+        // Normal identity path
         String prof = tag.getString(TAG_PROFILE);
-        return prof != null && prof.startsWith("FRACTURED_");
+        if (prof != null && prof.startsWith(FRACTURED_PREFIX)) return true;
+
+        // Socketed/stripped fallback: fractured marker tags survive socketing
+        if (tag.hasKey(TAG_FR_SHARDS) || tag.hasKey(TAG_FR_SNAP) || tag.hasKey(TAG_FR_SNAP_MAX)) return true;
+
+        return false;
+    }
+
+    /**
+     * Socket stations sometimes strip TAG_ROLLED / TAG_PROFILE while leaving Light payload keys.
+     * We restamp a minimal valid identity so:
+     *  - server validators keep working
+     *  - client HUD / key handler can keep finding the orb
+     *
+     * Only applies to Solar Light orbs.
+     */
+    private static boolean ensureSolarTags(ItemStack stack) {
+        if (stack == null) return false;
+
+        NBTTagCompound tag = stack.getTagCompound();
+        if (tag == null) return false; // don't create tags for random stacks
+
+        if (!tag.hasKey(TAG_LIGHT_TYPE)) return false;
+        String type = tag.getString(TAG_LIGHT_TYPE);
+        if (type == null || !"Solar".equalsIgnoreCase(type.trim())) return false;
+
+        boolean changed = false;
+
+        if (!tag.getBoolean(TAG_ROLLED)) {
+            tag.setBoolean(TAG_ROLLED, true);
+            changed = true;
+        }
+
+        String prof = tag.getString(TAG_PROFILE);
+        if (prof == null || prof.length() == 0 || !prof.startsWith("LIGHT_")) {
+            tag.setString(TAG_PROFILE, "LIGHT_SOCKETED");
+            changed = true;
+        }
+
+        if (!tag.hasKey(TAG_LIGHT_RAD)) {
+            tag.setInteger(TAG_LIGHT_RAD, 0);
+            changed = true;
+        }
+
+        if (changed) stack.setTagCompound(tag);
+        return changed;
+    }
+
+    private static boolean ensureFracturedTags(ItemStack stack) {
+        if (stack == null) return false;
+
+        NBTTagCompound tag = stack.getTagCompound();
+        if (tag == null) return false; // do NOT create tags for non-fractured stacks
+
+        // Only fix up if it already looks fractured
+        boolean looksFr = false;
+        String prof = tag.getString(TAG_PROFILE);
+        if (prof != null && prof.startsWith(FRACTURED_PREFIX)) looksFr = true;
+        if (tag.hasKey(TAG_FR_SHARDS) || tag.hasKey(TAG_FR_SNAP) || tag.hasKey(TAG_FR_SNAP_MAX)) looksFr = true;
+        if (!looksFr) return false;
+
+        boolean changed = false;
+
+        if (!tag.getBoolean(TAG_ROLLED)) {
+            tag.setBoolean(TAG_ROLLED, true);
+            changed = true;
+        }
+
+        if (prof == null || prof.length() == 0 || !prof.startsWith(FRACTURED_PREFIX)) {
+            tag.setString(TAG_PROFILE, "FRACTURED_SOCKETED");
+            changed = true;
+        }
+
+        if (!tag.hasKey(TAG_FR_SHARDS)) {
+            tag.setInteger(TAG_FR_SHARDS, 0);
+            changed = true;
+        }
+        if (!tag.hasKey(TAG_FR_SNAP)) {
+            tag.setInteger(TAG_FR_SNAP, 0);
+            changed = true;
+        }
+        if (!tag.hasKey(TAG_FR_SNAP_MAX)) {
+            tag.setInteger(TAG_FR_SNAP_MAX, 0);
+            changed = true;
+        }
+
+        if (changed) stack.setTagCompound(tag);
+        return changed;
     }
 
 
@@ -990,6 +1945,14 @@ public class PacketFracturedAction implements IMessage {
     // ---------------------------------------------------------------------
 
     private static volatile SimpleNetworkWrapper CACHED_NET;
+
+    /**
+     * Exposes the internal net-wrapper resolver for other client->server packets.
+     * (Used by PacketOrbSelect / other small sync packets.)
+     */
+    public static SimpleNetworkWrapper resolveNetWrapperForExternal() {
+        return resolveNetWrapper();
+    }
 
     private static SimpleNetworkWrapper resolveNetWrapper() {
         SimpleNetworkWrapper cached = CACHED_NET;
@@ -1100,6 +2063,72 @@ public class PacketFracturedAction implements IMessage {
         return null;
     }
 
+
+    // ---------------------------------------------------------------------
+    // Darkfire helpers
+    // ---------------------------------------------------------------------
+
+    private static net.minecraft.block.Block resolveShadowFireBlock() {
+        try {
+            Object o = net.minecraft.block.Block.blockRegistry.getObject("hexcolorcodes:shadow_fire");
+            if (o instanceof net.minecraft.block.Block) return (net.minecraft.block.Block) o;
+        } catch (Throwable ignored) {}
+        try {
+            Object o = net.minecraft.block.Block.blockRegistry.getObject("shadow_fire");
+            if (o instanceof net.minecraft.block.Block) return (net.minecraft.block.Block) o;
+        } catch (Throwable ignored) {}
+        try {
+            Object o = net.minecraft.block.Block.blockRegistry.getObject("examplemod:shadow_fire");
+            if (o instanceof net.minecraft.block.Block) return (net.minecraft.block.Block) o;
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static void tryPlaceShadowFireAtImpact(EntityPlayerMP p, net.minecraft.util.MovingObjectPosition mopBlock) {
+        if (p == null || mopBlock == null || p.worldObj == null) return;
+
+        net.minecraft.world.World w = p.worldObj;
+        if (w.isRemote) return;
+
+        net.minecraft.block.Block shadowFire = resolveShadowFireBlock();
+        if (shadowFire == null) return;
+
+        int x = mopBlock.blockX;
+        int y = mopBlock.blockY;
+        int z = mopBlock.blockZ;
+
+        // Place on the adjacent face we hit (like fire placement).
+        int tx = x, ty = y, tz = z;
+        switch (mopBlock.sideHit) {
+            case 0: ty -= 1; break; // bottom
+            case 1: ty += 1; break; // top
+            case 2: tz -= 1; break; // north
+            case 3: tz += 1; break; // south
+            case 4: tx -= 1; break; // west
+            case 5: tx += 1; break; // east
+            default: break;
+        }
+
+        try {
+            // Respect edit permissions
+            if (!p.canPlayerEdit(tx, ty, tz, mopBlock.sideHit, p.getCurrentEquippedItem())) return;
+        } catch (Throwable ignored) {}
+
+        // Only place into air/replaceable
+        try {
+            if (!w.isAirBlock(tx, ty, tz)) return;
+        } catch (Throwable ignored) {
+            return;
+        }
+
+        try {
+            if (!shadowFire.canPlaceBlockAt(w, tx, ty, tz)) return;
+        } catch (Throwable ignored) {}
+
+        try {
+            w.setBlock(tx, ty, tz, shadowFire, 0, 3);
+        } catch (Throwable ignored) {}
+    }
     private static void sendToAllAroundSafe(IMessage msg, TargetPoint pt) {
         if (msg == null || pt == null) return;
         try {

@@ -34,6 +34,10 @@ public class HexHelpCommand extends CommandBase {
     public int getRequiredPermissionLevel() {
         return 0; // everyone
     }
+    @Override
+    public boolean canCommandSenderUseCommand(ICommandSender sender) {
+        return true; // allow everyone (even deopped)
+    }
 
     @Override
     public void processCommand(ICommandSender sender, String[] args) {

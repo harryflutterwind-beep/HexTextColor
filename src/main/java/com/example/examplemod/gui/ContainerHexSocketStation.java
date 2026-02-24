@@ -243,65 +243,78 @@ public class ContainerHexSocketStation extends Container {
             }
         }
 
-        SocketBonus bonus = extractSocketBonusFromGem(gem, kCanon);
+        List<SocketBonus> bonuses = extractSocketBonusesFromGem(gem, kCanon);
+        SocketBonus firstBonus = (bonuses == null || bonuses.isEmpty()) ? null : bonuses.get(0);
 
-        boolean ok;
-        try {
-            if (bonus != null && bonus.attrKey != null && bonus.attrKey.length() > 0) {
-                ok = HexSocketAPI.socketGemWithBonus(preview, kCanon, bonus.attrKey, bonus.amount, bonus.displayName);
-            } else {
-                ok = HexSocketAPI.socketGem(preview, kCanon);
-            }
-        } catch (Throwable ignored) {
-            ok = false;
-        }
+        // Always socket the gem first (this also appends an empty bonus compound so indices stay aligned).
+        boolean ok = HexSocketAPI.socketGem(preview, kCanon);
 
-        // If socketGemWithBonus isn't present or fails, fall back to socketGem + setBonusAt.
-        if (!ok && bonus != null && bonus.attrKey != null && bonus.attrKey.length() > 0) {
-            try {
-                ok = HexSocketAPI.socketGem(preview, kCanon);
-                if (ok) {
-                    int slot = Math.max(0, HexSocketAPI.getSocketsFilled(preview) - 1);
-                    try {
-                        HexSocketAPI.setBonusAt(preview, slot, bonus.attrKey, bonus.amount, bonus.displayName);
-                    } catch (Throwable ignored2) {
-                        // ignore
-                    }
-                }
-            } catch (Throwable ignored2) {
-                ok = false;
-            }
-        }
-
-        // Absolute fallback: never leave output null just because socketGem() returned false.
-        if (!ok) {
-            ok = fallbackSocketGemKnown(preview, kCanon, open);
-        }
-
-        if (!ok) {
-            return;
-        }
-
-        // Carry the rolled RPGCore attributes from the gem onto the preview target.
-        mergeRpgCoreAttributesAdd(preview, gem);
-
-        // If the gem didn't actually store RPGCore/HexOrbRolls but we *could* parse a single bonus line,
-        // also apply that bonus directly to the target so it behaves like a rolled orb.
-        applySocketBonusToRpgCoreIfNeeded(preview, gem, bonus);
-
-        // Final safety pass: collapse any weird strings (like "gems/pills/...") into "gems/<base>".
-        // This prevents the tooltip icon renderer from looking up non-existent folders.
+        // For display: force icon key to be base folder. (prevents "gems/" mismatches in <ico:...>)
         sanitizeGemKeysInPlace(preview);
 
-        // Ensure the station stores per-socket bonus info so the sockets page can display the rolled value.
-        if (bonus != null && bonus.attrKey != null && bonus.attrKey.length() > 0) {
-            // IMPORTANT: duplicates are allowed. Some API builds may de-dup when counting filled.
-            // Use the raw NBT list length to pick the slot index we just appended.
-            int slotIdx = Math.max(0, nbtGetSocketsFilled(preview) - 1);
-            tryStoreSocketBonusFallback(preview, slotIdx, bonus);
+        // Store the full gem/orb ItemStack into the parallel GemStacks list so effects/NBT carry over
+        // when socketed (e.g., Fractured shards/cooldowns, action levels, etc.).
+        if (ok) {
+            try {
+                int filledNow = HexSocketAPI.getSocketsFilled(preview);
+                int socketIdx = Math.max(0, filledNow - 1);
+
+                ItemStack gemCopy = gem.copy();
+                gemCopy.stackSize = 1;
+
+                // Keep a canonical key hint for downstream systems (optional but helpful).
+                NBTTagCompound gtag = gemCopy.getTagCompound();
+                if (gtag == null) gtag = new NBTTagCompound();
+                gtag.setString("HexGemKey", kCanon);
+                gemCopy.setTagCompound(gtag);
+
+                HexSocketAPI.setGemAt(preview, socketIdx, gemCopy);
+            } catch (Throwable t) {
+                // ignore - socketing will still work via gem keys
+            }
         }
 
-        // Refresh the sockets lore pages so PREVIEW + FINAL item show the stat line immediately.
+        boolean storedInApi = false;
+        if (ok && bonuses != null && !bonuses.isEmpty()) {
+            int filledNow = HexSocketAPI.getSocketsFilled(preview);
+            int socketIdx = Math.max(0, filledNow - 1);
+
+            // Write ALL stats for this gem into the socket-bonus list (multi-roll support).
+            try {
+                String[] keys = new String[bonuses.size()];
+                double[] amts = new double[bonuses.size()];
+                String[] names = new String[bonuses.size()];
+                for (int bi = 0; bi < bonuses.size(); bi++) {
+                    SocketBonus b = bonuses.get(bi);
+                    keys[bi] = (b == null || b.attrKey == null) ? "" : b.attrKey;
+                    amts[bi] = (b == null) ? 0.0 : b.amount;
+                    names[bi] = (b == null || b.displayName == null) ? "" : b.displayName;
+                }
+                storedInApi = HexSocketAPI.setBonusesAt(preview, socketIdx, keys, amts, names);
+            } catch (Throwable t) {
+                storedInApi = false;
+            }
+
+            // Legacy fallback: store only the first stat if setBonusesAt is unavailable.
+            if (!storedInApi && firstBonus != null && firstBonus.attrKey != null && firstBonus.attrKey.length() > 0) {
+                try {
+                    storedInApi = HexSocketAPI.setBonusAt(preview, socketIdx, firstBonus.attrKey, firstBonus.amount, firstBonus.displayName);
+                } catch (Throwable t) {
+                    storedInApi = false;
+                }
+            }
+        }
+
+        // Some gems may not store rolls in NBT; patch RPGCore attributes as a fallback (uses the list).
+        applySocketBonusesToRpgCoreIfNeeded(preview, gem, bonuses);
+
+        // If API storage failed (old runtime), store minimal fallback data for hex lore patching.
+        if (!storedInApi && firstBonus != null && firstBonus.attrKey != null && firstBonus.attrKey.length() > 0) {
+            // Don't rely on API "filled" in case it de-dups; use the raw NBT list length.
+            tryStoreSocketBonusFallback(preview, Math.max(0, nbtGetSocketsFilled(preview) - 1), firstBonus);
+        }
+
+// Refresh the sockets lore pages so PREVIEW + FINAL item show the stat line immediately.
         refreshSocketLorePagesForStation(preview);
 
         previewGemKey = kCanon;
@@ -957,91 +970,75 @@ public class ContainerHexSocketStation extends Container {
      *  - RPGCore.Attributes (compound of attrKey -> float roll)
      */
     private static SocketBonus extractSocketBonusFromGem(ItemStack gem, String canonicalGemKey) {
-        if (gem == null) return null;
-        NBTTagCompound tag = gem.getTagCompound();
+        List<SocketBonus> list = extractSocketBonusesFromGem(gem, canonicalGemKey);
+        if (list == null || list.isEmpty()) return null;
+        return list.get(0);
+    }
 
-        // 1) Prefer explicit roll NBT (HexOrbRolls) or RPGCore.Attributes.
-        //    Note: For ".Multi" keys, HexSocketAPI expects *fractional* values (0.05 for 5%)
-        //    because it formats by multiplying by 100.
-        if (tag != null) {
-            // HexOrbRolls: usually int values (5 for 5%)
-            if (tag.hasKey("HexOrbRolls", 10)) {
-                NBTTagCompound rolls = tag.getCompoundTag("HexOrbRolls");
-                // NOTE: In 1.7.10 MCP mappings, func_150296_c() is often a raw Set.
-                // Calling toArray(new String[0]) on a raw Set returns Object[], which
-                // won't compile when assigned to String[]. Convert manually.
-                Object[] keyObjs = rolls.func_150296_c().toArray();
-                String[] keys = new String[keyObjs.length];
-                for (int i = 0; i < keyObjs.length; i++) {
-                    keys[i] = String.valueOf(keyObjs[i]);
-                }
-                if (keys.length > 0) {
-                    String best = keys[0];
-                    // Prefer stable ordering (helps avoid random choice when compound order changes)
-                    java.util.Arrays.sort(keys);
-                    best = keys[0];
+    private static List<SocketBonus> extractSocketBonusesFromGem(ItemStack gem, String canonicalGemKey) {
+        List<SocketBonus> out = new ArrayList<SocketBonus>();
+        if (gem == null) return out;
 
-                    double raw;
-                    try {
-                        // Most of these are ints
-                        raw = rolls.getInteger(best);
-                        if (raw == 0d) {
-                            // In case a float/double sneaks in
-                            raw = rolls.getDouble(best);
-                        }
-                    } catch (Throwable t) {
-                        raw = 0d;
-                    }
-
-                    if (raw != 0d) {
-                        float amt = (float) normalizeBonusAmount(best, raw);
-                        return new SocketBonus(best, prettyAttrNameFromKey(best), amt);
-                    }
-                }
-            }
-
-            // RPGCore.Attributes: float values (sometimes whole percent, sometimes fractional)
-            if (tag.hasKey("RPGCore", 10)) {
-                NBTTagCompound rpg = tag.getCompoundTag("RPGCore");
-                if (rpg.hasKey("Attributes", 10)) {
-                    NBTTagCompound attrs = rpg.getCompoundTag("Attributes");
-                    // Same raw-Set issue as above; convert keys manually.
-                    Object[] keyObjs = attrs.func_150296_c().toArray();
+        // Prefer rolled NBT first (HexOrbRolls / RPGCore.Attributes), then fall back to lore parsing.
+        try {
+            NBTTagCompound tag = gem.getTagCompound();
+            if (tag != null) {
+                // 1) Preferred: your roller NBT (HexOrbRolls)
+                if (tag.hasKey("HexOrbRolls", 10)) {
+                    NBTTagCompound rolls = tag.getCompoundTag("HexOrbRolls");
+                    Object[] keyObjs = rolls.func_150296_c().toArray();
                     String[] keys = new String[keyObjs.length];
-                    for (int i = 0; i < keyObjs.length; i++) {
-                        keys[i] = String.valueOf(keyObjs[i]);
-                    }
+                    for (int i = 0; i < keyObjs.length; i++) keys[i] = String.valueOf(keyObjs[i]);
                     if (keys.length > 0) {
                         java.util.Arrays.sort(keys);
-                        String best = keys[0];
-                        double raw;
-                        try {
-                            raw = attrs.getDouble(best);
-                        } catch (Throwable t) {
-                            raw = 0d;
-                        }
-                        if (raw != 0d) {
-                            float amt = (float) normalizeBonusAmount(best, raw);
-                            return new SocketBonus(best, prettyAttrNameFromKey(best), amt);
+                        for (int i = 0; i < keys.length; i++) {
+                            String k = keys[i];
+                            double raw;
+                            try { raw = rolls.getDouble(k); } catch (Throwable t) { raw = 0d; }
+                            if (raw == 0d) continue;
+                            float amt = (float) normalizeBonusAmount(k, raw);
+                            out.add(new SocketBonus(k, prettyAttrNameFromKey(k), amt));
                         }
                     }
+                    if (!out.isEmpty()) return out;
+                }
+
+                // 2) Alternate: RPGCore attributes on the gem (older / script-generated orbs)
+                if (tag.hasKey("RPGCore", 10)) {
+                    NBTTagCompound rpg = tag.getCompoundTag("RPGCore");
+                    if (rpg.hasKey("Attributes", 10)) {
+                        NBTTagCompound attrs = rpg.getCompoundTag("Attributes");
+                        Object[] keyObjs = attrs.func_150296_c().toArray();
+                        String[] keys = new String[keyObjs.length];
+                        for (int i = 0; i < keyObjs.length; i++) keys[i] = String.valueOf(keyObjs[i]);
+                        if (keys.length > 0) {
+                            java.util.Arrays.sort(keys);
+                            for (int i = 0; i < keys.length; i++) {
+                                String k = keys[i];
+                                double raw;
+                                try { raw = attrs.getDouble(k); } catch (Throwable t) { raw = 0d; }
+                                if (raw == 0d) continue;
+                                float amt = (float) normalizeBonusAmount(k, raw);
+                                out.add(new SocketBonus(k, prettyAttrNameFromKey(k), amt));
+                            }
+                        }
+                    }
+                    if (!out.isEmpty()) return out;
                 }
             }
+        } catch (Throwable t) {
+            // ignore and fall back to lore parsing
         }
 
+        // 3) Fallback: parse HexLorePages (tooltip pager storage) for rolled stat lines.
+        out.addAll(parseBonusesFromHexLorePages(gem));
+        if (!out.isEmpty()) return out;
 
-// 2) Fallback: parse HexLorePages (your tooltip pager storage) for a rolled stat line.
-//    This is important because many of your orbs keep their rolled stat on a lore page
-//    instead of display.Lore.
-        SocketBonus fromPages = parseBonusFromHexLorePages(gem);
-        if (fromPages != null) return fromPages;
-
-// 3) Fallback: parse display lore lines (supports older/script-generated orbs that only have lore text). (supports older/script-generated orbs that only have lore text).
-        SocketBonus fromLore = parseBonusFromDisplayLore(gem);
-        if (fromLore != null) return fromLore;
-
-        return null;
+        // 4) Fallback: parse display lore lines.
+        out.addAll(parseBonusesFromDisplayLore(gem));
+        return out;
     }
+
 
     private static double normalizeBonusAmount(String attrKey, double raw) {
         if (attrKey == null) return raw;
@@ -1061,45 +1058,40 @@ public class ContainerHexSocketStation extends Container {
      *   Spirit +8%
      */
     private static SocketBonus parseBonusFromHexLorePages(ItemStack gem) {
+        List<SocketBonus> list = parseBonusesFromHexLorePages(gem);
+        if (list == null || list.isEmpty()) return null;
+        return list.get(0);
+    }
+
+    private static List<SocketBonus> parseBonusesFromHexLorePages(ItemStack gem) {
+        List<SocketBonus> out = new ArrayList<SocketBonus>();
+        if (gem == null) return out;
         try {
             NBTTagCompound tag = gem.getTagCompound();
-            if (tag == null || !tag.hasKey("HexLorePages", 10)) return null;
-            NBTTagCompound lp = tag.getCompoundTag("HexLorePages");
-            if (!lp.hasKey("Pages", 9)) return null;
-
-            // New format: Pages is a TAG_List of TAG_Compound, each compound contains TAG_List "L" of strings.
-            NBTTagList pagesNew = lp.getTagList("Pages", 10);
-            if (pagesNew != null && pagesNew.tagCount() > 0) {
-                for (int i = 0; i < pagesNew.tagCount(); i++) {
-                    NBTTagCompound page = pagesNew.getCompoundTagAt(i);
-                    if (page == null) continue;
-                    NBTTagList lines = page.getTagList("L", 8);
-                    if (lines == null) continue;
-                    for (int j = 0; j < lines.tagCount(); j++) {
-                        String line = lines.getStringTagAt(j);
-                        SocketBonus b = parseBonusLine(line);
-                        if (b != null) return b;
+            if (tag == null || !tag.hasKey("HexLorePages", 9)) return out;
+            NBTTagList pages = tag.getTagList("HexLorePages", 10);
+            for (int pi = 0; pi < pages.tagCount(); pi++) {
+                NBTTagCompound page = pages.getCompoundTagAt(pi);
+                if (page == null) continue;
+                if (!page.hasKey("Lines", 9)) continue;
+                NBTTagList lines = page.getTagList("Lines", 8);
+                for (int li = 0; li < lines.tagCount(); li++) {
+                    String line = lines.getStringTagAt(li);
+                    SocketBonus b = parseBonusLine(line);
+                    if (b == null) continue;
+                    boolean seen = false;
+                    for (int x = 0; x < out.size(); x++) {
+                        if (out.get(x).attrKey.equals(b.attrKey)) { seen = true; break; }
                     }
+                    if (!seen) out.add(b);
                 }
             }
-
-            // Legacy format: Pages is a TAG_List of strings, each string contains \n separated lines.
-            NBTTagList pagesLegacy = lp.getTagList("Pages", 8);
-            if (pagesLegacy != null && pagesLegacy.tagCount() > 0) {
-                for (int i = 0; i < pagesLegacy.tagCount(); i++) {
-                    String pageText = pagesLegacy.getStringTagAt(i);
-                    if (pageText == null) continue;
-                    String[] lines = pageText.split("\\n|\r?\n");
-                    for (int j = 0; j < lines.length; j++) {
-                        SocketBonus b = parseBonusLine(lines[j]);
-                        if (b != null) return b;
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            // ignore
         }
-        return null;
+        return out;
     }
+
 
     /** Parse a single plain or formatted tooltip line into a SocketBonus. */
     private static SocketBonus parseBonusLine(String line) {
@@ -1128,43 +1120,37 @@ public class ContainerHexSocketStation extends Container {
     }
 
     private static SocketBonus parseBonusFromDisplayLore(ItemStack gem) {
+        List<SocketBonus> list = parseBonusesFromDisplayLore(gem);
+        if (list == null || list.isEmpty()) return null;
+        return list.get(0);
+    }
+
+    private static List<SocketBonus> parseBonusesFromDisplayLore(ItemStack gem) {
+        List<SocketBonus> out = new ArrayList<SocketBonus>();
+        if (gem == null) return out;
         try {
             NBTTagCompound tag = gem.getTagCompound();
-            if (tag == null || !tag.hasKey("display", 10)) return null;
-            NBTTagCompound display = tag.getCompoundTag("display");
-            if (!display.hasKey("Lore", 9)) return null;
-
-            NBTTagList lore = display.getTagList("Lore", 8);
+            if (tag == null) return out;
+            if (!tag.hasKey("display", 10)) return out;
+            NBTTagCompound disp = tag.getCompoundTag("display");
+            if (!disp.hasKey("Lore", 9)) return out;
+            NBTTagList lore = disp.getTagList("Lore", 8);
             for (int i = 0; i < lore.tagCount(); i++) {
                 String line = lore.getStringTagAt(i);
-                if (line == null || line.isEmpty()) continue;
-
-                // Strip MC formatting and your <style> markup.
-                String plain = stripStyleMarkup(stripMcColors(line)).trim();
-                if (plain.isEmpty()) continue;
-
-                // Match e.g. "Spirit +5%" or "Constitution +9"
-                java.util.regex.Matcher m = java.util.regex.Pattern
-                        .compile("^([A-Za-z ]+?)\\s*\\+\\s*(-?\\d+(?:\\.\\d+)?)\\s*(%)?$")
-                        .matcher(plain);
-                if (!m.find()) continue;
-
-                String statName = m.group(1).trim();
-                double val = Double.parseDouble(m.group(2));
-                boolean isPct = (m.group(3) != null && !m.group(3).isEmpty());
-
-                String attrKey = mapStatNameToAttrKey(statName, isPct);
-                if (attrKey == null || attrKey.isEmpty()) continue;
-
-                // In our ecosystem, *.Multi values are stored as WHOLE percent units ("8" == 8%).
-                // However, some legacy lines may appear as fractions ("0.08%" == 8%).
-                float amt = (float) (isPct ? (Math.abs(val) <= 1.000001d ? val * 100.0d : val) : val);
-                return new SocketBonus(attrKey, statName, amt);
+                SocketBonus b = parseBonusLine(line);
+                if (b == null) continue;
+                boolean seen = false;
+                for (int x = 0; x < out.size(); x++) {
+                    if (out.get(x).attrKey.equals(b.attrKey)) { seen = true; break; }
+                }
+                if (!seen) out.add(b);
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            // ignore
         }
-        return null;
+        return out;
     }
+
 
     private static String mapStatNameToAttrKey(String statName, boolean isPct) {
         if (statName == null) return null;
@@ -1287,60 +1273,87 @@ public class ContainerHexSocketStation extends Container {
         tTag.setTag("RPGCore", tRpg);
         target.setTagCompound(tTag);
     }
-
     /**
-     * Some gems/orbs are authored only via tooltip/lore lines (no RPGCore or HexOrbRolls tag).
-     * If we successfully parsed a single bonus line for display, also write it into the
-     * target's RPGCore.Attributes so the bonus exists on the resulting item.
+     * Additively merge a single attribute into an RPGCore.Attributes compound.
+     *
+     * We store as float for consistency with the rest of this container and with typical RPGCore usage.
      */
-    private static void applySocketBonusToRpgCoreIfNeeded(ItemStack target, ItemStack gem, SocketBonus bonus) {
-        if (target == null || bonus == null) return;
-        if (bonus.attrKey == null || bonus.attrKey.length() == 0) return;
-
-        // If the gem already stores the value in RPGCore/HexOrbRolls, mergeRpgCoreAttributesAdd handled it.
-        NBTTagCompound gTag = (gem != null) ? gem.getTagCompound() : null;
-        if (gTag != null) {
-            try {
-                if (gTag.hasKey("RPGCore", 10)) {
-                    NBTTagCompound rpg = gTag.getCompoundTag("RPGCore");
-                    if (rpg.hasKey("Attributes", 10)) {
-                        NBTTagCompound attrs = rpg.getCompoundTag("Attributes");
-                        if (attrs.hasKey(bonus.attrKey, 99)) return;
-                    }
-                }
-                if (gTag.hasKey("HexOrbRolls", 10)) {
-                    NBTTagCompound rolls = gTag.getCompoundTag("HexOrbRolls");
-                    if (rolls.hasKey(bonus.attrKey, 99)) return;
-                }
-            } catch (Throwable ignored) {
-                // fall through
-            }
-        }
-
-        // Apply to target RPGCore.Attributes as whole percent units for *.Multi (matches HexOrbRoller).
-        NBTTagCompound tTag = target.getTagCompound();
-        if (tTag == null) {
-            tTag = new NBTTagCompound();
-            target.setTagCompound(tTag);
-        }
-
-        NBTTagCompound tRpg = tTag.hasKey("RPGCore", 10) ? tTag.getCompoundTag("RPGCore") : new NBTTagCompound();
-        NBTTagCompound tAttrs = tRpg.hasKey("Attributes", 10) ? tRpg.getCompoundTag("Attributes") : new NBTTagCompound();
+    private static void mergeAttributeAdd(NBTTagCompound attrs, String key, double add) {
+        if (attrs == null) return;
+        if (key == null || key.length() == 0) return;
 
         float cur = 0f;
         try {
-            if (tAttrs.hasKey(bonus.attrKey, 99)) {
-                cur = tAttrs.getFloat(bonus.attrKey);
+            if (attrs.hasKey(key, 99)) {
+                // Handles float/double/int tags.
+                cur = attrs.getFloat(key);
+                if (cur == 0f) {
+                    cur = (float) attrs.getDouble(key);
+                }
             }
         } catch (Throwable ignored) {
             // ignore
         }
 
-        tAttrs.setFloat(bonus.attrKey, cur + (float) bonus.amount);
-        tRpg.setTag("Attributes", tAttrs);
-        tTag.setTag("RPGCore", tRpg);
-        target.setTagCompound(tTag);
+        attrs.setFloat(key, cur + (float) add);
     }
+
+    /**
+     * Some gems/orbs are authored only via tooltip/lore lines (no RPGCore or HexOrbRolls tag).
+     * If we successfully parsed at least one bonus line for display, also write it into the
+     * target's RPGCore.Attributes so the bonus exists on the resulting item.
+     */
+    private static void applySocketBonusToRpgCoreIfNeeded(ItemStack target, ItemStack gem, SocketBonus bonus) {
+        if (bonus == null) return;
+        List<SocketBonus> list = new ArrayList<SocketBonus>();
+        list.add(bonus);
+        applySocketBonusesToRpgCoreIfNeeded(target, gem, list);
+    }
+
+    private static void applySocketBonusesToRpgCoreIfNeeded(ItemStack target, ItemStack gem, List<SocketBonus> bonuses) {
+        if (target == null || gem == null || bonuses == null || bonuses.isEmpty()) return;
+        try {
+            NBTTagCompound gt = gem.getTagCompound();
+            if (gt == null) return;
+
+            NBTTagCompound it = target.getTagCompound();
+            if (it == null) { it = new NBTTagCompound(); target.setTagCompound(it); }
+
+            NBTTagCompound rpg = it.hasKey("RPGCore", 10) ? it.getCompoundTag("RPGCore") : new NBTTagCompound();
+            NBTTagCompound attrs = rpg.hasKey("Attributes", 10) ? rpg.getCompoundTag("Attributes") : new NBTTagCompound();
+
+            for (int bi = 0; bi < bonuses.size(); bi++) {
+                SocketBonus b = bonuses.get(bi);
+                if (b == null || b.attrKey == null || b.attrKey.length() == 0) continue;
+
+                boolean gemHas = false;
+                try {
+                    if (gt.hasKey("HexOrbRolls", 10)) {
+                        NBTTagCompound rolls = gt.getCompoundTag("HexOrbRolls");
+                        gemHas = rolls != null && rolls.hasKey(b.attrKey);
+                    }
+                    if (!gemHas && gt.hasKey("RPGCore", 10)) {
+                        NBTTagCompound gr = gt.getCompoundTag("RPGCore");
+                        if (gr != null && gr.hasKey("Attributes", 10)) {
+                            NBTTagCompound ga = gr.getCompoundTag("Attributes");
+                            gemHas = ga != null && ga.hasKey(b.attrKey);
+                        }
+                    }
+                } catch (Throwable t) {
+                    gemHas = false;
+                }
+                if (gemHas) continue;
+
+                mergeAttributeAdd(attrs, b.attrKey, b.amount);
+            }
+
+            rpg.setTag("Attributes", attrs);
+            it.setTag("RPGCore", rpg);
+        } catch (Throwable t) {
+            // ignore
+        }
+    }
+
 
 
 
@@ -1712,6 +1725,11 @@ public class ContainerHexSocketStation extends Container {
 
     private static boolean looksLikeSocketsHeader(String s) {
         if (s == null) return false;
+
+        // Safety: Only treat lines that already contain socket icon tokens as the generated sockets page.
+        // This prevents accidental patching of help/guide pages that mention "Sockets:" in plain text.
+        if (!(s.contains("<ico:") || s.toLowerCase(java.util.Locale.ROOT).contains("socket_empty"))) return false;
+
         String p = stripStyleMarkup(stripMcColors(s)).trim().toLowerCase(java.util.Locale.ROOT);
         return p.equals("sockets:") || p.startsWith("sockets:");
     }
@@ -1730,12 +1748,20 @@ public class ContainerHexSocketStation extends Container {
     private static final String G_GOLDEN_OPEN    = "<grad #fff3b0 #ffd36b #ffb300 #fff7d6 scroll=0.20>";
     private static final String G_NATURE_OPEN    = "<grad #19ff74 #6dffb4 #00d66b #d8ffe8 scroll=0.22>";
     private static final String G_AETHER_OPEN    = "<grad #00ffd5 #36d1ff #7a5cff #e9ffff scroll=0.24>";
+    private static final String G_VOID_OPEN      = "<grad #b36bff #7b2cff #36d1ff #ff4fd8 scroll=0.24>";
     private static final String G_ENERGIZED_OPEN = "<grad #ff4fd8 #36d1ff #ffe66d #7cff6b #7a5cff scroll=0.34>";
+    // Dark Fire Pill theme (purple → magenta → ember)
+    private static final String G_DARKFIRE_OPEN = "<grad #120015 #7b2cff #ff007e #ff3b00 scroll=0.26>";
+    // Fractured theme (ice-white → bright blue)
+    private static final String G_FRACTURED_OPEN = "<grad #f4feff #baf3ff #6ad6ff #3aa7ff scroll=0.22>";
+
     private static final String G_CLOSE          = "</grad>";
 
     /** Build per-socket text like: "<ico:gems/orb_gem_teal_aether_64> <grad ...>Spirit +1%</grad>" */
     private static String applyGemStyle(String canonicalGemKey, String text) {
         if (text == null) text = "";
+        // If text already contains MC formatting or Hex tags, don't double-wrap.
+        if (text.indexOf('§') >= 0 || text.indexOf('<') >= 0) return text;
         String open = gemGradientOpen(canonicalGemKey);
         if (open.length() == 0) return text;
         return open + text + G_CLOSE;
@@ -1744,6 +1770,13 @@ public class ContainerHexSocketStation extends Container {
     private static String gemGradientOpen(String canonicalGemKey) {
         if (canonicalGemKey == null) return "";
         String k = canonicalGemKey.toLowerCase();
+
+        // IMPORTANT: check specific keys BEFORE broad matches like "fire" / "blue".
+        if (k.contains("darkfire") || k.contains("pill_darkfire") || k.contains("dark_fire") || k.contains("dark fire")) return G_DARKFIRE_OPEN;
+        if (k.contains("fractured") || k.contains("frac")) return G_FRACTURED_OPEN;
+
+        if (k.contains("void")) return G_VOID_OPEN;
+
         if (k.contains("inferno") || k.contains("fire") || k.contains("orange")) return G_FIERY_OPEN;
         if (k.contains("frost") || k.contains("ice") || k.contains("blue")) return G_ICY_OPEN;
         if (k.contains("solar") || k.contains("gold") || k.contains("yellow")) return G_GOLDEN_OPEN;

@@ -1,12 +1,17 @@
 package com.example.examplemod.server;
 
 
+
+import java.lang.reflect.Method;
 import com.example.examplemod.api.LorePagesAPI;
+import com.example.examplemod.api.HexSocketAPI;
+import com.example.examplemod.gui.ContainerHexSocketStation;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import net.minecraft.entity.item.EntityItem;
 import net.minecraft.entity.monster.IMob;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.inventory.Slot;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
@@ -30,6 +35,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
+import java.util.HashSet;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.Entity;
 
@@ -53,12 +60,28 @@ public class HexOrbRoller {
     // ---------------------------------------------------------------------
     private static final String TAG_ROLLED  = "HexOrbRolled";   // boolean
     private static final String TAG_PROFILE = "HexOrbProfile";  // string
+
+
+    // ---- action-orb selection (set by client packet / keybind) ----
+    private static final String SEL_FAMILY = "HexOrbSelFamily";
+    private static final String SEL_HOST_KIND = "HexOrbSelHostKind"; // 0=held, 1=armor
+    private static final String SEL_HOST_SLOT = "HexOrbSelHostSlot";
+    private static final String SEL_SOCKET_IDX = "HexOrbSelSocketIdx";
+    private static final String SEL_FAM_FRACTURED = "FRACTURED";
     private static final String TAG_ROLLS   = "HexOrbRolls";    // compound of int per attr key
 
     private static final String TAG_LORE_DONE = "HexOrbLoreDone"; // boolean
     // Where your attribute system reads from (as in your screenshots)
     private static final String TAG_RPGCORE = "RPGCore";
     private static final String TAG_ATTRS   = "Attributes";
+
+
+    // === Chaotic socket delta cache (prevents old rolls from sticking / becoming "legacy") ===
+    private static final String TAG_CHAOTIC_CACHE = "HexChaoticSocketCache";
+    private static final String TAG_CHAOTIC_BASE_PREFIX = "Base_";
+    private static final String TAG_CHAOTIC_LAYER_PREFIX = "Layer_";
+    private static final String TAG_CHAOTIC_DEBUG_FLAG = "HexChaoticDebug"; // set true on an item to see chat debug
+    private static final boolean CHAOTIC_DEBUG = false; // hard-toggle for dev
 
     // ---------------------------------------------------------------------
     // Lore styling (your renderer tags)
@@ -71,6 +94,7 @@ public class HexOrbRoller {
     private static final String G_ENERGIZED_OPEN = "<grad #ff4fd8 #36d1ff #ffe66d #7cff6b #7a5cff scroll=0.34>";
     private static final String G_NEG_OPEN       = "<grad #7a00ff #ff4fd8 #120018 #7a5cff scroll=0.30>";
     private static final String G_VOID_OPEN      = "<grad #b84dff #7a5cff #120018 #ff4fd8 scroll=0.30>";
+    private static final String G_DARKFIRE_OPEN  = "<grad #ff2b2b #ff3b00 #ff00aa #7a5cff #120018 scroll=0.32>";
     // Shorter Void gradient for lore pages (helps tooltip width)
     private static final String G_VOID_PAGE_OPEN = "<grad #b84dff #7a5cff scroll=0.22>";
     private static final String G_FRACTURE_OPEN  = "<grad #b84dff #7a5cff #00ffd5 #ff4fd8 scroll=0.30>";
@@ -83,13 +107,16 @@ public class HexOrbRoller {
 
     private static final String EFFECT_NA = "§7Effect: §8N/A";
 
+    // Energized Rainbow (meta 16/17) effect: Overwrite
+    private static final String EFFECT_OVERWRITE = "§7Effect: " + G_ENERGIZED_OPEN + "Overwrite" + G_CLOSE;
+
     private static final String BONUS_NA  = "§7Bonus: §8N/A";
     // ---------------------------------------------------------------------
     // Drop behavior (optional)
     // ---------------------------------------------------------------------
     private static final boolean ENABLE_MOB_DROPS  = true;
     private static final boolean DROP_ONLY_HOSTILE = true;
-    private static final float   DROP_CHANCE       = 0.038f; // 1.5%
+    private static final float   DROP_CHANCE       = 0.024f; // 1.5%
 
     // ---------------------------------------------------------------------
     // Inventory scan (needed so creative-menu grabs roll on server)
@@ -105,6 +132,11 @@ public class HexOrbRoller {
     // Fire pills metas: 27 = pill_fire_textured_64 (flat), 26 = pill_fire_animated_64_anim (anim)
     private static final int META_PILL_FIRE_ANIM = 26;
     private static final int META_PILL_FIRE_FLAT = 27;
+
+    // Dark Fire pills metas: 29 = pill_darkfire_textured_64 (flat), 28 = pill_darkfire_animated_64_anim (anim)
+    // If your meta IDs differ, the fallback name-check in rollIfConfigured will still roll it.
+    private static final int META_PILL_DARKFIRE_ANIM = 25;
+    private static final int META_PILL_DARKFIRE_FLAT = 24;
 
     // Chaotic sphere metas: 2 = flat, 3 = animated (% variant)
     private static final int META_CHAOTIC_FLAT = 2;
@@ -154,6 +186,7 @@ public class HexOrbRoller {
     private static final String TAG_LIGHT_TYPE     = "HexLightType";     // string
     private static final String TAG_LIGHT_RAD      = "HexLightRadiance"; // int 0..100
     private static final String TAG_VOID_TYPE     = "HexVoidType";      // string
+    private static final String TAG_DARKFIRE_TYPE  = "HexDarkFireType";  // string
 
 
     // Per-move cooldown/flags stored on the orb (world ticks)
@@ -182,6 +215,14 @@ public class HexOrbRoller {
     private static final String TAG_L_HITGOAL      = "HexLightHitGoal";
 
     private static final int LIGHT_RAD_MAX = 100;
+
+    // Radiance gain chances (Light) — chance-gated, still throttled by TAG_L_LAST_* keys.
+// Tune these to taste. 1.0f = always, 0.0f = never.
+    private static final float L_RAD_CHANCE_TAKE = 0.35f; // taking damage (attempt every 10 ticks)
+    private static final float L_RAD_CHANCE_DEAL = 0.30f; // dealing damage (attempt every 10 ticks)
+    private static final float L_RAD_CHANCE_KILL = 0.60f; // kill credit (attempt every 40 ticks)
+    private static final float L_RAD_CHANCE_SUN  = 1.00f; // solar sunlight tick (attempt every 20 ticks)
+
 
 
     // Solar Beam costs (radiance percent)
@@ -284,11 +325,15 @@ public class HexOrbRoller {
         metaProfiles.put(17, RollProfiles.RAINBOW_ALL5_MULTI);
 
         // Effect items (ONLY ones that have a real effect type right now)
-        metaProfiles.put(META_SWIRLY_FLAT, RollProfiles.SWIRLY_EFFECT);
-        metaProfiles.put(META_SWIRLY_ANIM, RollProfiles.SWIRLY_EFFECT);
+        metaProfiles.put(META_SWIRLY_FLAT, RollProfiles.SWIRLY_ALL5_FLAT);
+        metaProfiles.put(META_SWIRLY_ANIM, RollProfiles.SWIRLY_ALL5_MULTI);
 
         metaProfiles.put(META_PILL_FIRE_FLAT, RollProfiles.PILL_FIRE_EFFECT);
         metaProfiles.put(META_PILL_FIRE_ANIM, RollProfiles.PILL_FIRE_EFFECT);
+
+        // Dark Fire Pill (dynamic rolled type + 2 random positive stats)
+        metaProfiles.put(META_PILL_DARKFIRE_FLAT, RollProfiles.PILL_DARKFIRE_EFFECT);
+        metaProfiles.put(META_PILL_DARKFIRE_ANIM, RollProfiles.PILL_DARKFIRE_EFFECT);
     }
 
     // ---------------------------------------------------------------------
@@ -330,8 +375,8 @@ public class HexOrbRoller {
         if (event.item == null) return;
 
         ItemStack stack = event.item.getEntityItem();
-        long nowWorld = event.entityPlayer.worldObj.getTotalWorldTime();
-        rollIfConfigured(stack, nowWorld);
+        long nowMs = System.currentTimeMillis();
+        rollIfConfigured(stack, nowMs);
     }
     /**
      * Fractured shard gain:
@@ -398,12 +443,37 @@ public class HexOrbRoller {
         EntityPlayer p = (EntityPlayer) event.entityLiving;
         if (p.worldObj == null || p.worldObj.isRemote) return;
 
+        // Skip while dying/dead (prevents socket/nbt sync during respawn)
+        if (p.isDead || p.getHealth() <= 0.0F) return;
+
+
+        // Keep CHAOTIC shifting while the player has the Socket Station GUI open.
+        // Without this, Chaotic "freezes" if the gem/host is sitting in station slots.
+        boolean stationChanged = false;
+        if (p instanceof EntityPlayerMP) {
+            EntityPlayerMP mp = (EntityPlayerMP) p;
+            if (mp.openContainer instanceof ContainerHexSocketStation) {
+                stationChanged = updateChaoticInSocketStation((ContainerHexSocketStation) mp.openContainer, p);
+                if (stationChanged) {
+                    try { mp.openContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+                }
+            }
+        }
+
         int now = p.ticksExisted;
         if (now <= 0) return;
 
         String key = p.getCommandSenderName();
         Integer last = lastScanTick.get(key);
-        if (last != null && (now - last) < SCAN_EVERY_TICKS) return;
+        if (last != null) {
+            int dt = now - last;
+            // After death/respawn ticksExisted resets; clear throttle so features resume immediately.
+            if (dt < 0) {
+                last = null;
+            } else if (dt < SCAN_EVERY_TICKS) {
+                return;
+            }
+        }
         lastScanTick.put(key, now);
 
         boolean changed = scanAndRollInventory(p);
@@ -414,14 +484,22 @@ public class HexOrbRoller {
             if (updateLightDynamics(p)) changed = true;
 
             // Force-refresh Light tooltip on legacy stacks (fix N/A)
-            for (int i = 0; i < p.inventory.mainInventory.length; i++) ensureLightLore(p.inventory.mainInventory[i]);
-            for (int i = 0; i < p.inventory.armorInventory.length; i++) ensureLightLore(p.inventory.armorInventory[i]);
-            ensureLightLore(p.getCurrentEquippedItem());
+            for (int i = 0; i < p.inventory.mainInventory.length; i++) {
+                if (ensureLightLore(p.inventory.mainInventory[i])) changed = true;
+            }
+            for (int i = 0; i < p.inventory.armorInventory.length; i++) {
+                if (ensureLightLore(p.inventory.armorInventory[i])) changed = true;
+            }
+            if (ensureLightLore(p.getCurrentEquippedItem())) changed = true;
         } catch (Throwable t) {
             // Never let a malformed Light orb NBT crash the whole server tick.
         }
         // Dynamic fractured behavior (thresholds + shards)
-        if (updateFracturedDynamics(p)) changed = true;
+        try {
+            if (updateFracturedDynamics(p)) changed = true;
+        } catch (Throwable t) {
+            // Never let a malformed socket/gem NBT crash the whole server tick.
+        }
         if (changed) {
             p.inventory.markDirty();
             if (p instanceof EntityPlayerMP) {
@@ -437,15 +515,15 @@ public class HexOrbRoller {
     private boolean scanAndRollInventory(EntityPlayer p) {
         boolean changed = false;
 
-        long nowWorld = (p != null && p.worldObj != null) ? p.worldObj.getTotalWorldTime() : 0L;
+        long nowMs = System.currentTimeMillis();
 
         for (int i = 0; i < p.inventory.mainInventory.length; i++) {
-            if (rollIfConfigured(p.inventory.mainInventory[i], nowWorld)) changed = true;
+            if (rollIfConfigured(p.inventory.mainInventory[i], nowMs)) changed = true;
         }
         for (int i = 0; i < p.inventory.armorInventory.length; i++) {
-            if (rollIfConfigured(p.inventory.armorInventory[i], nowWorld)) changed = true;
+            if (rollIfConfigured(p.inventory.armorInventory[i], nowMs)) changed = true;
         }
-        if (rollIfConfigured(p.getCurrentEquippedItem(), nowWorld)) changed = true;
+        if (rollIfConfigured(p.getCurrentEquippedItem(), nowMs)) changed = true;
 
         return changed;
     }
@@ -462,11 +540,11 @@ public class HexOrbRoller {
      * Same as rollIfConfigured(stack) but lets callers provide world time for
      * dynamic profiles (Chaotic uses this to schedule its next reroll).
      */
-    private boolean rollIfConfigured(ItemStack stack, long nowWorld) {
+    private boolean rollIfConfigured(ItemStack stack, long nowMs) {
         if (stack == null) return false;
         if (stack.getItem() != gemItem) return false;
 
-        if (nowWorld < 0L) nowWorld = 0L;
+        if (nowMs < 0L) nowMs = System.currentTimeMillis();
 
         int meta = stack.getItemDamage();
         RollProfile profile = metaProfiles.get(meta);
@@ -521,12 +599,37 @@ public class HexOrbRoller {
             }
         }
 
+
+        // Special case: Dark Fire Pill (dynamic rolled type + 2 random positive stats).
+        // Rolls ONCE per item.
+        if (meta == META_PILL_DARKFIRE_FLAT || meta == META_PILL_DARKFIRE_ANIM || isDarkFirePillByName(stack)) {
+            if (tag.getBoolean(TAG_ROLLED)) return false;
+            try {
+                rollDarkFirePillBase(stack, tag, RollProfiles.PILL_DARKFIRE_EFFECT);
+                return true;
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+
+
+        // Special case: Fire Pill (2 random positive stats).
+        // Rolls ONCE per item.
+        if (meta == META_PILL_FIRE_FLAT || meta == META_PILL_FIRE_ANIM || isFirePillByName(stack)) {
+            if (tag.getBoolean(TAG_ROLLED)) return false;
+            try {
+                rollFirePillBase(stack, tag, RollProfiles.PILL_FIRE_EFFECT);
+                return true;
+            } catch (Throwable t) {
+                return false;
+            }
+        }
 // Special case: Chaotic sphere is dynamic.
         // Rolls 1-4 random stats (or ALL rarely), values can be +/- and rerolls forever.
         if (meta == META_CHAOTIC_FLAT || meta == META_CHAOTIC_MULTI) {
             if (tag.getBoolean(TAG_ROLLED)) return false;
             RollProfile ch = (meta == META_CHAOTIC_MULTI) ? RollProfiles.CHAOTIC_MULTI : RollProfiles.CHAOTIC_FLAT;
-            rollChaoticDynamicBase(stack, tag, ch, nowWorld);
+            rollChaoticDynamicBase(stack, tag, ch, nowMs);
             return true;
         }
 
@@ -680,6 +783,106 @@ public class HexOrbRoller {
                 if (s.startsWith("\u00a77Effect:")) continue;
                 if (s.startsWith("\u00a77Bonus:")) continue;
                 // Remove any prior stat lines we injected (safe: only hits our renderer-tagged stat lines)
+                if (s.contains("</grad>") && (s.contains("Strength") || s.contains("Dexterity") || s.contains("Constitution") || s.contains("WillPower") || s.contains("Spirit"))) {
+                    continue;
+                }
+                if (containsExact(newLines, s)) continue;
+                merged.appendTag(new NBTTagString(s));
+            }
+        }
+
+        display.setTag("Lore", merged);
+        tag.setTag("display", display);
+        stack.setTagCompound(tag);
+    }
+
+    private static String sanitizeDarkFireType(String raw) {
+        if (raw == null) return DARKFIRE_TYPE_SHADOWFLAME_TRAIL;
+        String t = raw.trim();
+
+        // Exact (case-insensitive) match to known base names
+        if (DARKFIRE_TYPE_BLACKFLAME_BURN.equalsIgnoreCase(t)) return DARKFIRE_TYPE_BLACKFLAME_BURN;
+        if (DARKFIRE_TYPE_CINDER_WEAKNESS.equalsIgnoreCase(t)) return DARKFIRE_TYPE_CINDER_WEAKNESS;
+        if (DARKFIRE_TYPE_SHADOWFLAME_TRAIL.equalsIgnoreCase(t)) return DARKFIRE_TYPE_SHADOWFLAME_TRAIL;
+        if (DARKFIRE_TYPE_SOOT_ARMOR_SCORCH.equalsIgnoreCase(t)) return DARKFIRE_TYPE_SOOT_ARMOR_SCORCH;
+        if (DARKFIRE_TYPE_ASHEN_LIFESTEAL.equalsIgnoreCase(t)) return DARKFIRE_TYPE_ASHEN_LIFESTEAL;
+        if (DARKFIRE_TYPE_EMBER_DETONATION.equalsIgnoreCase(t)) return DARKFIRE_TYPE_EMBER_DETONATION;
+
+        // If saved as "Type — desc" or "Type - desc", strip any trailing description.
+        int dash = t.indexOf('—');
+        if (dash > 0) {
+            return sanitizeDarkFireType(t.substring(0, dash));
+        }
+        int dash2 = t.indexOf(" - ");
+        if (dash2 > 0) {
+            return sanitizeDarkFireType(t.substring(0, dash2));
+        }
+
+        // If it *starts* with a known name, normalize to that name.
+        String[] known = new String[] {
+                DARKFIRE_TYPE_BLACKFLAME_BURN,
+                DARKFIRE_TYPE_CINDER_WEAKNESS,
+                DARKFIRE_TYPE_SHADOWFLAME_TRAIL,
+                DARKFIRE_TYPE_SOOT_ARMOR_SCORCH,
+                DARKFIRE_TYPE_ASHEN_LIFESTEAL,
+                DARKFIRE_TYPE_SHADOWFLAME_TRAIL,
+                DARKFIRE_TYPE_EMBER_DETONATION
+        };
+        String lower = t.toLowerCase();
+        for (int i = 0; i < known.length; i++) {
+            String k = known[i];
+            if (lower.startsWith(k.toLowerCase())) return k;
+        }
+
+        return t;
+    }
+
+
+
+
+    private static String darkfireSummaryShort(String type) {
+        if (type == null) return "Darkflame effects";
+        if (DARKFIRE_TYPE_BLACKFLAME_BURN.equalsIgnoreCase(type)) return "ignite + DoT (active)";
+        if (DARKFIRE_TYPE_SHADOWFLAME_TRAIL.equalsIgnoreCase(type)) return "charge skills (25%/50%/100%)";
+        if (DARKFIRE_TYPE_CINDER_WEAKNESS.equalsIgnoreCase(type)) return "target deals less damage while burning";
+        if (DARKFIRE_TYPE_SOOT_ARMOR_SCORCH.equalsIgnoreCase(type)) return "defensive cinders (WIP)";
+        if (DARKFIRE_TYPE_ASHEN_LIFESTEAL.equalsIgnoreCase(type)) return "burn + leech (WIP)";
+        if (DARKFIRE_TYPE_EMBER_DETONATION.equalsIgnoreCase(type)) return "nova burst (WIP)";
+        return "Darkflame effects";
+    }
+
+    private void applyDarkFirePillLore(ItemStack stack, RollProfile profile, String type, NBTTagCompound rolls) {
+        NBTTagCompound tag = getOrCreateTag(stack);
+        NBTTagCompound display = tag.getCompoundTag("display");
+        NBTTagList lore = display.getTagList("Lore", 8);
+
+        List<String> newLines = new ArrayList<String>();
+        String df = type;
+        try {
+            if ((df == null || df.length() == 0) && tag.hasKey(TAG_DARKFIRE_TYPE, 8)) df = tag.getString(TAG_DARKFIRE_TYPE);
+        } catch (Throwable ignored) {}
+        if (df == null || df.length() == 0) df = "Dark Fire";
+        newLines.add("§7Effect: " + "<pulse amp=0.35 speed=0.95>" + G_DARKFIRE_OPEN + df + G_CLOSE + "</pulse>");
+        newLines.add("§7Bonus: " + "<pulse amp=0.40 speed=0.90>" + G_DARKFIRE_OPEN + "Darkfire • " + darkfireSummaryShort(df) + G_CLOSE + "</pulse>");
+
+        for (RollEntry e : profile.entries) {
+            int v = rolls.getInteger(e.attrKey);
+            String name = (e.displayName != null && e.displayName.length() > 0) ? e.displayName : displayNameForAttrKey(e.attrKey);
+            if (name == null) continue;
+            boolean isPct = (e.attrKey != null && e.attrKey.contains(".Multi"));
+            String suffix = isPct ? "%" : "";
+            newLines.add(G_DARKFIRE_OPEN + name + " " + formatSigned(v) + suffix + G_CLOSE);
+        }
+
+        NBTTagList merged = new NBTTagList();
+        for (String s : newLines) merged.appendTag(new NBTTagString(s));
+
+        for (int i = 0; i < lore.tagCount(); i++) {
+            String s = lore.getStringTagAt(i);
+            if (s != null) {
+                if (s.startsWith("§7Effect:")) continue;
+                if (s.startsWith("§7Bonus:")) continue;
+                // Remove old injected stat lines (we re-add fresh each reroll)
                 if (s.contains("</grad>") && (s.contains("Strength") || s.contains("Dexterity") || s.contains("Constitution") || s.contains("WillPower") || s.contains("Spirit"))) {
                     continue;
                 }
@@ -853,7 +1056,7 @@ public class HexOrbRoller {
     // ---------------------------------------------------------------------
     // Chaotic (dynamic) behavior
     // ---------------------------------------------------------------------
-    private static final String TAG_CHAOS_NEXT_AT = "HexChaosNextAt"; // long world time when next reroll is allowed
+    private static final String TAG_CHAOS_NEXT_AT = "HexChaosNextAt"; // long epoch ms when next reroll is allowed (dimension-safe)
 
     /**
      * Scans the player's inventory and updates any CHAOTIC profile stacks.
@@ -863,52 +1066,446 @@ public class HexOrbRoller {
         boolean changed = false;
         if (p == null) return false;
 
+        // 1) Direct chaotic gem stacks (in inv/armor/held)
         for (int i = 0; i < p.inventory.mainInventory.length; i++) {
             if (updateChaoticStack(p.inventory.mainInventory[i], p)) changed = true;
+            if (updateChaoticSocketedOnHost(p.inventory.mainInventory[i], p)) changed = true;
         }
         for (int i = 0; i < p.inventory.armorInventory.length; i++) {
             if (updateChaoticStack(p.inventory.armorInventory[i], p)) changed = true;
+            if (updateChaoticSocketedOnHost(p.inventory.armorInventory[i], p)) changed = true;
         }
         if (updateChaoticStack(p.getCurrentEquippedItem(), p)) changed = true;
+        if (updateChaoticSocketedOnHost(p.getCurrentEquippedItem(), p)) changed = true;
+
         return changed;
     }
 
+
+    /**
+     * Update Chaotic stacks while the Socket Station container is open.
+     * We only touch the station slots (0..2) and only for CHAOTIC behavior.
+     */
+    private boolean updateChaoticInSocketStation(ContainerHexSocketStation station, EntityPlayer p) {
+        if (station == null || p == null) return false;
+        boolean changed = false;
+        try {
+            // Slot 0 = target item, Slot 1 = gem input, Slot 2 = output (your station layout)
+            for (int idx = 0; idx <= 2; idx++) {
+                if (idx >= station.inventorySlots.size()) break;
+                Object o = station.inventorySlots.get(idx);
+                if (!(o instanceof Slot)) continue;
+                Slot s = (Slot) o;
+                ItemStack st = (s != null) ? s.getStack() : null;
+                if (st == null) continue;
+
+                // If the slot stack IS a Chaotic gem
+                if (updateChaoticStack(st, p)) {
+                    s.putStack(st);
+                    s.onSlotChanged();
+                    changed = true;
+                }
+                // If the slot stack is a host that has Chaotic socketed inside
+                if (updateChaoticSocketedOnHost(st, p)) {
+                    s.putStack(st);
+                    s.onSlotChanged();
+                    changed = true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return changed;
+    }
     private boolean updateChaoticStack(ItemStack stack, EntityPlayer p) {
         if (stack == null) return false;
         if (stack.getItem() != gemItem) return false;
         if (p == null || p.worldObj == null) return false;
 
+        // Chaotic gems must be able to continue shifting even if their identity tags
+        // were stripped during socketing/transfer. So we detect by:
+        //  - profile id (preferred)
+        //  - OR meta id fallback (2/3) for Chaotic
         NBTTagCompound tag = stack.getTagCompound();
-        if (tag == null) return false;
-        if (!tag.getBoolean(TAG_ROLLED)) return false;
+        String prof = (tag != null) ? tag.getString(TAG_PROFILE) : "";
 
-        String prof = tag.getString(TAG_PROFILE);
-        if (prof == null || !prof.startsWith("CHAOTIC_")) return false;
-
-        long now = p.worldObj.getTotalWorldTime();
-        long nextAt = tag.getLong(TAG_CHAOS_NEXT_AT);
-
-        // If missing scheduling info (older stacks), reroll once immediately and schedule.
-        if (nextAt <= 0L || now >= nextAt) {
-            RollProfile profile = "CHAOTIC_MULTI".equals(prof) ? RollProfiles.CHAOTIC_MULTI : RollProfiles.CHAOTIC_FLAT;
-            rerollChaoticNow(stack, tag, profile, now);
-            return true;
+        RollProfile profile = null;
+        if (prof != null && prof.startsWith("CHAOTIC_")) {
+            profile = "CHAOTIC_MULTI".equals(prof) ? RollProfiles.CHAOTIC_MULTI : RollProfiles.CHAOTIC_FLAT;
+        } else {
+            int meta = stack.getItemDamage();
+            if (meta == META_CHAOTIC_MULTI) profile = RollProfiles.CHAOTIC_MULTI;
+            else if (meta == META_CHAOTIC_FLAT) profile = RollProfiles.CHAOTIC_FLAT;
+            else return false;
         }
 
+        if (tag == null) tag = getOrCreateTag(stack);
+
+        // Ensure baseline identity exists (without wiping chaos schedule if already present)
+        if (!tag.getBoolean(TAG_ROLLED) || !profile.id.equals(tag.getString(TAG_PROFILE))) {
+            tag.setBoolean(TAG_ROLLED, true);
+            tag.setBoolean(TAG_LORE_DONE, true);
+            tag.setString(TAG_PROFILE, profile.id);
+        }
+
+        long nowMs = System.currentTimeMillis();
+        long nextAt = tag.getLong(TAG_CHAOS_NEXT_AT);
+
+        // Migration: older stacks stored world ticks here (small numbers). If so, reset scheduling.
+        if (nextAt > 0L && nextAt < 1000000000000L) {
+            nextAt = 0L;
+            tag.removeTag(TAG_CHAOS_NEXT_AT);
+        }
+
+        if (nextAt <= 0L || nowMs >= nextAt) {
+            rerollChaoticNow(stack, tag, profile, nowMs);
+            return true;
+        }
         return false;
     }
 
-    private void rollChaoticDynamicBase(ItemStack stack, NBTTagCompound tag, RollProfile profile, long nowWorld) {
+    /**
+     * Updates CHAOTIC gems that are SOCKETED inside a host item.
+     * This is required so Chaotic continues shifting while socketed.
+     *
+     * Note: Items stored in chests do not tick in 1.7.10, so we use epoch-ms scheduling.
+     * The gem will "catch up" next time it's scanned (e.g., when the host is back in a player's inventory).
+     */
+    private boolean updateChaoticSocketedOnHost(ItemStack host, EntityPlayer p) {
+        if (host == null) return false;
+        if (p == null) return false;
+        try {
+            int sockets = HexSocketAPI.getSocketsFilled(host);
+            if (sockets <= 0) return false;
+
+            boolean changed = false;
+            for (int i = 0; i < sockets; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(host, i);
+                if (gem == null) continue;
+
+                // Prime Chaotic socket deltas once so a freshly socketed Chaotic orb applies immediately
+                // (without permanently merging into host and without waiting for the first reroll tick).
+                try {
+                    if (gem.hasTagCompound()) {
+                        NBTTagCompound gt = gem.getTagCompound();
+                        if (gt != null && gt.hasKey(TAG_PROFILE, 8)) {
+                            String prof = gt.getString(TAG_PROFILE);
+                            if (prof != null && prof.startsWith("CHAOTIC")) {
+                                NBTTagCompound ht = host.getTagCompound();
+                                NBTTagCompound cache = (ht != null && ht.hasKey(TAG_CHAOTIC_CACHE, 10)) ? ht.getCompoundTag(TAG_CHAOTIC_CACHE) : null;
+                                if (cache == null || !cache.hasKey(TAG_CHAOTIC_LAYER_PREFIX + i, 10)) {
+                                    syncChaoticSocketBonuses(p, host, i, gem);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+
+                if (updateChaoticStack(gem, p)) {
+                    // Persist the updated gem back into the host socket
+                    HexSocketAPI.setGemAt(host, i, gem);
+
+                    // IMPORTANT: When Chaotic is socketed, the host's effective bonuses come from GemBonuses.
+                    // So we must refresh the host's stored bonuses from the gem's current rolls.
+                    syncChaoticSocketBonuses(p, host, i, gem);
+
+                    changed = true;
+                }
+            }
+            return changed;
+        } catch (Throwable t) {
+            // Fail-safe: if sockets API isn't available in a given environment, don't crash the tick loop.
+            return false;
+        }
+    }
+
+
+
+    /**
+     * When a Chaotic gem rerolls while socketed, update the host's stored socket bonuses (GemBonuses)
+     * so the socket-stats page AND effective bonuses actually shift.
+     */
+    private void syncChaoticSocketBonuses(ItemStack host, int socketIdx, ItemStack chaoticGem) {
+        syncChaoticSocketBonuses(null, host, socketIdx, chaoticGem);
+    }
+
+    private void syncChaoticSocketBonuses(EntityPlayer dbgPlayer, ItemStack host, int socketIdx, ItemStack chaoticGem) {
+        if (host == null || chaoticGem == null || !chaoticGem.hasTagCompound()) return;
+
+        // Read current roll from the Chaotic gem
+        NBTTagCompound gemTag = chaoticGem.getTagCompound();
+        if (gemTag == null || !gemTag.hasKey(TAG_KEYS, 9) || !gemTag.hasKey(TAG_ROLLS, 10)) return;
+
+        NBTTagList keyOrder = gemTag.getTagList(TAG_KEYS, 8);
+        NBTTagCompound rolls = gemTag.getCompoundTag(TAG_ROLLS);
+
+        int n = (keyOrder == null) ? 0 : keyOrder.tagCount();
+        String[] keys = new String[n];
+        String[] names = new String[n];
+        double[] amts = new double[n];
+
+        Map<String, Double> newMap = new HashMap<String, Double>();
+        for (int i = 0; i < n; i++) {
+            String k = keyOrder.getStringTagAt(i);
+            if (k == null || k.length() == 0) continue;
+
+            double v = getNumberAsDouble(rolls, k);
+            keys[i] = k;
+            amts[i] = v;
+            names[i] = displayNameForAttrKey(k);
+            newMap.put(k, v);
+        }
+
+        // Persist the socket's visible bonus list (used by your socket-tooltip page)
+        // Signature in your API: setBonusesAt(ItemStack host, int idx, String[] keys, double[] amts, String[] names)
+        HexSocketAPI.setBonusesAt(host, socketIdx, keys, amts, names);
+
+        // Apply delta to RPGCore.Attributes using our own per-socket cache (so old rolled stats never "stick")
+        NBTTagCompound hostTag = getOrCreateTag(host);
+        NBTTagCompound rpg = hostTag.hasKey(TAG_RPGCORE, 10) ? hostTag.getCompoundTag(TAG_RPGCORE) : new NBTTagCompound();
+        NBTTagCompound attrs = rpg.hasKey(TAG_ATTRS, 10) ? rpg.getCompoundTag(TAG_ATTRS) : new NBTTagCompound();
+
+        applyChaoticDeltaToRpgAttrs(dbgPlayer, hostTag, socketIdx, attrs, newMap);
+
+        rpg.setTag(TAG_ATTRS, attrs);
+        hostTag.setTag(TAG_RPGCORE, rpg);
+        host.setTagCompound(hostTag);
+    }
+
+    private void applyChaoticDeltaToRpgAttrs(EntityPlayer dbgPlayer, NBTTagCompound hostTag, int socketIdx,
+                                             NBTTagCompound attrs, Map<String, Double> newMap) {
+        if (hostTag == null || attrs == null || newMap == null) return;
+
+        // Cache layout (per socket index):
+        //   HexChaoticSocketCache:
+        //     Base_<idx>: compound { attrKey -> byte(1 if existed BEFORE chaotic ever touched that key for this socket) }
+        //     Layer_<idx>: compound { attrKey -> double(last applied chaotic value for this socket) }
+        NBTTagCompound cache = hostTag.hasKey(TAG_CHAOTIC_CACHE, 10) ? hostTag.getCompoundTag(TAG_CHAOTIC_CACHE) : new NBTTagCompound();
+
+        String baseKey = TAG_CHAOTIC_BASE_PREFIX + socketIdx;
+        String layerKey = TAG_CHAOTIC_LAYER_PREFIX + socketIdx;
+
+        NBTTagCompound baseFlags = cache.hasKey(baseKey, 10) ? cache.getCompoundTag(baseKey) : new NBTTagCompound();
+        NBTTagCompound oldLayer = cache.hasKey(layerKey, 10) ? cache.getCompoundTag(layerKey) : new NBTTagCompound();
+
+        // Union of: keys we've ever touched for this socket + keys currently rolled + keys previously rolled
+        Set<String> union = new HashSet<String>();
+        union.addAll(nbtKeySetSafe(baseFlags));
+        union.addAll(nbtKeySetSafe(oldLayer));
+        union.addAll(newMap.keySet());
+
+        boolean dbg = CHAOTIC_DEBUG || hostTag.getBoolean(TAG_CHAOTIC_DEBUG_FLAG);
+
+        boolean dbgPrinted = false;
+
+        for (String k : union) {
+            if (k == null || k.length() == 0) continue;
+
+            // Record whether this key existed BEFORE chaotic ever applied it (important to keep rarity/legacy 0% keys)
+            if (!baseFlags.hasKey(k, 1)) {
+                baseFlags.setByte(k, (byte) (hasNumeric(attrs, k) ? 1 : 0));
+            }
+            boolean baseExisted = baseFlags.getByte(k) != 0;
+
+            double oldV = hasNumeric(oldLayer, k) ? getNumberAsDouble(oldLayer, k) : 0.0;
+            Double nv = newMap.get(k);
+            double newV = (nv == null) ? 0.0 : nv.doubleValue();
+
+            double delta = newV - oldV;
+            if (Math.abs(delta) <= 1.0e-9) continue;
+
+            double cur = hasNumeric(attrs, k) ? getNumberAsDouble(attrs, k) : 0.0;
+            double next = normalizeRpgValue(cur + delta);
+
+            // If this key didn't exist pre-chaotic for this socket, and it's not rolled now,
+            // remove it once it returns to ~0 so it doesn't become "legacy" later.
+            if (!baseExisted && !newMap.containsKey(k) && Math.abs(next) <= 1.0e-9) {
+                attrs.removeTag(k);
+                if (dbg && dbgPlayer != null && !dbgPrinted) {
+                    dbgPrinted = true;
+                    dbgPlayer.addChatMessage(new ChatComponentText("§7[ChaoticDbg] §fSock " + socketIdx
+                            + " §7union=" + union.size() + " new=" + newMap.size()));
+                }
+                if (dbg && dbgPlayer != null) {
+                    dbgPlayer.addChatMessage(new ChatComponentText("§8  - §7" + k + " §8removed (cur=" + cur + ", old=" + oldV + ")"));
+                }
+            } else {
+                setNumberIntOrFloat(attrs, k, next);
+                if (dbg && dbgPlayer != null && !dbgPrinted) {
+                    dbgPrinted = true;
+                    dbgPlayer.addChatMessage(new ChatComponentText("§7[ChaoticDbg] §fSock " + socketIdx
+                            + " §7union=" + union.size() + " new=" + newMap.size()));
+                }
+                if (dbg && dbgPlayer != null) {
+                    dbgPlayer.addChatMessage(new ChatComponentText("§8  • §7" + k + " §8" + cur + " -> " + next
+                            + " §7(delta " + normalizeRpgValue(delta) + ", old " + oldV + ", new " + newV + ", base " + baseExisted + ")"));
+                }
+            }
+        }
+
+        // Store new layer snapshot for next reroll (only current rolled keys)
+        NBTTagCompound newLayer = new NBTTagCompound();
+        for (Map.Entry<String, Double> e : newMap.entrySet()) {
+            if (e == null) continue;
+            String k = e.getKey();
+            if (k == null || k.length() == 0) continue;
+            double v = (e.getValue() == null) ? 0.0 : e.getValue().doubleValue();
+            newLayer.setDouble(k, normalizeRpgValue(v));
+        }
+
+        cache.setTag(baseKey, baseFlags);
+        cache.setTag(layerKey, newLayer);
+        hostTag.setTag(TAG_CHAOTIC_CACHE, cache);
+    }
+
+    private static Set<String> nbtKeySetSafe(NBTTagCompound tag) {
+        if (tag == null) return new HashSet<String>();
+        try {
+            // MCP/SRG name (common in 1.7.10)
+            Method m = NBTTagCompound.class.getDeclaredMethod("func_150296_c");
+            m.setAccessible(true);
+            //noinspection unchecked
+            return (Set<String>) m.invoke(tag);
+        } catch (Throwable ignored) {
+        }
+        try {
+            // Some mappings expose this as getKeySet()
+            Method m = NBTTagCompound.class.getDeclaredMethod("getKeySet");
+            m.setAccessible(true);
+            //noinspection unchecked
+            return (Set<String>) m.invoke(tag);
+        } catch (Throwable ignored) {
+        }
+        return new HashSet<String>();
+    }
+
+    private static double normalizeRpgValue(double v) {
+        if (Math.abs(v) <= 1.0e-9) return 0.0;
+        // Snap to 2 decimals so "100%" stays exactly 100 (and prevents tiny float drift)
+        double r = Math.round(v * 100.0) / 100.0;
+        double ri = Math.rint(r);
+        if (Math.abs(r - ri) <= 1.0e-9) return ri;
+        return r;
+    }
+
+    private static void setNumberIntOrFloat(NBTTagCompound tag, String key, double value) {
+        if (tag == null || key == null) return;
+        double v = normalizeRpgValue(value);
+
+        // Preserve existing numeric type when possible (avoid using getTagId(), not present in some 1.7.10 mappings)
+        if (tag.hasKey(key, 1) || tag.hasKey(key, 2) || tag.hasKey(key, 3)) {
+            tag.setInteger(key, (int) Math.round(v));
+        } else if (tag.hasKey(key, 6)) {
+            tag.setDouble(key, v);
+        } else {
+            // Default to float (matches most RPGCore attribute usages in this codebase)
+            tag.setFloat(key, (float) v);
+        }
+    }
+
+    private static boolean hasNumeric(NBTTagCompound tag, String key) {
+        if (tag == null || key == null) return false;
+        return tag.hasKey(key, 6) || tag.hasKey(key, 5) || tag.hasKey(key, 3) || tag.hasKey(key, 2) || tag.hasKey(key, 1);
+    }
+
+    private static double getNumberAsDouble(NBTTagCompound tag, String key) {
+        if (tag == null || key == null) return 0D;
+        if (tag.hasKey(key, 6)) return tag.getDouble(key);
+        if (tag.hasKey(key, 5)) return (double) tag.getFloat(key);
+        if (tag.hasKey(key, 3)) return (double) tag.getInteger(key);
+        if (tag.hasKey(key, 2)) return (double) tag.getShort(key);
+        if (tag.hasKey(key, 1)) return (double) tag.getByte(key);
+        return 0D;
+    }
+    /**
+     * Updates FRACTURED gems that are SOCKETED inside an ACTIVE host item (held/worn).
+     *
+     * This is required so Fractured HP-threshold tiers actually change the rolled stats while socketed.
+     * Socketed gems apply their bonuses through the host's GemBonuses snapshot, so we update that too.
+     */
+    private boolean updateSocketedFracturedOnHost(EntityPlayer p, ItemStack host) {
+        if (p == null || host == null) return false;
+        try {
+            if (!HexSocketAPI.hasSocketData(host)) return false;
+            int sockets = HexSocketAPI.getSocketsFilled(host);
+            if (sockets <= 0) return false;
+
+            boolean changed = false;
+            for (int i = 0; i < sockets; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(host, i);
+                if (gem == null) continue;
+                if (!isFracturedProfile(gem)) continue;
+
+                if (updateFracturedStack(gem, p, true)) {
+                    // Persist updated gem back into the host socket
+                    HexSocketAPI.setGemAt(host, i, gem);
+                    // Refresh the host's stored bonuses from the gem's current rolls
+                    syncFracturedSocketBonuses(host, i, gem);
+                    changed = true;
+                }
+            }
+            return changed;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * When a Fractured gem changes tiers while socketed, update the host's stored socket bonuses (GemBonuses)
+     * so the socket-stats page AND effective bonuses actually reflect the new rolled values.
+     */
+    private void syncFracturedSocketBonuses(ItemStack host, int socketIdx, ItemStack fracturedGem) {
+        if (host == null || fracturedGem == null) return;
+        try {
+            NBTTagCompound tag = fracturedGem.getTagCompound();
+            if (tag == null) return;
+            if (!tag.hasKey(TAG_KEYS, 9) || !tag.hasKey(TAG_ROLLS, 10)) return;
+
+            NBTTagList keyOrder = tag.getTagList(TAG_KEYS, 8);
+            NBTTagCompound rolls = tag.getCompoundTag(TAG_ROLLS);
+            if (keyOrder == null || rolls == null) return;
+
+            List<String> keys = new ArrayList<String>();
+            List<Double> amts = new ArrayList<Double>();
+            List<String> names = new ArrayList<String>();
+
+            for (int i = 0; i < keyOrder.tagCount(); i++) {
+                String k = keyOrder.getStringTagAt(i);
+                if (k == null || k.length() == 0) continue;
+                int v = rolls.getInteger(k);
+
+                String dn = displayNameForAttrKey(k);
+                if (dn == null) continue;
+
+                keys.add(k);
+                amts.add(Double.valueOf((double) v));
+                names.add(dn);
+            }
+
+            if (keys.size() <= 0) return;
+
+            String[] kArr = keys.toArray(new String[keys.size()]);
+            double[] aArr = new double[amts.size()];
+            for (int i = 0; i < amts.size(); i++) aArr[i] = amts.get(i).doubleValue();
+            String[] nArr = names.toArray(new String[names.size()]);
+
+            HexSocketAPI.setBonusesAt(host, socketIdx, kArr, aArr, nArr);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void rollChaoticDynamicBase(ItemStack stack, NBTTagCompound tag, RollProfile profile, long nowMs) {
         // Initialize as rolled + dynamic.
         tag.setBoolean(TAG_ROLLED, true);
         tag.setBoolean(TAG_LORE_DONE, true);
         tag.setString(TAG_PROFILE, profile.id);
 
-        rerollChaoticNow(stack, tag, profile, nowWorld);
+        rerollChaoticNow(stack, tag, profile, nowMs);
         stack.setTagCompound(tag);
     }
 
-    private void rerollChaoticNow(ItemStack stack, NBTTagCompound tag, RollProfile profile, long nowWorld) {
+    private void rerollChaoticNow(ItemStack stack, NBTTagCompound tag, RollProfile profile, long nowMs) {
         boolean pct = profile.pct;
 
         // Remove old chaotic keys from RPGCore so we don't leave stale bonuses behind.
@@ -928,8 +1525,8 @@ public class HexOrbRoller {
         boolean all = rng.nextInt(100) < 7; // ~7% chance to roll ALL 5
         int count = all ? 5 : (1 + rng.nextInt(4));
 
-        // Wide, variable threshold per cycle ("true chaos")
-        int cap = pct ? rand(4, 35) : rand(40, 260);
+        // Chaotic value magnitude (pct uses weighted rarity tiers up to 350; flat keeps old per-cycle cap)
+        int flatCap = pct ? 0 : rand(40, 260);
 
         int[] idx = new int[]{0, 1, 2, 3, 4};
         for (int i = idx.length - 1; i > 0; i--) {
@@ -952,7 +1549,9 @@ public class HexOrbRoller {
 
         for (int i = 0; i < count; i++) {
             String k = base[idx[i]] + (pct ? ".Multi" : "");
-            int v = rand(1, cap);
+            int v = pct ? rollChaoticPctMagnitude() : rand(1, flatCap);
+            // Testing safety: never allow exact 100 (shift to 101)
+            if (pct && v == 100) v = 101;
             if (rng.nextBoolean()) v = -v;
             rolls.setInteger(k, v);
             keyOrder.appendTag(new NBTTagString(k));
@@ -966,11 +1565,36 @@ public class HexOrbRoller {
         rpg.setTag(TAG_ATTRS, attrs);
         tag.setTag(TAG_RPGCORE, rpg);
 
-        int hold = rand(100, 200); // ~5-10s hold (slower chaos)
-        tag.setInteger("HexChaosHold", hold);
-        tag.setLong(TAG_CHAOS_NEXT_AT, nowWorld + (long) hold);
+        int holdTicks = rand(100, 200); // ~5-10s hold (slower chaos)
+        int holdMs = holdTicks * 50;
+        tag.setInteger("HexChaosHold", holdTicks);
+        tag.setLong(TAG_CHAOS_NEXT_AT, nowMs + (long) holdMs);
         applyChaoticLore(stack, profile, keyOrder, rolls);
         stack.setTagCompound(tag);
+    }
+
+
+    /**
+     * Weighted rarity tiers for Chaotic percent rolls.
+     * Stored as integer percent points (e.g. 15 => 15%, 350 => 350%).
+     */
+    private int rollChaoticPctMagnitude() {
+        int r = rng.nextInt(10000); // 0..9999
+
+        // 99.00%: classic low-roll chaos (4%..35%)
+        if (r < 9900) return rand(4, 35);
+
+        // 0.80%: exactly 100% (testing shifts to 101 elsewhere)
+        if (r < 9980) return 100;
+
+        // 0.15%: 101%..195%
+        if (r < 9995) return rand(101, 195);
+
+        // 0.04%: 196%..278%
+        if (r < 9999) return rand(196, 278);
+
+        // 0.01%: 279%..350% (rarest)
+        return rand(279, 350);
     }
 
     private void applyChaoticLore(ItemStack stack, RollProfile profile, NBTTagList keyOrder, NBTTagCompound rolls) {
@@ -1037,6 +1661,20 @@ public class HexOrbRoller {
     private static final String VOID_TYPE_ABYSS_MARK  = "Abyss Mark";
 
     private static final String VOID_TYPE_NULL_SHELL  = "Null Shell";
+
+    // ---------------------------------------------------------------------
+    // Dark Fire Pill (rolled effect types placeholder; effects implemented later)
+    // ---------------------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // Dark Fire Pill types (canonical set)
+    // ---------------------------------------------------------------------
+    private static final String DARKFIRE_TYPE_BLACKFLAME_BURN      = "Blackflame Burn";
+    private static final String DARKFIRE_TYPE_CINDER_WEAKNESS      = "Cinder Weakness";
+    private static final String DARKFIRE_TYPE_SOOT_ARMOR_SCORCH    = "Armor Scorch";
+    private static final String DARKFIRE_TYPE_ASHEN_LIFESTEAL      = "Ashen Lifesteal";
+    private static final String DARKFIRE_TYPE_EMBER_DETONATION     = "Ember Detonation";
+    private static final String DARKFIRE_TYPE_SHADOWFLAME_TRAIL    = "Shadowflame Trail";
+
     // Small internal throttles to avoid spam + over-gain
     private static final String TAG_L_LAST_SUN_GAIN  = "HexLightLastSunGain";   // long
     private static final String TAG_L_LAST_DEAL_GAIN = "HexLightLastDealGain";  // long
@@ -1078,28 +1716,119 @@ public class HexOrbRoller {
     // Mark key prefix stored on targets
     private static final String TAG_L_MARK_PREFIX = "HexLightIllumEnd_"; // +playerName => long end tick
 
-    private ItemStack getActiveLightOrb(EntityPlayer p) {
-        if (p == null || p.inventory == null) return null;
-        ItemStack held = p.getCurrentEquippedItem();
-        if (isLightOrbStack(held)) return held;
-        for (int i = 0; i < p.inventory.armorInventory.length; i++) {
-            ItemStack a = p.inventory.armorInventory[i];
-            if (isLightOrbStack(a)) return a;
+    private static class LightOrbRef {
+        final ItemStack orb;
+        final ItemStack host;
+        final int socketIdx;
+        final boolean socketed;
+
+        /** Direct (held) light orb reference. */
+        LightOrbRef(ItemStack orb) {
+            this.orb = orb;
+            this.host = null;
+            this.socketIdx = -1;
+            this.socketed = false;
         }
+
+        /** Socketed light orb reference. */
+        LightOrbRef(ItemStack host, int socketIdx, ItemStack orb) {
+            this.orb = orb;
+            this.host = host;
+            this.socketIdx = socketIdx;
+            this.socketed = true;
+        }
+    }
+
+
+    private LightOrbRef getActiveLightOrbRef(EntityPlayer p) {
+        if (p == null || p.inventory == null) return null;
+
+        // 1) Direct held orb
+        ItemStack held = null;
+        try { held = p.getCurrentEquippedItem(); } catch (Throwable ignored) {}
+        if (isLightOrbStackLoose(held)) return new LightOrbRef(held);
+
+        // 2) Socketed on held host
+        LightOrbRef r = findLightOnHost(held);
+        if (r != null) return r;
+
+        // 3) Armor direct / socketed
+        try {
+            ItemStack[] armor = p.inventory.armorInventory;
+            if (armor != null) {
+                for (int i = 0; i < armor.length; i++) {
+                    ItemStack a = armor[i];
+                    if (isLightOrbStackLoose(a)) return new LightOrbRef(a);
+
+                    r = findLightOnHost(a);
+                    if (r != null) return r;
+                }
+            }
+        } catch (Throwable ignored) {}
+
         return null;
     }
 
-    private boolean isLightOrbStack(ItemStack stack) {
+    private LightOrbRef findLightOnHost(ItemStack host) {
+        if (host == null) return null;
+        try {
+            int filled = HexSocketAPI.getSocketsFilled(host);
+            for (int i = 0; i < filled; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(host, i);
+                if (isLightOrbStackLoose(gem)) {
+                    return new LightOrbRef(host, i, gem);
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /** Persist a socketed Light orb back onto its host (no-op for direct stacks). */
+    private void persistLightOrbRef(LightOrbRef ref) {
+        if (ref == null || !ref.socketed) return;
+        try {
+            HexSocketAPI.setGemAt(ref.host, ref.socketIdx, ref.orb);
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * For Light changes that happen outside onLivingUpdate (hurt/attack/kill hooks),
+     * we must force an inventory sync or the client HUD won't update.
+     */
+    private void syncLightOrbRef(EntityPlayer p, LightOrbRef ref) {
+        if (p == null || ref == null) return;
+        persistLightOrbRef(ref);
+        try { p.inventory.markDirty(); } catch (Throwable ignored) {}
+        if (p instanceof EntityPlayerMP) {
+            try { ((EntityPlayerMP)p).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /**
+     * Light orb detection that survives socket-station stripping of TAG_ROLLED / TAG_PROFILE.
+     * We accept either a valid rolled LIGHT_* profile or the presence of Light runtime tags.
+     */
+    private boolean isLightOrbStackLoose(ItemStack stack) {
         if (stack == null) return false;
         if (gemItem == null) return false;
         if (stack.getItem() != gemItem) return false;
+
         int meta = stack.getItemDamage();
         if (meta != META_LIGHT_FLAT && meta != META_LIGHT_MULTI) return false;
+
         NBTTagCompound tag = stack.getTagCompound();
         if (tag == null) return false;
-        if (!tag.getBoolean(TAG_ROLLED)) return false;
-        String prof = tag.getString(TAG_PROFILE);
-        return prof != null && prof.startsWith("LIGHT_");
+
+        if (tag.getBoolean(TAG_ROLLED)) {
+            String prof = tag.getString(TAG_PROFILE);
+            if (prof != null && prof.startsWith("LIGHT_")) return true;
+        }
+
+        // Socket path / legacy: type or radiance tags present
+        if (tag.hasKey(TAG_LIGHT_TYPE, 8)) return true; // string
+        if (tag.hasKey(TAG_LIGHT_RAD, 3)) return true;  // int
+
+        return false;
     }
 
     private static int clampInt(int v, int lo, int hi) {
@@ -1245,6 +1974,41 @@ public class HexOrbRoller {
         return VOID_TYPE_NULL_SHELL;
     }
 
+    private String pickRandomDarkFireType() {
+        // Enabled Dark Fire types: Blackflame Burn, Ashen Lifesteal, Ember Detonation, Shadowflame Trail.
+        // (Cinder Weakness / Soot Armor Scorch remain defined, but are not rolled here.)
+        int r = rng.nextInt(4);
+        if (r == 0) return DARKFIRE_TYPE_BLACKFLAME_BURN;
+        if (r == 1) return DARKFIRE_TYPE_ASHEN_LIFESTEAL;
+        if (r == 2) return DARKFIRE_TYPE_EMBER_DETONATION;
+        return DARKFIRE_TYPE_SHADOWFLAME_TRAIL;
+    }
+    private boolean isDarkFirePillByName(ItemStack stack) {
+        if (stack == null) return false;
+        try {
+            String n = stack.getDisplayName();
+            if (n == null) return false;
+            // Match even if colored/gradient-tagged.
+            return n.toLowerCase().contains("dark") && n.toLowerCase().contains("fire") && n.toLowerCase().contains("pill");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private boolean isFirePillByName(ItemStack stack) {
+        if (stack == null) return false;
+        try {
+            String n = stack.getDisplayName();
+            if (n == null) return false;
+            String l = n.toLowerCase();
+            // Match even if colored/gradient-tagged. Avoid matching Dark Fire.
+            return l.contains("fire") && l.contains("pill") && !l.contains("dark");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+
     private String pickRandomLightType() {
         // Weighted so Angelic is rare.
         int r = rng.nextInt(100);
@@ -1255,11 +2019,16 @@ public class HexOrbRoller {
         return LIGHT_TYPE_ANGELIC;               // 2%
     }
 
-    private void addRadiance(NBTTagCompound tag, long now, String throttleKey, int amount, int minIntervalTicks) {
+    private void addRadiance(NBTTagCompound tag, long now, String throttleKey, int amount, int minIntervalTicks, float chance) {
         if (tag == null) return;
         long last = tag.getLong(throttleKey);
         if (now - last < (long) minIntervalTicks) return;
         tag.setLong(throttleKey, now);
+
+        // Chance gate (keeps radiance gain from being guaranteed every time).
+        if (chance <= 0.0f) return;
+        if (chance < 1.0f && rng.nextFloat() >= chance) return;
+
         setLightRadiance(tag, getLightRadiance(tag) + amount);
     }
 
@@ -1444,6 +2213,144 @@ public class HexOrbRoller {
         stack.setTagCompound(tag);
     }
 
+    // ---------------------------------------------------------------------
+    // Dark Fire Pill (dynamic: rolled effect type + 2 random positive stats)
+    // ---------------------------------------------------------------------
+    private void rollDarkFirePillBase(ItemStack stack, NBTTagCompound tag, RollProfile base) {
+        // Pick a type (placeholder names for now; effects are implemented later).
+        final String type = pickRandomDarkFireType();
+        tag.setString(TAG_DARKFIRE_TYPE, type);
+        // Safety: ensure we don't inherit Light-type tags from prior items/rerolls.
+        tag.removeTag(TAG_LIGHT_TYPE);
+
+        // IMPORTANT: Only the Enhanced/animated Dark Fire pill rolls percent bonuses (.Multi).
+        final boolean pct = (stack != null && stack.getItemDamage() == META_PILL_DARKFIRE_ANIM);
+
+        // Pick 2 distinct stats out of the core 5.
+        final String[] baseKeys = new String[]{
+                "dbc.Strength",
+                "dbc.Dexterity",
+                "dbc.Constitution",
+                "dbc.WillPower",
+                "dbc.Spirit"
+        };
+        final String[] names = new String[]{
+                "Strength",
+                "Dexterity",
+                "Constitution",
+                "WillPower",
+                "Spirit"
+        };
+
+        int a = rng.nextInt(baseKeys.length);
+        int b = rng.nextInt(baseKeys.length - 1);
+        if (b >= a) b++;
+
+        String kA = baseKeys[a] + (pct ? ".Multi" : "");
+        String kB = baseKeys[b] + (pct ? ".Multi" : "");
+
+        // Values are ALWAYS positive (tweak these ranges later).
+        int va = pct ? rand(1, 10) : rand(250, 750);
+        int vb = pct ? rand(1, 10) : rand(250, 750);
+
+        // Build a dynamic profile so we can reuse RPGCore attribute storage.
+        RollProfile dyn = new RollProfile(
+                base.id,
+                base.displayName,
+                "", // lore handled by applyDarkFirePillLore
+                G_DARKFIRE_OPEN,
+                false,
+                false,
+                false,
+                0,
+                0
+        );
+        dyn.entries.add(new RollEntry(kA, names[a], 0, 0));
+        dyn.entries.add(new RollEntry(kB, names[b], 0, 0));
+
+        NBTTagCompound rolls = new NBTTagCompound();
+        rolls.setInteger(kA, va);
+        rolls.setInteger(kB, vb);
+
+        tag.setBoolean(TAG_ROLLED, true);
+        tag.setString(TAG_PROFILE, base.id);
+        tag.setTag(TAG_ROLLS, rolls);
+
+        // Apply RPGCore attributes and refresh tooltip lore.
+        applyRpgCoreAttributes(tag, dyn, rolls);
+        applyDarkFirePillLore(stack, dyn, type, rolls);
+        ensureDarkFireLorePages(stack);
+        stack.setTagCompound(tag);
+
+        stack.setTagCompound(tag);
+    }
+
+    // ---------------------------------------------------------------------
+    // Fire Pill (2 random positive stats)
+    // ---------------------------------------------------------------------
+    private void rollFirePillBase(ItemStack stack, NBTTagCompound tag, RollProfile base) {
+        // Enhanced/animated Fire Pill rolls percent bonuses (.Multi).
+        final boolean pct = (stack != null && stack.getItemDamage() == META_PILL_FIRE_ANIM);
+
+        // Pick 2 distinct stats out of the core 5.
+        final String[] baseKeys = new String[]{
+                "dbc.Strength",
+                "dbc.Dexterity",
+                "dbc.Constitution",
+                "dbc.WillPower",
+                "dbc.Spirit"
+        };
+        final String[] names = new String[]{
+                "Strength",
+                "Dexterity",
+                "Constitution",
+                "WillPower",
+                "Spirit"
+        };
+
+        int a = rng.nextInt(baseKeys.length);
+        int b = rng.nextInt(baseKeys.length - 1);
+        if (b >= a) b++;
+
+        String kA = baseKeys[a] + (pct ? ".Multi" : "");
+        String kB = baseKeys[b] + (pct ? ".Multi" : "");
+
+        // Values are ALWAYS positive (tweak ranges later).
+        int va = pct ? rand(1, 10) : rand(250, 750);
+        int vb = pct ? rand(1, 10) : rand(250, 750);
+
+        // Build a dynamic profile so we can reuse RPGCore attribute storage + standard lore formatting.
+        RollProfile dyn = new RollProfile(
+                base.id,
+                base.displayName,
+                base.effectLine,
+                base.gradientOpen,
+                pct,
+                false,
+                false,
+                0,
+                0
+        );
+        dyn.entries.add(new RollEntry(kA, names[a], 0, 0));
+        dyn.entries.add(new RollEntry(kB, names[b], 0, 0));
+
+        NBTTagCompound rolls = new NBTTagCompound();
+        rolls.setInteger(kA, va);
+        rolls.setInteger(kB, vb);
+
+        tag.setBoolean(TAG_ROLLED, true);
+        tag.setBoolean(TAG_LORE_DONE, true);
+        tag.setString(TAG_PROFILE, base.id);
+        tag.setTag(TAG_ROLLS, rolls);
+
+        // Apply RPGCore attributes and refresh tooltip lore.
+        applyRpgCoreAttributes(tag, dyn, rolls);
+        applyLore(stack, dyn, rolls);
+
+        stack.setTagCompound(tag);
+    }
+
+
 
 
     /**
@@ -1453,7 +2360,8 @@ public class HexOrbRoller {
         if (p == null || event == null) return;
         if (p.worldObj == null || p.worldObj.isRemote) return;
 
-        ItemStack orb = getActiveLightOrb(p);
+        LightOrbRef ref = getActiveLightOrbRef(p);
+        ItemStack orb = (ref != null) ? ref.orb : null;
         if (orb == null) return;
         NBTTagCompound tag = orb.getTagCompound();
         if (tag == null) return;
@@ -1474,11 +2382,12 @@ public class HexOrbRoller {
                 tag.removeTag(TAG_L_IMMUNE_END);
             }
             orb.setTagCompound(tag);
+            syncLightOrbRef(p, ref);
             return;
         }
 
         // Radiance gain (taking damage)
-        addRadiance(tag, now, TAG_L_LAST_TAKE_GAIN, 3, 10);
+        addRadiance(tag, now, TAG_L_LAST_TAKE_GAIN, 3, 10, L_RAD_CHANCE_TAKE);
         rad = getLightRadiance(tag);
 
         // Perfect Radiance (panic immunity)
@@ -1493,6 +2402,7 @@ public class HexOrbRoller {
                 event.ammount = 0.0F;
                 event.setCanceled(true);
                 orb.setTagCompound(tag);
+                syncLightOrbRef(p, ref);
                 return;
             }
         }
@@ -1554,6 +2464,7 @@ public class HexOrbRoller {
         }
 
         orb.setTagCompound(tag);
+        syncLightOrbRef(p, ref);
     }
 
 
@@ -1652,7 +2563,8 @@ public class HexOrbRoller {
         if (p == null || event == null) return;
         if (p.worldObj == null || p.worldObj.isRemote) return;
 
-        ItemStack orb = getActiveLightOrb(p);
+        LightOrbRef ref = getActiveLightOrbRef(p);
+        ItemStack orb = (ref != null) ? ref.orb : null;
         if (orb == null) return;
         NBTTagCompound tag = orb.getTagCompound();
         if (tag == null) return;
@@ -1661,7 +2573,7 @@ public class HexOrbRoller {
         String type = getLightType(tag);
 
         // Radiance gain (dealing damage)
-        addRadiance(tag, now, TAG_L_LAST_DEAL_GAIN, 2, 10);
+        addRadiance(tag, now, TAG_L_LAST_DEAL_GAIN, 2, 10, L_RAD_CHANCE_DEAL);
         int rad = getLightRadiance(tag);
 
         // Marked target takes extra damage from this player (Solar / Angelic)
@@ -1714,6 +2626,7 @@ public class HexOrbRoller {
         }
 
         orb.setTagCompound(tag);
+        syncLightOrbRef(p, ref);
     }
 
     /**
@@ -1723,7 +2636,8 @@ public class HexOrbRoller {
         if (p == null || dead == null) return;
         if (p.worldObj == null || p.worldObj.isRemote) return;
 
-        ItemStack orb = getActiveLightOrb(p);
+        LightOrbRef ref = getActiveLightOrbRef(p);
+        ItemStack orb = (ref != null) ? ref.orb : null;
         if (orb == null) return;
         NBTTagCompound tag = orb.getTagCompound();
         if (tag == null) return;
@@ -1732,7 +2646,7 @@ public class HexOrbRoller {
         String type = getLightType(tag);
 
         // Radiance gain (kill)
-        addRadiance(tag, now, TAG_L_LAST_KILL_GAIN, 10, 40);
+        addRadiance(tag, now, TAG_L_LAST_KILL_GAIN, 10, 40, L_RAD_CHANCE_KILL);
         int rad = getLightRadiance(tag);
 
         // Lumen Burst (mark nearby enemies)
@@ -1756,6 +2670,7 @@ public class HexOrbRoller {
         }
 
         orb.setTagCompound(tag);
+        syncLightOrbRef(p, ref);
     }
 
     /**
@@ -1765,7 +2680,8 @@ public class HexOrbRoller {
     private boolean updateLightDynamics(EntityPlayer p) {
         if (p == null || p.worldObj == null || p.worldObj.isRemote) return false;
 
-        ItemStack orb = getActiveLightOrb(p);
+        LightOrbRef ref = getActiveLightOrbRef(p);
+        ItemStack orb = (ref != null) ? ref.orb : null;
         if (orb == null) return false;
         NBTTagCompound tag = orb.getTagCompound();
         if (tag == null) return false;
@@ -1775,6 +2691,8 @@ public class HexOrbRoller {
 
         int beforeRad = getLightRadiance(tag);
         boolean beforeSmite = tag.getBoolean(TAG_L_SMITE_READY);
+        int beforeBeamCd = tag.getInteger(TAG_L_BEAM_CD);
+        int beforeBeamMax = tag.getInteger(TAG_L_BEAM_CD_MAX);
 
 // Solar Beam cooldown tick-down (server authoritative; HUD reads remaining ticks)
 // NOTE: Light dynamics may be throttled (inventory scan cadence), so we tick down by elapsed world-ticks.
@@ -1810,7 +2728,7 @@ public class HexOrbRoller {
             boolean sky = p.worldObj.canBlockSeeTheSky(x, y, z);
             boolean day = p.worldObj.isDaytime();
             if (sky && day) {
-                addRadiance(tag, now, TAG_L_LAST_SUN_GAIN, 1, 20);
+                addRadiance(tag, now, TAG_L_LAST_SUN_GAIN, 1, 20, L_RAD_CHANCE_SUN);
             }
 
             int rad = getLightRadiance(tag);
@@ -1882,11 +2800,19 @@ public class HexOrbRoller {
 
         int afterRad = getLightRadiance(tag);
         boolean afterSmite = tag.getBoolean(TAG_L_SMITE_READY);
+        int afterBeamCd = tag.getInteger(TAG_L_BEAM_CD);
+        int afterBeamMax = tag.getInteger(TAG_L_BEAM_CD_MAX);
 
-        boolean changed = (beforeRad != afterRad) || (beforeSmite != afterSmite);
+        boolean changed = (beforeRad != afterRad) || (beforeSmite != afterSmite)
+                || (beforeBeamCd != afterBeamCd) || (beforeBeamMax != afterBeamMax);
         if (changed) {
             orb.setTagCompound(tag);
         }
+        // Keep socketed Light timing state (TAG_L_LAST_TICK / cooldown ticking) persistent.
+        if (ref != null && ref.socketed) {
+            persistLightOrbRef(ref);
+        }
+
         return changed;
     }
 
@@ -1986,6 +2912,28 @@ public class HexOrbRoller {
             if (updateFracturedStack(p.inventory.armorInventory[i], p)) changed = true;
         }
         if (updateFracturedStack(p.getCurrentEquippedItem(), p)) changed = true;
+
+        // ---- socketed Fractured: update socketed gems + refresh host bonuses so thresholds actually apply ----
+        // If a Fractured gem lives inside sockets, the host's effective stats come from GemBonuses snapshots.
+        // So when the gem's HP-tier changes (or SNAP), we must rewrite both the gem AND the host's GemBonuses.
+        ItemStack heldHost = p.getCurrentEquippedItem();
+        if (updateSocketedFracturedOnHost(p, heldHost)) changed = true;
+
+        // Armor hosts
+        for (int a = 0; a < 4; a++) {
+            if (updateSocketedFracturedOnHost(p, p.getCurrentArmor(a))) changed = true;
+        }
+
+        // Inventory hosts (important for death/respawn: item may not be re-equipped yet)
+        try {
+            ItemStack[] inv = p.inventory.mainInventory;
+            if (inv != null) {
+                for (int i = 0; i < inv.length; i++) {
+                    if (updateSocketedFracturedOnHost(p, inv[i])) changed = true;
+                }
+            }
+        } catch (Throwable ignored) {}
+
         return changed;
     }
 
@@ -2009,6 +2957,31 @@ public class HexOrbRoller {
         lastShardGainTick.put(key, now);
 
         ItemStack stack = findFirstFracturedStack(p);
+
+        ItemStack socketedHost = null;
+        int socketedIdx = -1;
+        if (stack == null) {
+            // Fall back to a socketed fractured gem on an ACTIVE host (held or worn).
+            // This keeps shard gain working when the orb is socketed instead of held directly.
+            ItemStack[] hosts = new ItemStack[] { p.getCurrentEquippedItem(), p.getCurrentArmor(0), p.getCurrentArmor(1), p.getCurrentArmor(2), p.getCurrentArmor(3) };
+            for (int h = 0; h < hosts.length && stack == null; h++) {
+                ItemStack host = hosts[h];
+                if (host == null) continue;
+                if (!HexSocketAPI.hasSocketData(host)) continue;
+                int filled = HexSocketAPI.getSocketsFilled(host);
+                for (int si = 0; si < filled; si++) {
+                    ItemStack gem = HexSocketAPI.getGemAt(host, si);
+                    if (gem == null) continue;
+                    if (isFracturedProfile(gem)) {
+                        stack = gem;
+                        socketedHost = host;
+                        socketedIdx = si;
+                        break;
+                    }
+                }
+            }
+        }
+
         if (stack == null) return;
 
         NBTTagCompound tag = getOrCreateTag(stack);
@@ -2033,7 +3006,13 @@ public class HexOrbRoller {
         stack.setTagCompound(tag);
 
         // Force an immediate update tick so the effect is felt quickly.
-        updateFracturedStack(stack, p);
+        updateFracturedStack(stack, p, (socketedHost != null));
+
+        if (socketedHost != null && socketedIdx >= 0) {
+            HexSocketAPI.setGemAt(socketedHost, socketedIdx, stack);
+            syncFracturedSocketBonuses(socketedHost, socketedIdx, stack);
+        }
+
 
         p.inventory.markDirty();
         if (p instanceof EntityPlayerMP) {
@@ -2104,6 +3083,10 @@ public class HexOrbRoller {
      * then writes the CURRENT values back into RPGCore.Attributes + tooltip stat lines.
      */
     private boolean updateFracturedStack(ItemStack stack, EntityPlayer p) {
+        return updateFracturedStack(stack, p, false);
+    }
+
+    private boolean updateFracturedStack(ItemStack stack, EntityPlayer p, boolean activeOverride) {
         if (stack == null || p == null) return false;
 
         NBTTagCompound tag = stack.getTagCompound();
@@ -2132,7 +3115,7 @@ public class HexOrbRoller {
         //  - Base (default rolled) ONLY at full HP
         //  - Otherwise, always apply a tier mod based on current HP%
         //  - If you heal upward across gates (e.g., 60% -> 80%), it swaps to that higher tier
-        boolean active = isFracturedActiveStack(p, stack);
+        boolean active = activeOverride || isFracturedActiveStack(p, stack);
 
         // Threshold multiplier (Fractured-only)
         // Only track HP thresholds when the orb is ACTIVE (held or worn).
@@ -2669,6 +3652,121 @@ public class HexOrbRoller {
     }
 
 
+    private void ensureDarkFireLorePages(ItemStack stack) {
+        if (stack == null) return;
+
+        try {
+            // Preserve any existing pages from other systems, but remove / refresh our DARKFIRE pages.
+            List<List<String>> pages = new ArrayList<List<String>>();
+
+            if (LorePagesAPI.hasPages(stack)) {
+                List<List<String>> existing = LorePagesAPI.getPages(stack, null);
+                if (existing != null) {
+                    for (int p = 0; p < existing.size(); p++) {
+                        List<String> pg = existing.get(p);
+                        if (pg == null) continue;
+
+                        boolean isDarkfire = false;
+                        for (int i = 0; i < pg.size(); i++) {
+                            String ln = pg.get(i);
+                            if (ln == null) continue;
+                            String up = ln.toUpperCase();
+                            if (up.contains("DARKFIRE PILL") || up.contains("DARKFLAME TYPE")) {
+                                isDarkfire = true;
+                                break;
+                            }
+                        }
+
+                        if (!isDarkfire) {
+                            List<String> copy = new ArrayList<String>();
+                            copy.addAll(pg);
+                            pages.add(copy);
+                        }
+                    }
+                }
+            }
+
+            if (pages.isEmpty()) pages.add(new ArrayList<String>());
+
+            NBTTagCompound tag = getOrCreateTag(stack);
+            String rawType = "";
+            try {
+                rawType = tag.getString(TAG_DARKFIRE_TYPE);
+            } catch (Throwable ignored) {}
+            String type = sanitizeDarkFireType(rawType);
+            if (rawType == null || !rawType.equals(type)) {
+                tag.setString(TAG_DARKFIRE_TYPE, type);
+                stack.setTagCompound(tag);
+            }
+
+            // Page 1 - overview (only YOUR rolled type; no full list)
+            List<String> p1 = new ArrayList<String>();
+            p1.add("§f" + G_DARKFIRE_OPEN + "DARKFIRE PILL" + G_CLOSE + " §7(§f" + G_DARKFIRE_OPEN + type + G_CLOSE + "§7)");
+            p1.add("§7Rolls a §fDarkflame Type§7 + stat bonuses.");
+            p1.add("§7While held: builds §fCharge§7 over time.");
+            p1.add("§7Gain extra charge on hits and when hit.");
+            p1.add(" ");
+
+            if (DARKFIRE_TYPE_BLACKFLAME_BURN.equalsIgnoreCase(type)) {
+                p1.add("§7Charge actions:");
+                p1.add("§7 • §f25%§7: Blackflame Burn");
+                p1.add("§7 • §f50%§7: Empowered Burn");
+                p1.add("§7 • §f100%§7: Rapid Fire (hold CTRL)");
+            } else {
+                p1.add("§7This roll is primarily §fpassive§7.");
+                p1.add("§7Active charge attacks are tied to");
+                p1.add("§7the §fBlackflame Burn§7 type.");
+            }
+
+            // Page 2 - type details
+            List<String> p2 = new ArrayList<String>();
+            p2.add("§f" + G_DARKFIRE_OPEN + "DARKFLAME TYPE" + G_CLOSE + " §7(§f" + G_DARKFIRE_OPEN + type + G_CLOSE + "§7)");
+            p2.add(" ");
+
+            if (DARKFIRE_TYPE_BLACKFLAME_BURN.equals(type)) {
+                p2.add("§7Blackflame Burn");
+                p2.add("§fActive DoT — ignite targets with void-black fire.");
+                p2.add("§8• On hit: applies burn over time (DBC dmg, vanilla fallback).");
+                p2.add("§8• Visual: dark flames + smoke/void particles.");
+                p2.add("§8• Uses the charge actions on page 1.");
+            } else if (DARKFIRE_TYPE_CINDER_WEAKNESS.equals(type)) {
+                p2.add("§7Cinder Weakness");
+                p2.add("§fPassive debuff — burning targets deal reduced damage.");
+                p2.add("§8• Short duration; can be 'only while burning' or separate debuff.");
+                p2.add("§8• Tunables: -% damage, duration, internal cooldown.");
+            } else if (DARKFIRE_TYPE_ASHEN_LIFESTEAL.equals(type)) {
+                p2.add("§7Ashen Lifesteal");
+                p2.add("§fHeal from your burn damage (body heal if available).");
+                p2.add("§8• Returns a % of burn ticks as health/body.");
+                p2.add("§8• Tunables: % returned, only on kill, only if target is burning.");
+            } else if (DARKFIRE_TYPE_EMBER_DETONATION.equals(type)) {
+                p2.add("§7Ember Detonation");
+                p2.add("§fFinishers — burned targets pop on death (or at X stacks).");
+                p2.add("§8• Small AoE burst; can spread burn to nearby mobs.");
+                p2.add("§8• Tunables: radius, damage scale, spread chance, cooldown.");
+            } else if (DARKFIRE_TYPE_SHADOWFLAME_TRAIL.equals(type)) {
+                p2.add("§7Shadowflame Trail");
+                p2.add("§fMobility / zone control — leave a damaging flame trail.");
+                p2.add("§8• On dash / get hit / activate: trail burns enemies standing in it.");
+                p2.add("§8• Tunables: trail length, linger time, tick damage, internal CD.");
+            } else {
+                // Legacy / unknown type — keep it visible but don't crash or mislabel.
+                p2.add("§7" + type);
+                p2.add("§8Legacy / unknown Dark Fire type.");
+            }
+
+            pages.add(p1);
+            pages.add(p2);
+
+            LorePagesAPI.writePagesToNBT(stack, pages);
+        } catch (Throwable ignored) {
+        }
+    }
+
+
+
+
+
     private void applyRpgCoreAttributes(NBTTagCompound root, RollProfile profile, NBTTagCompound rolls) {
         if (profile.entries.isEmpty()) return;
 
@@ -2780,19 +3878,45 @@ public class HexOrbRoller {
     // ---------------------------------------------------------------------
     // Light tooltip refresh (force fix for legacy N/A tooltips)
     // ---------------------------------------------------------------------
-    private void ensureLightLore(ItemStack stack) {
-        if (stack == null || stack.getItem() != gemItem) return;
+    private boolean ensureLightLore(ItemStack stack) {
+        if (stack == null || stack.getItem() != gemItem) return false;
         NBTTagCompound tag = stack.getTagCompound();
-        if (tag == null) return;
-        if (!tag.hasKey(TAG_PROFILE, 8)) return;
+        if (tag == null) return false;
+        if (!tag.hasKey(TAG_PROFILE, 8)) return false;
         String prof = tag.getString(TAG_PROFILE);
-        if (prof == null || !prof.startsWith("LIGHT_")) return;
+        if (prof == null || !prof.startsWith("LIGHT_")) return false;
+
+        // Pull the rolled Light type (if present) so the Effect line reflects it.
+        String type = null;
+        if (tag.hasKey(TAG_LIGHT_TYPE, 8)) {
+            type = tag.getString(TAG_LIGHT_TYPE);
+            if (type != null) type = type.trim();
+            if (type != null && type.length() == 0) type = null;
+        }
 
         NBTTagCompound display = tag.getCompoundTag("display");
         NBTTagList lore = display.getTagList("Lore", 8);
 
         List<String> newLines = new ArrayList<String>();
-        newLines.add("§7Effect: " + "<pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + "Light" + G_CLOSE + "</pulse>");
+
+        // Effect line: keep the orb name unchanged; only update tooltip lore.
+        String effectLine;
+        if (type != null) {
+            // Show ONLY the rolled Light type as the effect (no "Light + ...").
+            // Also tolerate older stored values like "Light + Solar".
+            String shown = type;
+            int plus = shown.indexOf('+');
+            if (plus >= 0) shown = shown.substring(plus + 1).trim();
+            if (shown.length() == 0) shown = "Light";
+
+            effectLine = "§7Effect: " + "<pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + shown + G_CLOSE + "</pulse>";
+        } else {
+            effectLine = "§7Effect: " + "<pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + "Light" + G_CLOSE + "</pulse>";
+        }
+
+        newLines.add(effectLine);
+
+        // Bonus line (stable summary)
         newLines.add("§7Bonus: " + "<pulse amp=0.40 speed=0.90>" + G_LIGHT_OPEN + "Radiance • Light Abilities" + G_CLOSE + "</pulse>");
 
         NBTTagList merged = new NBTTagList();
@@ -2809,9 +3933,23 @@ public class HexOrbRoller {
             }
         }
 
+        // If nothing actually changed, don't spam inventory sync.
+        if (lore.tagCount() == merged.tagCount()) {
+            boolean same = true;
+            for (int i = 0; i < lore.tagCount(); i++) {
+                String a = lore.getStringTagAt(i);
+                String b = merged.getStringTagAt(i);
+                if (a == null) a = "";
+                if (b == null) b = "";
+                if (!a.equals(b)) { same = false; break; }
+            }
+            if (same) return false;
+        }
+
         display.setTag("Lore", merged);
         tag.setTag("display", display);
         stack.setTagCompound(tag);
+        return true;
     }
 
     private static boolean containsExact(List<String> lines, String s) {
@@ -3156,7 +4294,7 @@ public class HexOrbRoller {
         static final RollProfile LIGHT_FLAT = new RollProfile(
                 "LIGHT_FLAT",
                 "Light",
-                "§7Effect: " + "<pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + "Light" + G_CLOSE + "</pulse>",
+                "§7Effect: " + "<pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + G_CLOSE + "</pulse>",
                 G_LIGHT_OPEN,
                 false,
                 false,
@@ -3168,7 +4306,7 @@ public class HexOrbRoller {
         static final RollProfile LIGHT_MULTI = new RollProfile(
                 "LIGHT_MULTI",
                 "Light",
-                "§7Effect: " + "<pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + "Light" + G_CLOSE + "</pulse>",
+                "§7Effect: " + "<pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + G_CLOSE + "</pulse>",
                 G_LIGHT_OPEN,
                 true,
                 false,
@@ -3182,7 +4320,7 @@ public class HexOrbRoller {
         static final RollProfile RAINBOW_ALL5_FLAT = new RollProfile(
                 "RAINBOW_ALL5_FLAT",
                 "All Attributes",
-                EFFECT_NA,
+                EFFECT_OVERWRITE,
                 G_ENERGIZED_OPEN,
                 false,
                 true,
@@ -3199,13 +4337,49 @@ public class HexOrbRoller {
         static final RollProfile RAINBOW_ALL5_MULTI = new RollProfile(
                 "RAINBOW_ALL5_MULTI",
                 "All Attributes",
-                EFFECT_NA,
+                EFFECT_OVERWRITE,
                 G_ENERGIZED_OPEN,
                 true,
                 true,
                 true,
-                5,
-                25
+                1,
+                10
+        )
+                .add("dbc.Strength.Multi",     "All Attributes", 0, 0)
+                .add("dbc.Dexterity.Multi",    "All Attributes", 0, 0)
+                .add("dbc.Constitution.Multi", "All Attributes", 0, 0)
+                .add("dbc.WillPower.Multi",    "All Attributes", 0, 0)
+                .add("dbc.Spirit.Multi",       "All Attributes", 0, 0);
+
+
+        // Swirly - inherits Energized Rainbow bonus (All 5 stats), but keeps Unique Attacks effect.
+        static final RollProfile SWIRLY_ALL5_FLAT = new RollProfile(
+                "SWIRLY_ALL5_FLAT",
+                "All Attributes",
+                "§7Effect: " + G_ENERGIZED_OPEN + "Unique Attacks" + G_CLOSE,
+                G_ENERGIZED_OPEN,
+                false,
+                true,
+                true,
+                250,
+                750
+        )
+                .add("dbc.Strength",     "All Attributes", 0, 0)
+                .add("dbc.Dexterity",    "All Attributes", 0, 0)
+                .add("dbc.Constitution", "All Attributes", 0, 0)
+                .add("dbc.WillPower",    "All Attributes", 0, 0)
+                .add("dbc.Spirit",       "All Attributes", 0, 0);
+
+        static final RollProfile SWIRLY_ALL5_MULTI = new RollProfile(
+                "SWIRLY_ALL5_MULTI",
+                "All Attributes",
+                "§7Effect: " + G_ENERGIZED_OPEN + "Unique Attacks" + G_CLOSE,
+                G_ENERGIZED_OPEN,
+                true,
+                true,
+                true,
+                1,
+                12
         )
                 .add("dbc.Strength.Multi",     "All Attributes", 0, 0)
                 .add("dbc.Dexterity.Multi",    "All Attributes", 0, 0)
@@ -3232,6 +4406,19 @@ public class HexOrbRoller {
                 "Fire Pill",
                 "§7Effect: " + G_FIERY_OPEN + "Inferno Punch" + G_CLOSE + " §8(timed hits + finisher)",
                 G_FIERY_OPEN,
+                false,
+                false,
+                false,
+                0,
+                0
+        );
+
+        // Dark Fire pill - effect item (rolled type + 2 random positive stats)
+        static final RollProfile PILL_DARKFIRE_EFFECT = new RollProfile(
+                "PILL_DARKFIRE_EFFECT",
+                "Dark Fire Pill",
+                "§7Effect: " + G_DARKFIRE_OPEN + "Dark Fire" + G_CLOSE, // placeholder; overwritten on roll
+                G_DARKFIRE_OPEN,
                 false,
                 false,
                 false,

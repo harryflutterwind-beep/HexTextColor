@@ -1,6 +1,8 @@
 package com.example.examplemod.server;
 
+import com.example.examplemod.ExampleMod;
 import com.example.examplemod.api.HexSocketAPI;
+import com.example.examplemod.entity.EntityHexBlast;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
@@ -17,6 +19,7 @@ import net.minecraft.nbt.NBTTagFloat;
 import net.minecraft.nbt.NBTTagInt;
 import net.minecraft.nbt.NBTTagLong;
 import net.minecraft.nbt.NBTTagShort;
+import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.DamageSource;
@@ -83,6 +86,45 @@ public final class HexOrbEffectsController {
     private static final String VOID_GW_KEY_ANIM   = "HexVoidGW_Anim";
     private static final String VOID_GW_KEY_TICK   = "HexVoidGW_Tick";
 
+
+    // -------------------------------------------------------------
+    // DARKFIRE (Shadow Spread) charge throttles (player entity NBT)
+    // -------------------------------------------------------------
+    private static final String DFSS_KEY_NEXT_PASSIVE     = "HexDFSS_NextPassive";
+    private static final String DFSS_KEY_NEXT_HIT_GAIN    = "HexDFSS_NextHitGain";
+    private static final String DFSS_KEY_NEXT_GOTHIT_GAIN = "HexDFSS_NextGotHitGain";
+
+
+
+    // -------------------------------------------------------------
+    // DARKFIRE (Ember Detonation) mark keys
+    // - Target keys are stored on the MARKED entity
+    // - Owner list is stored on the PLAYER so detonation is cheap
+    // -------------------------------------------------------------
+    private static final String DFEM_KEY_OWNER   = "HexDF_EmberOwnerId";
+    private static final String DFEM_KEY_EXPIRE  = "HexDF_EmberExpire";
+    private static final String DFEM_KEY_ANIM    = "HexDF_EmberAnim";
+    private static final String DFEM_KEY_NEXT_FX = "HexDF_EmberNextFx";
+    private static final String DFEM_KEY_NEXT_PRUNE = "HexDF_EmberNextPrune";
+    private static final String DFEM_LIST_KEY    = "HexDF_EmberMarked"; // NBTTagList of compounds {id:int, exp:long, a:byte}
+
+    // Ember Detonation cooldown tags (stored on the held pill so the client HUD can read it)
+    private static final String DFEM_CD_START = "HexDF_EmberDetCDStart";
+    private static final String DFEM_CD_END   = "HexDF_EmberDetCDEnd";
+    private static final String DFEM_CD_MAX   = "HexDF_EmberDetCDMax";
+
+    // Shadowflame Trail dash cooldown tags (stored on the pill so the client HUD can render it)
+    private static final String DFSH_CD_END   = "HexDF_ShadowTrailCDEnd";
+    private static final String DFSH_CD_MAX   = "HexDF_ShadowTrailCDMax";
+
+
+    // Cooldown after a successful detonation (ticks). Separate from the 5s hold-to-detonate on the client.
+    public static volatile int DARKFIRE_EMBER_DETONATE_COOLDOWN_TICKS = 100; // 5s
+
+
+    private static final String DFEM_LIST_ID     = "id";
+    private static final String DFEM_LIST_EXP    = "exp";
+    private static final String DFEM_LIST_ANIM   = "a";
     private static final String FRB_KEY_DMG    = "HexFRB_Dmg";
     private static final String FRB_KEY_KB     = "HexFRB_KB";
     private static final String FRB_KEY_RAD    = "HexFRB_Rad";
@@ -214,11 +256,149 @@ public final class HexOrbEffectsController {
     public static volatile String GEM_ENERGIZED_FLAT = "gems/orb_gem_swirly_64";
     public static volatile String GEM_ENERGIZED_ANIM = "gems/orb_gem_swirly_loop";
 
+    // Overwrite (Energized Rainbow) gem keys (meta 16/17)
+    public static volatile String GEM_OVERWRITE_FLAT = "gems/orb_gem_rainbow_energized_64";
+    public static volatile String GEM_OVERWRITE_ANIM = "gems/orb_gem_rainbow_energized_anim_8f_64x516";
+
+
     // Fire Pills
     public static volatile String PILL_FIRE_FLAT = "gems/pill_fire_textured_64";
     public static volatile String PILL_FIRE_ANIM = "gems/pill_fire_animated_64_anim";
 
 
+
+
+    // Darkfire Pills (held item; ItemGemIcons meta 24/25)
+    // NOTE: This is NOT the vanilla flame texture swap; it's the actual Darkfire pill item HUD/charge system.
+    public static volatile int    PILL_DARKFIRE_META_FLAT = 24;
+    public static volatile int    PILL_DARKFIRE_META_ANIM = 25;
+
+    // Darkfire NBT keys (stored on the HELD pill)
+    public static volatile String DARKFIRE_TAG_TYPE       = "HexDarkFireType";
+    public static volatile String DARKFIRE_TAG_CHARGE     = "HexDarkFireCharge";
+    public static volatile String DARKFIRE_TAG_CHARGE_MAX = "HexDarkFireChargeMax";
+
+    // Darkfire example type label (charging applies to ALL types)
+    public static volatile String DARKFIRE_TYPE_SHADOW_SPREAD = "Shadow Spread";
+
+    // Darkfire passive type: Cinder Weakness (reduces outgoing damage while target is dark-burned)
+    public static volatile String DARKFIRE_TYPE_CINDER_WEAKNESS = "Cinder Weakness";
+    // Darkfire passive/active type label (roll tables & gating)
+    public static volatile String DARKFIRE_TYPE_BLACKFLAME_BURN = "Blackflame Burn";
+
+
+
+    // Darkfire passive: Ashen Lifesteal (self-buff: regen + lifesteal + damage boost)
+    public static volatile String DARKFIRE_TYPE_ASHEN_LIFESTEAL = "Ashen Lifesteal";
+
+
+    public static volatile String DARKFIRE_TYPE_EMBER_DETONATION = "Ember Detonation";
+    // Ashen Lifesteal tuning
+    public static volatile String DARKFIRE_TYPE_SHADOWFLAME_TRAIL = "Shadowflame Trail";
+    public static volatile float  DARKFIRE_ASHEN_PROC_CHANCE            = 0.03F;  // chance per melee-ish hit to start buff (if not on CD)
+    public static volatile int    DARKFIRE_ASHEN_BUFF_DURATION_TICKS     = 240;   // 8s
+    public static volatile int    DARKFIRE_ASHEN_COOLDOWN_TICKS          = 320;   // 16s (starts after buff ends)
+    public static volatile float  DARKFIRE_ASHEN_DAMAGE_BONUS_PCT        = 0.20F; // +20% extra damage while buffed (as proc damage)
+    public static volatile float  DARKFIRE_ASHEN_LIFESTEAL_PCT_OF_DAMAGE = 0.047F; // heal = 10% of damage dealt while buffed
+    public static volatile float  DARKFIRE_ASHEN_HEAL_MAX_PCT_BODY_PER_HIT = 0.06F; // cap heal per hit to 6% of max Body
+    public static volatile float  DARKFIRE_ASHEN_REGEN_PCT_BODY_PER_SEC  = 0.020F; // 2% max Body per second while buffed
+    public static volatile int    DARKFIRE_ASHEN_REGEN_INTERVAL_TICKS    = 20;    // apply regen once per second
+
+    // Darkfire active (25%) - Blackfire Burn (hitscan ignite + DoT)
+    public static volatile int    DARKFIRE_BURN_COST_PCT          = 25;   // 25% charge
+    public static volatile int    DARKFIRE_BURN_BIG_COST_PCT          = 50;   // 50% charge
+    public static volatile float  DARKFIRE_BURN_BIG_DMG_CAP_PER_TICK    = 10000.0F; // higher per-tick cap
+    public static volatile float  DARKFIRE_BURN_BIG_MULT               = 2.0F;
+
+    // Darkfire 100% Rapid Fire (hold CTRL): percent cost per shot, shot cooldown, and overcharge ramp to 2x
+    public static volatile int    DARKFIRE_RF_SHOT_COST_PCT           = 6;   // % of max per shot (tweakable)
+    public static volatile int    DARKFIRE_RF_SHOT_COOLDOWN_T         = 2;   // min ticks between shots (server-side safety)
+    public static volatile int    DARKFIRE_RF_OVERCHARGE_TICKS        = 85;  // ticks from 1x -> 2x while holding
+
+    // Darkfire passive - Cinder Weakness (proc chance, duration, outgoing dmg multiplier)
+    public static volatile float  DARKFIRE_CINDER_PROC_CHANCE       = 0.08F; // 18% per melee-ish hit
+    public static volatile int    DARKFIRE_CINDER_DURATION_TICKS    = 140; // 7s  //  7s
+    public static volatile float  DARKFIRE_CINDER_OUTGOING_MULT     = 0.75F; // 25% less outgoing dmg
+    public static volatile float  DARKFIRE_CINDER_NERF_CHANCE       = 1.0F; // 1.0 = always; set <1.0 for chance-based
+    public static volatile float  DARKFIRE_CINDER_NERF_MULT_MIN     = 0.40F; // net damage becomes 40%...
+    public static volatile float  DARKFIRE_CINDER_NERF_MULT_MAX     = 0.75F; // ...up to 75%
+    public static volatile int    DARKFIRE_CINDER_REAPPLY_GRACE_T   = 10;   // ticks before same target can be re-marked
+    public static volatile int    DARKFIRE_CINDER_COOLDOWN_AFTER_TICKS = 300;  // 15s after debuff ends
+    public static volatile boolean DARKFIRE_CINDER_AFFECT_PLAYERS   = false; // safer default for PvP
+
+    // Cinder outgoing nerf is applied via REFUND (post-hit heal), not e.ammount scaling
+    public static volatile int    DARKFIRE_CINDER_REFUND_DELAY_T    = 1;   // ticks after hit to sample Body/HP
+    public static volatile int    DARKFIRE_CINDER_REFUND_MAX_RETRIES = 2;  // if delta is 0, retry a couple ticks (DBC sync can be late)
+    public static volatile int    DARKFIRE_CINDER_REFUND_MIN_NET    = 1;   // never reduce below this net amount
+    public static volatile boolean DARKFIRE_CINDER_REFUND_ALLOW_REVIVE = false;
+    public static volatile boolean DARKFIRE_CINDER_DEBUG_VICTIM = true; // sends throttled debug to the damaged player // if false: don't refund if target hit dropped them to 0
+    public static volatile int    DARKFIRE_CINDER_REFUND_MAX_QUEUE  = 64;  // safety cap
+    public static volatile float  DARKFIRE_CINDER_VISUAL_DOT_PER_TICK = 1.0F; // tiny tick just to keep darkburn visuals active
+
+
+    // Rapid Fire scaling / durations by shot size
+    public static volatile int    DARKFIRE_RF_DOT_TICKS_SMALL         = 120; // 6s
+    public static volatile int    DARKFIRE_RF_DOT_TICKS_MED           = 160; // 8s
+    public static volatile int    DARKFIRE_RF_DOT_TICKS_BIG           = 200; // 10s
+
+    public static volatile float  DARKFIRE_RF_DOT_MULT_SMALL          = 0.05F;
+    public static volatile float  DARKFIRE_RF_DOT_MULT_MED            = 0.08F;
+    public static volatile float  DARKFIRE_RF_DOT_MULT_BIG            = 0.11F;
+
+    public static volatile float  DARKFIRE_RF_IMPACT_MULT_SMALL       = 0.05F;
+    public static volatile float  DARKFIRE_RF_IMPACT_MULT_MED         = 0.09F;
+    public static volatile float  DARKFIRE_RF_IMPACT_MULT_BIG         = 0.15F;
+
+    // multiplier vs 25%
+
+    public static volatile int    DARKFIRE_BURN_DURATION_TICKS    = 200;  // 10s
+    public static volatile double DARKFIRE_BURN_RANGE_BLOCKS      = 18.0D;
+    public static volatile float  DARKFIRE_BURN_BASE_DMG_PER_TICK = 250.0F;
+    public static volatile float  DARKFIRE_BURN_SQRT_SCALE        = 12.85F; // dmg += sqrt(str+dex)*scale
+    public static volatile float  DARKFIRE_BURN_DMG_CAP_PER_TICK  = 65000.0F;
+    public static volatile int    DARKFIRE_BURN_FIRE_COOLDOWN_T   = 6;    // ticks (anti-spam)
+
+    // Darkfire charge tuning (shared across types) (0..max)
+    public static volatile int    DARKFIRE_SS_CHARGE_MAX = 1000;
+
+
+
+    public static volatile double DARKFIRE_SHADOWFLAME_DASH_DISTANCE = 7.0D;
+    public static volatile int    DARKFIRE_SHADOWFLAME_DASH_COOLDOWN_T = 60; // ticks (3s) // ticks (anti-spam)
+
+    // Ember Detonation (active mark + detonate)
+    public static volatile int    DARKFIRE_EMBER_MARK_COST_PCT            = 10;     // consumes 10% charge per mark shot
+    public static volatile double DARKFIRE_EMBER_MARK_RANGE_BLOCKS        = 24.0D;
+    public static volatile int    DARKFIRE_EMBER_MARK_DURATION_TICKS      = 400;    // 20s
+    public static volatile float  DARKFIRE_EMBER_MARK_RADIUS              = 3.25F;  // on-impact AoE mark
+    public static volatile float  DARKFIRE_EMBER_MARK_RADIUS_MULTI        = 5.25F;
+    public static volatile int    DARKFIRE_EMBER_MARK_MAX_TARGETS         = 8;
+    public static volatile int    DARKFIRE_EMBER_MARK_MAX_TARGETS_MULTI   = 14;
+    public static volatile int    DARKFIRE_EMBER_MARK_FX_EVERY_TICKS      = 4;
+
+    public static volatile float  DARKFIRE_EMBER_DETONATE_BASE_DMG         = 6200.0F;
+    public static volatile float  DARKFIRE_EMBER_DETONATE_SQRT_SCALE       = 300.0F;  // dmg += sqrt(str+wil)*scale
+    public static volatile float  DARKFIRE_EMBER_DETONATE_DMG_CAP          = 8000000.0F;
+    public static volatile float  DARKFIRE_EMBER_DETONATE_RADIUS_BASE      = 3.75F;
+    public static volatile float  DARKFIRE_EMBER_DETONATE_RADIUS_SQRT_SCALE= 0.075F; // radius += sqrt(str+wil)*scale
+    public static volatile float  DARKFIRE_EMBER_DETONATE_RADIUS_CAP       = 10.5F;
+
+    public static volatile float  DARKFIRE_EMBER_ANIM_MULT                = 2.65F;
+    public static volatile int    DARKFIRE_EMBER_FIRE_COOLDOWN_T           = 4;
+    // Passive gain: once per second while held (shared)
+    public static volatile int    DARKFIRE_SS_PASSIVE_GAIN_PER_SEC = 20;
+    public static volatile double DARKFIRE_SS_PASSIVE_BIG_CHANCE   = 0.05; // small chance
+    public static volatile int    DARKFIRE_SS_PASSIVE_BIG_BONUS    = 12;   // extra on proc
+
+    // Gain when YOU hit something
+    public static volatile int    DARKFIRE_SS_ON_HIT_GAIN        = 12;
+    public static volatile double DARKFIRE_SS_ON_HIT_BIG_CHANCE  = 0.10;
+    public static volatile int    DARKFIRE_SS_ON_HIT_BIG_BONUS   = 65;
+
+    // Gain when YOU get hit
+    public static volatile int    DARKFIRE_SS_ON_GOTHIT_GAIN       = 10;
+    public static volatile double DARKFIRE_SS_ON_GOTHIT_BIG_CHANCE = 0.10;
+    public static volatile int    DARKFIRE_SS_ON_GOTHIT_BIG_BONUS  = 55;
 
     // Fractured Orbs
     public static volatile String GEM_FRACTURED_FLAT = "gems/orb_gem_fractured_64";
@@ -323,6 +503,23 @@ public final class HexOrbEffectsController {
         return Float.NaN;
     }
 
+    private static float readFirstNumber(NBTTagCompound nbt, String[] keys, float fallback) {
+        float v = readFirstNumber(nbt, keys);
+        return Float.isNaN(v) ? fallback : v;
+    }
+
+    private static NBTTagCompound getOrNull(NBTTagCompound parent, String key) {
+        if (parent == null || key == null) return null;
+        try {
+            // 10 = TAG_Compound
+            if (!parent.hasKey(key, 10)) return null;
+            return parent.getCompoundTag(key);
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+
+
     private static float readNbtNumber(NBTTagCompound nbt, String key){
         if (nbt == null || key == null) return Float.NaN;
         try {
@@ -339,6 +536,44 @@ public final class HexOrbEffectsController {
         } catch (Throwable ignored) {}
         return Float.NaN;
     }
+
+    /**
+     * Writes a numeric value using the same NBT number type that already exists at {@code key}.
+     * If the key does not exist, defaults to float.
+     */
+    private static void writeNumericLikeExisting(NBTTagCompound nbt, String key, float value){
+        if (nbt == null || key == null) return;
+        try {
+            if (!nbt.hasKey(key)){
+                nbt.setFloat(key, value);
+                return;
+            }
+            NBTBase b = nbt.getTag(key);
+            if (b instanceof NBTTagInt){
+                nbt.setInteger(key, (int) value);
+            } else if (b instanceof NBTTagFloat){
+                nbt.setFloat(key, value);
+            } else if (b instanceof NBTTagDouble){
+                nbt.setDouble(key, (double) value);
+            } else if (b instanceof NBTTagLong){
+                nbt.setLong(key, (long) value);
+            } else if (b instanceof NBTTagShort){
+                int v = (int) value;
+                if (v > Short.MAX_VALUE) v = Short.MAX_VALUE;
+                if (v < Short.MIN_VALUE) v = Short.MIN_VALUE;
+                nbt.setShort(key, (short) v);
+            } else if (b instanceof NBTTagByte){
+                int v = (int) value;
+                if (v > Byte.MAX_VALUE) v = Byte.MAX_VALUE;
+                if (v < Byte.MIN_VALUE) v = Byte.MIN_VALUE;
+                nbt.setByte(key, (byte) v);
+            } else {
+                // Unknown numeric type: store as float
+                nbt.setFloat(key, value);
+            }
+        } catch (Throwable ignored) {}
+    }
+
 
     private static String entLabel(Entity e){
         if (e == null) return "null";
@@ -373,14 +608,14 @@ public final class HexOrbEffectsController {
     // -------------------------------------------------------------
 
     // Flat gem: rainbow shockwave (AoE burst)
-    public static volatile double ENERGIZED_FLAT_PROC_CHANCE = 0.17;
+    public static volatile double ENERGIZED_FLAT_PROC_CHANCE = 0.10;
     public static volatile int    ENERGIZED_FLAT_COOLDOWN_TICKS = 60;
     public static volatile float  ENERGIZED_FLAT_RADIUS = 4.5f;
     public static volatile int    ENERGIZED_FLAT_MAX_HITS = 6;
     public static volatile float  ENERGIZED_FLAT_BONUS_DAMAGE = 10.0f;
 
     // Anim gem: chain arc (bounces)
-    public static volatile double ENERGIZED_ANIM_PROC_CHANCE = 0.15;
+    public static volatile double ENERGIZED_ANIM_PROC_CHANCE = 0.009;
     public static volatile int    ENERGIZED_ANIM_COOLDOWN_TICKS = 80;
     public static volatile float  ENERGIZED_ANIM_RADIUS = 6.0f;
     public static volatile int    ENERGIZED_ANIM_CHAIN_HITS = 4;
@@ -393,6 +628,29 @@ public final class HexOrbEffectsController {
     public static volatile float  ENERGIZED_GLOBAL_DAMAGE_MULT = 1.35f;
 
     // -------------------------------------------------------------
+// Overwrite (Energized Rainbow) proc
+// - On hit: chance to trigger a single massive bonus hit that scales from DBC Strength.
+// - This is meant to be *very noticeable*; tune the multipliers as needed.
+// -------------------------------------------------------------
+    public static volatile boolean OVERWRITE_ENABLED = true;
+    /** If false, Overwrite will never affect players (PvP safety). */
+    public static volatile boolean OVERWRITE_AFFECT_PLAYERS = true;
+
+    public static volatile double OVERWRITE_PROC_CHANCE_FLAT = 0.00018;
+    public static volatile double OVERWRITE_PROC_CHANCE_ANIM = 0.00036;
+
+    /** Shared cooldown for both flat/anim. Set to 0 for "always test". */
+    public static volatile int    OVERWRITE_COOLDOWN_TICKS = 60;
+
+    /** Base bonus-hit damage = (StrengthEffective * STR_TO_DAMAGE) + BASE_DAMAGE */
+    public static volatile float  OVERWRITE_STR_TO_DAMAGE = 25.0f;
+    public static volatile float  OVERWRITE_BASE_DAMAGE   = 1000.0f;
+
+    /** Final bonus-hit damage = base * MULT. */
+    public static volatile float  OVERWRITE_MULT_FLAT = 15.0f;
+    public static volatile float  OVERWRITE_MULT_ANIM = 25.0f;
+
+    // -------------------------------------------------------------
     // Fire Pill: Fire Punch buff
     // - Proc starts a short window where your hands burn (VFX)
     // - Each melee hit during the window adds extra damage
@@ -402,8 +660,8 @@ public final class HexOrbEffectsController {
     /** If false, fire effects will never apply to players (PvP safety). */
     public static volatile boolean FIRE_PUNCH_AFFECT_PLAYERS = true;
 
-    public static volatile double  FIRE_PUNCH_CHANCE_FLAT = 0.16;
-    public static volatile double  FIRE_PUNCH_CHANCE_ANIM = 0.20;
+    public static volatile double  FIRE_PUNCH_CHANCE_FLAT = 0.10;
+    public static volatile double  FIRE_PUNCH_CHANCE_ANIM = 0.12;
 
     public static volatile int     FIRE_PUNCH_COOLDOWN_TICKS = 180;      // 9s
     public static volatile int     FIRE_PUNCH_ANIM_COOLDOWN_TICKS = 160; // 8s
@@ -463,21 +721,44 @@ public final class HexOrbEffectsController {
     // -------------------------------------------------------------
     public static volatile boolean FRACTURED_ENABLED = true;
 
+    // Fractured Shards (active ability ammo) - gained in combat (hit / got hit)
+    // IMPORTANT: These are chance-based by default; set to 1.0 for guaranteed gain.
+    // These do NOT use absolute world time, so dimension switching won't break them.
+    public static volatile double FRACTURED_SHARD_GAIN_CHANCE_ON_HIT    = 0.18;
+    public static volatile double FRACTURED_SHARD_GAIN_CHANCE_ON_GOTHIT = 0.22;
+
+    // Prevents shard gain from multi-hit spam in the same instant (ticks on the PLAYER, not world time).
+    public static volatile int    FRACTURED_SHARD_GAIN_THROTTLE_TICKS   = 4;
+
+    // Max shards for the Fractured active (HUD assumes 5).
+    public static volatile int    FRACTURED_MAX_SHARDS                 = 5;
+
+
     // -------------------------------------------------------------
     // VOID ORB: Gravity Well (defensive proc)  - ONLY used when the rolled void type is Gravity Well
     // -------------------------------------------------------------
     public static volatile boolean VOID_ENABLED = true;
-    public static volatile float   VOID_GW_PROC_CHANCE          = 0.88f;
-    public static volatile float   VOID_GW_PROC_CHANCE_ON_HIT  = 0.14f; // chance when YOU hit something
-    public static volatile int     VOID_GW_COOLDOWN_TICKS       = 20 * 8;   // 8s
+    public static volatile boolean VOID_GW_ENABLED = true;
+    public static volatile float   VOID_GW_PROC_CHANCE          = 0.02f;
+    public static volatile float   VOID_GW_PROC_CHANCE_ON_HIT  = 0.035f; // chance when YOU hit something
+    public static volatile int     VOID_GW_COOLDOWN_TICKS       = 20 * 12;   // 8s
     public static volatile int     VOID_GW_DURATION_TICKS       = 20 * 2;   // 2s
     public static volatile float   VOID_GW_RADIUS              = 5.5f;
     public static volatile float   VOID_GW_RADIUS_ANIM         = 6.5f;
-    public static volatile float   VOID_GW_PULL_STRENGTH       = 0.22f;     // horiz velocity per tick
-    public static volatile float   VOID_GW_PULL_STRENGTH_ANIM  = 0.28f;
+    public static volatile float   VOID_GW_PULL_STRENGTH       = 0.25f;     // horiz velocity per tick
+    public static volatile float   VOID_GW_PULL_STRENGTH_ANIM  = 0.38f;
     public static volatile int     VOID_GW_DAMAGE_PERIOD_TICKS = 6;         // apply tick damage every N ticks
     public static volatile float   VOID_GW_TICK_DAMAGE_SCALE   = 0.20f;     // scales from incoming hit damage
     public static volatile float   VOID_GW_BURST_DAMAGE_SCALE  = 0.85f;
+
+
+    // Defensive tuning / HUD helpers (kept separate so configs can override them independently)
+    public static volatile float   VOID_GW_DEF_PROC_CHANCE             = VOID_GW_PROC_CHANCE;
+    public static volatile int     VOID_GW_DEF_COOLDOWN_TICKS          = VOID_GW_COOLDOWN_TICKS;
+    /** HUD "active" timer for Gravity Well fields (defaults to duration). */
+    public static volatile int     VOID_GW_FIELD_DURATION_TICKS        = VOID_GW_DURATION_TICKS;
+    /** HUD "active" timer for defensive Gravity Well fields (defaults to duration). */
+    public static volatile int     VOID_GW_DEF_FIELD_DURATION_TICKS    = VOID_GW_DURATION_TICKS;
 
 
     // -------------------------------------------------------------
@@ -493,11 +774,16 @@ public final class HexOrbEffectsController {
     public static volatile float   VOID_ENTROPY_STRENGTH_SCALE = 6.0f;    // dmg per STR per tick
     public static volatile float   VOID_ENTROPY_BONUS_DAMAGE   = 8000.0f;       // flat per tick
     public static volatile float   VOID_ENTROPY_ANIM_MULT      = 1.18f;
-    public static volatile float   VOID_ENTROPY_LIFESTEAL_FRACTION = 0.03f;  // 30% of DoT dealt returned at the end
+    public static volatile float   VOID_ENTROPY_LIFESTEAL_FRACTION = 0.035f;  // 30% of DoT dealt returned at the end
     // Entropy proc tuning (for Entropy-type void gems)
-    public static volatile float   VOID_ENTROPY_PROC_CHANCE         = 0.18f; // when YOU are damaged: chance to curse the attacker
-    public static volatile float   VOID_ENTROPY_PROC_CHANCE_ON_HIT   = 0.30f; // when YOU hit something: chance to apply Entropy DoT
-    public static volatile int     VOID_ENTROPY_COOLDOWN_TICKS       = 20 * 6; // shared cooldown for Entropy procs
+    public static volatile float   VOID_ENTROPY_PROC_CHANCE         = 0.03f; // when YOU are damaged: chance to curse the attacker
+    public static volatile float   VOID_ENTROPY_PROC_CHANCE_ON_HIT   = 0.032f; // when YOU hit something: chance to apply Entropy DoT
+    public static volatile int     VOID_ENTROPY_COOLDOWN_TICKS       = 20 * 7; // shared cooldown for Entropy procs
+
+    // Defensive tuning (when YOU are damaged)
+    public static volatile float   VOID_ENTROPY_DEF_PROC_CHANCE         = VOID_ENTROPY_PROC_CHANCE;
+    public static volatile int     VOID_ENTROPY_DEF_COOLDOWN_TICKS       = VOID_ENTROPY_COOLDOWN_TICKS;
+    public static volatile int     VOID_ENTROPY_DEF_DURATION_TICKS       = VOID_ENTROPY_DURATION_TICKS;
 
     // -------------------------------------------------------------
     // VOID ORB: Abyss Mark (AoE mark -> delayed detonation)
@@ -510,20 +796,20 @@ public final class HexOrbEffectsController {
     public static volatile boolean VOID_ABYSS_MARK_AFFECT_PLAYERS = true;
 
     /** Radius (blocks) used to APPLY the mark to nearby entities on proc. */
-    public static volatile float   VOID_ABYSS_MARK_MARK_RADIUS      = 4.6f;
-    public static volatile float   VOID_ABYSS_MARK_MARK_RADIUS_ANIM = 5.6f;
+    public static volatile float   VOID_ABYSS_MARK_MARK_RADIUS      = 4.69f;
+    public static volatile float   VOID_ABYSS_MARK_MARK_RADIUS_ANIM = 5.69f;
 
     /** Safety cap to avoid marking huge crowds at once. */
-    public static volatile int     VOID_ABYSS_MARK_MAX_TARGETS = 12;
+    public static volatile int     VOID_ABYSS_MARK_MAX_TARGETS = 18;
 
     /** How long the Mark lasts before detonation (this is the HUD timer). */
     public static volatile int     VOID_ABYSS_MARK_DURATION_TICKS = 20 * 6; // 6s
 
     /** Chance to apply when YOU are damaged (AoE centered on you). */
-    public static volatile float   VOID_ABYSS_MARK_PROC_CHANCE = 0.20f;
+    public static volatile float   VOID_ABYSS_MARK_PROC_CHANCE = 0.015f;
 
     /** Chance to apply when YOU hit something (AoE centered on the target). */
-    public static volatile float   VOID_ABYSS_MARK_PROC_CHANCE_ON_HIT = 0.35f;
+    public static volatile float   VOID_ABYSS_MARK_PROC_CHANCE_ON_HIT = 0.015f;
 
     // Legacy (unused with the AoE/delay design, kept for back-compat configs):
     public static volatile int     VOID_ABYSS_MARK_MAX_STACKS = 3;
@@ -539,8 +825,8 @@ public final class HexOrbEffectsController {
     public static volatile double  VOID_ABYSS_MARK_DETONATE_KB_ANIM     = 0.28D;
 
     // Legacy (AoE detonation) - not used in the new design but kept for back-compat:
-    public static volatile float   VOID_ABYSS_MARK_DETONATE_RADIUS      = 4.6f;
-    public static volatile float   VOID_ABYSS_MARK_DETONATE_RADIUS_ANIM = 5.6f;
+    public static volatile float   VOID_ABYSS_MARK_DETONATE_RADIUS      = 4.69f;
+    public static volatile float   VOID_ABYSS_MARK_DETONATE_RADIUS_ANIM = 5.69f;
     // -------------------------------------------------------------
     // VOID ORB: Null Shell (charge meter only - dash/protection/push come later)
     // - Passively charges while you stand in DARKNESS
@@ -560,7 +846,7 @@ public final class HexOrbEffectsController {
     public static volatile int     VOID_NULL_SHELL_CHARGE_STAGES = 3;
 
     /** Passive gain applied once per second while in darkness. */
-    public static volatile int     VOID_NULL_SHELL_PASSIVE_DARK_GAIN_PER_SEC = 60;
+    public static volatile int     VOID_NULL_SHELL_PASSIVE_DARK_GAIN_PER_SEC = 30;
 
     /** Passive gain in bright light: rare chance per second. */
     public static volatile float   VOID_NULL_SHELL_PASSIVE_LIGHT_CHANCE_PER_SEC = 0.08f;
@@ -568,11 +854,11 @@ public final class HexOrbEffectsController {
 
     /** Combat bonus while in darkness: rare chance per hit/hurt event. */
     public static volatile float   VOID_NULL_SHELL_COMBAT_BONUS_CHANCE_DARK = 0.16f;
-    public static volatile int     VOID_NULL_SHELL_COMBAT_BONUS_GAIN_DARK = 10;
+    public static volatile int     VOID_NULL_SHELL_COMBAT_BONUS_GAIN_DARK = 25;
 
     /** Combat bonus while in bright light: even rarer. */
     public static volatile float   VOID_NULL_SHELL_COMBAT_BONUS_CHANCE_LIGHT = 0.06f;
-    public static volatile int     VOID_NULL_SHELL_COMBAT_BONUS_GAIN_LIGHT = 6;
+    public static volatile int     VOID_NULL_SHELL_COMBAT_BONUS_GAIN_LIGHT = 4;
 
     /** Light thresholds (0..15). */
     public static volatile int     VOID_NULL_SHELL_DARK_LIGHT_MAX = 9;
@@ -594,17 +880,17 @@ public final class HexOrbEffectsController {
     public static volatile double FRACTURED_PROC_CHANCE_BASE_ANIM = 0.14;
     public static volatile double FRACTURED_PROC_CHANCE_BONUS_ANIM = 0.28;
 
-    public static volatile int    FRACTURED_COOLDOWN_TICKS = 30;
+    public static volatile int    FRACTURED_COOLDOWN_TICKS = 47;
 
     /** Damage math: (base * scale + bonus) * (1 + missingPct * ramp) */
-    public static volatile float  FRACTURED_DAMAGE_SCALE = 0.95f;
+    public static volatile float  FRACTURED_DAMAGE_SCALE = 0.87f;
     public static volatile float  FRACTURED_DAMAGE_SCALE_ANIM = 1.10f;
     public static volatile float  FRACTURED_BONUS_DAMAGE = 10.0f;
     public static volatile float  FRACTURED_BONUS_DAMAGE_ANIM = 12.0f;
     public static volatile float  FRACTURED_MISSING_RAMP = 0.65f;
 
     /** True chaos: sometimes it backfires (self-hit). */
-    public static volatile double FRACTURED_BACKLASH_CHANCE = 0.25;
+    public static volatile double FRACTURED_BACKLASH_CHANCE = 0.15;
     public static volatile float  FRACTURED_BACKLASH_SELF_SCALE = 0.35f;
 
     /** Rare extreme roll (bigger positive OR bigger backlash). */
@@ -631,8 +917,6 @@ public final class HexOrbEffectsController {
 
     public static volatile float  NS_PUSH_BASE_DAMAGE = 8000f;      // added before stat scaling
     public static volatile double NS_PUSH_STAT_SCALE  = 1.60D;    // (DEX/CON weighted) * scale
-    public static volatile float  NS_PUSH_DEX_WEIGHT  = 0.55f;
-    public static volatile float  NS_PUSH_CON_WEIGHT  = 0.45f;
     public static volatile float  NS_PUSH_RADIUS      = 6.0f;
 
     public static volatile double NS_PUSH_KB_H = 1.25;
@@ -640,19 +924,18 @@ public final class HexOrbEffectsController {
 
 
 
-    public static final int   NS_DASH_COOLDOWN_TICKS = 80; // 4s
-    public static final double NS_PASSIVE_DISTANCE = 1.4;
-    public static final double NS_ACTIVE_DISTANCE  = 3.6;
+    public static final int   NS_DASH_COOLDOWN_TICKS = 120; // 4s
+    public static final double NS_PASSIVE_DISTANCE = 1.7;
+    public static final double NS_ACTIVE_DISTANCE  = 4.2;
 
-    public static final int NS_TRAIL_LIFE = 60;
-    public static final double NS_TRAIL_RADIUS = 1.8;
+    public static final int NS_TRAIL_LIFE = 80;
+    public static final double NS_TRAIL_RADIUS = 1.87;
     public static final float NS_TRAIL_BIG_MULT = 1.2f;
     public static final float NS_TRAIL_DOT_MULT = 0.25f;
     public static volatile int   NS_TRAIL_DOT_INTERVAL = 4;   // ticks between DoT pulses
     public static volatile float NS_TRAIL_BASE_DAMAGE = 2500f;   // added before stat scaling
     public static volatile double NS_TRAIL_STAT_SCALE = 0.60D; // (DEX/CON weighted) * scale
-    public static volatile float NS_TRAIL_DEX_WEIGHT = 0.55f;
-    public static volatile float NS_TRAIL_CON_WEIGHT = 0.45f;
+
 
 
     // -------------------------------------------------------------
@@ -664,8 +947,8 @@ public final class HexOrbEffectsController {
     public static volatile boolean ENERGIZED_PUSH_BLAST_ENABLED = true;
 
     // Chance (checked when a swirl would start). If it triggers, we do PUSH_BLAST instead of normal swirl.
-    public static volatile double ENERGIZED_PUSH_BLAST_CHANCE_FLAT = 0.60;
-    public static volatile double ENERGIZED_PUSH_BLAST_CHANCE_ANIM = 0.85;
+    public static volatile double ENERGIZED_PUSH_BLAST_CHANCE_FLAT = 0.005;
+    public static volatile double ENERGIZED_PUSH_BLAST_CHANCE_ANIM = 0.01;
 
     // Movement (horizontal / pushing away from the attacker)
     public static volatile int   ENERGIZED_PUSH_SWIRL_TICKS = 18;
@@ -677,7 +960,7 @@ public final class HexOrbEffectsController {
     // Big blast (uses explosion-style knockback + AoE)
     public static volatile float ENERGIZED_PUSH_BLAST_RADIUS = 7.5f;
     public static volatile float ENERGIZED_PUSH_BLAST_DAMAGE_SCALE = 1.70f;
-    public static volatile float ENERGIZED_PUSH_BLAST_BONUS_DAMAGE = 28.0f;
+    public static volatile float ENERGIZED_PUSH_BLAST_BONUS_DAMAGE = 25.0f;
 
     // Anim overrides (optional)
     public static volatile int   ENERGIZED_ANIM_PUSH_SWIRL_TICKS = 24;
@@ -688,7 +971,7 @@ public final class HexOrbEffectsController {
 
     public static volatile float ENERGIZED_ANIM_PUSH_BLAST_RADIUS = 9.0f;
     public static volatile float ENERGIZED_ANIM_PUSH_BLAST_DAMAGE_SCALE = 1.95f;
-    public static volatile float ENERGIZED_ANIM_PUSH_BLAST_BONUS_DAMAGE = 36.0f;
+    public static volatile float ENERGIZED_ANIM_PUSH_BLAST_BONUS_DAMAGE = 32.0f;
 
 
     // Push-blast charge VFX (sphere grows around attacker while the push-swirl runs)
@@ -706,10 +989,10 @@ public final class HexOrbEffectsController {
     /** If false, rush will never target players (useful for PvP safety). */
     public static volatile boolean ENERGIZED_RUSH_AFFECT_PLAYERS = true;
 
-    public static volatile double  ENERGIZED_RUSH_CHANCE_FLAT = 0.15;
-    public static volatile double  ENERGIZED_RUSH_CHANCE_ANIM = 0.14;
-    public static volatile int     ENERGIZED_RUSH_COOLDOWN_TICKS = 140;       // 7s
-    public static volatile int     ENERGIZED_ANIM_RUSH_COOLDOWN_TICKS = 120;  // 6s
+    public static volatile double  ENERGIZED_RUSH_CHANCE_FLAT = 0.0025;
+    public static volatile double  ENERGIZED_RUSH_CHANCE_ANIM = 0.0042;
+    public static volatile int     ENERGIZED_RUSH_COOLDOWN_TICKS = 160;       // 7s
+    public static volatile int     ENERGIZED_ANIM_RUSH_COOLDOWN_TICKS = 138;  // 6s
 
     /** How many "micro explosions" before the finisher. */
     public static volatile int     ENERGIZED_RUSH_SHOTS = 6;
@@ -779,8 +1062,8 @@ public final class HexOrbEffectsController {
     /** If false, this variant will never target players (PvP safety). */
     public static volatile boolean ENERGIZED_FIST_AFFECT_PLAYERS = true;
 
-    public static volatile double  ENERGIZED_FIST_CHANCE_FLAT = 0.10;
-    public static volatile double  ENERGIZED_FIST_CHANCE_ANIM = 0.14;
+    public static volatile double  ENERGIZED_FIST_CHANCE_FLAT = 0.006;
+    public static volatile double  ENERGIZED_FIST_CHANCE_ANIM = 0.008;
     public static volatile int     ENERGIZED_FIST_COOLDOWN_TICKS = 220;      // 11s
     public static volatile int     ENERGIZED_ANIM_FIST_COOLDOWN_TICKS = 190; // 9.5s
 
@@ -814,8 +1097,8 @@ public final class HexOrbEffectsController {
 
     // Heal proc: short Body regen on attacker + bouncy particles (server-side)
     public static volatile boolean ENERGIZED_HEAL_ENABLED = true;
-    public static volatile double  ENERGIZED_HEAL_PROC_CHANCE = 0.12;
-    public static volatile double  ENERGIZED_ANIM_HEAL_PROC_CHANCE = 0.16;
+    public static volatile double  ENERGIZED_HEAL_PROC_CHANCE = 0.0088;
+    public static volatile double  ENERGIZED_ANIM_HEAL_PROC_CHANCE = 0.0098;
     public static volatile int     ENERGIZED_HEAL_COOLDOWN_TICKS = 120;         // 6s
     public static volatile int     ENERGIZED_ANIM_HEAL_COOLDOWN_TICKS = 100;    // 5s
 
@@ -836,15 +1119,15 @@ public final class HexOrbEffectsController {
 // 0.5s
 
     /** Random percent of MAX Body restored per heal pulse (0.01 = 1%). */
-    public static volatile float   ENERGIZED_HEAL_PERCENT_MIN = 0.30f;          // 30%
+    public static volatile float   ENERGIZED_HEAL_PERCENT_MIN = 0.10f;          // 30%
     public static volatile float   ENERGIZED_HEAL_PERCENT_MAX = 0.30f;          // 30%
-    public static volatile float   ENERGIZED_ANIM_HEAL_PERCENT_MIN = 0.30f;     // 30%
-    public static volatile float   ENERGIZED_ANIM_HEAL_PERCENT_MAX = 0.30f;     // 30%
+    public static volatile float   ENERGIZED_ANIM_HEAL_PERCENT_MIN = 0.10f;     // 30%
+    public static volatile float   ENERGIZED_ANIM_HEAL_PERCENT_MAX = 0.70f;     // 30%
     // VFX knobs
-    public static volatile float   ENERGIZED_HEAL_PARTICLE_RADIUS = 1.15f;
-    public static volatile float   ENERGIZED_ANIM_HEAL_PARTICLE_RADIUS = 1.45f;
-    public static volatile int     ENERGIZED_HEAL_PARTICLES_PER_TICK = 10;
-    public static volatile int     ENERGIZED_ANIM_HEAL_PARTICLES_PER_TICK = 14;
+    public static volatile float   ENERGIZED_HEAL_PARTICLE_RADIUS = 1.25f;
+    public static volatile float   ENERGIZED_ANIM_HEAL_PARTICLE_RADIUS = 1.55f;
+    public static volatile int     ENERGIZED_HEAL_PARTICLES_PER_TICK = 2;
+    public static volatile int     ENERGIZED_ANIM_HEAL_PARTICLES_PER_TICK = 4;
     public static volatile boolean ENERGIZED_HEAL_SHOW_RAINBOW_DUST = true;
 
 
@@ -1120,7 +1403,89 @@ public final class HexOrbEffectsController {
             }
         }
 
-        // VOID: defensive procs when the PLAYER is damaged (e.g. Gravity Well)
+
+        // DARKFIRE (Cinder Weakness): we use setFire(1) as a *visual-only* black-flame overlay.
+        // Cancel the vanilla fire tick damage while our visual tag is active.
+        try {
+            if (!e.entityLiving.worldObj.isRemote && e.source != null && e.source.isFireDamage()) {
+                NBTTagCompound vd = e.entityLiving.getEntityData();
+                long until = 0L;
+                try { until = vd.getLong(DF_CINDER_FIRE_CANCEL_UNTIL_T); } catch (Throwable ignored) {}
+                if (until != 0L) {
+                    long now = serverNow(e.entityLiving.worldObj);
+                    if (now < until) {
+                        // Cancel only the onFire / inFire tick damage caused by our visual overlay.
+                        String dt = null;
+                        try { dt = e.source.damageType; } catch (Throwable ignored) {}
+                        if ("onFire".equals(dt) || "inFire".equals(dt)) {
+                            e.ammount = 0F;
+                            return;
+                        }
+
+                        net.minecraft.entity.Entity srcEnt = null;
+                        net.minecraft.entity.Entity directEnt = null;
+                        try { srcEnt = e.source.getEntity(); } catch (Throwable ignored) {}
+                        try { directEnt = e.source.getSourceOfDamage(); } catch (Throwable ignored) {}
+                        if (srcEnt == null && directEnt == null) {
+                            e.ammount = 0F;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        // DARKFIRE: Cinder Weakness - reduce outgoing damage of weakened attackers (REFUND STYLE)
+        // We intentionally do NOT scale e.ammount here because DBC can quantize/override small values.
+        try {
+            Entity a0 = e.source.getEntity();
+            Entity a1 = e.source.getSourceOfDamage();
+            EntityLivingBase attacker = null;
+            if (a0 instanceof EntityLivingBase) attacker = (EntityLivingBase) a0;
+            else if (a1 instanceof EntityLivingBase) attacker = (EntityLivingBase) a1;
+
+            if (attacker != null && attacker.worldObj != null && !attacker.worldObj.isRemote) {
+                if (DARKFIRE_CINDER_AFFECT_PLAYERS || !(attacker instanceof EntityPlayer)) {
+                    long nowC = serverNow(attacker.worldObj);
+                    if (isCinderWeakened(attacker, nowC)) {
+                        float chance = DARKFIRE_CINDER_NERF_CHANCE;
+                        if (chance < 0F) chance = 0F;
+                        if (chance > 1F) chance = 1F;
+
+                        if (chance > 0F && Math.random() <= (double)chance) {
+                            float mn = sanitizeCinderOutgoingMult(DARKFIRE_CINDER_NERF_MULT_MIN);
+                            float mx = sanitizeCinderOutgoingMult(DARKFIRE_CINDER_NERF_MULT_MAX);
+                            if (mx < mn) { float t = mn; mn = mx; mx = t; }
+                            float mult = (mx > mn) ? (mn + ((float)Math.random()) * (mx - mn)) : mn;
+
+                            if (mult < 1.0F && e.entityLiving != null) {
+                                if (isDbcBodyVictim(e.entityLiving)) {
+                                    scheduleCinderRefundNerf(attacker, e.entityLiving, mult, nowC);
+                                } else {
+                                    e.ammount *= mult;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+
+        // DARKFIRE: Shadow Spread charge gain when YOU are hit (any damage source)
+        if (e.entityLiving instanceof EntityPlayer) {
+            EntityPlayer victimDf = (EntityPlayer) e.entityLiving;
+            try {
+                long nowDf = serverNow(victimDf.worldObj);
+                gainDarkfireShadowSpreadOnGotHit(victimDf, victimDf.worldObj, victimDf.getEntityData(), nowDf);
+            } catch (Throwable ignored) {}
+        }
+
+        // FRACTURED: shard gain when YOU are hit (works for socketed gems too)
+        if (e.entityLiving instanceof EntityPlayer) {
+            try { tryGainFracturedShard((EntityPlayer) e.entityLiving, false); } catch (Throwable ignored) {}
+        }
+
+
+// VOID: defensive procs when the PLAYER is damaged (e.g. Gravity Well)
         if (VOID_ENABLED && e.entityLiving instanceof EntityPlayer){
             tryProcVoidOnDamaged((EntityPlayer) e.entityLiving, e.source, e.ammount);
         }
@@ -1154,7 +1519,19 @@ public final class HexOrbEffectsController {
             return;
         }
 
+
+        // DARKFIRE: Shadow Spread charge gain when YOU land a (melee-ish) hit
+        try {
+            long nowDf = serverNow(player.worldObj);
+            gainDarkfireShadowSpreadOnHit(player, player.worldObj, player.getEntityData(), nowDf);
+        } catch (Throwable ignored) {}
+        // DARKFIRE: Cinder Weakness passive (targets deal less outgoing damage while dark-burned)
+        try { tryProcDarkfireCinderWeakness(player, target); } catch (Throwable ignored) {}
+
+        // DARKFIRE: Ashen Lifesteal passive (self buff: regen + lifesteal + dmg boost)
+        try { tryProcDarkfireAshenLifesteal(player, target, amount); } catch (Throwable ignored) {}
         EnergizedMatch match = findEnergizedMatch(player);
+        OverwriteMatch owMatch = findOverwriteMatch(player);
         FirePillMatch fireMatch = findFirePillMatch(player);
         FracturedMatch fracturedMatch = findFracturedMatch(player);
 
@@ -1164,11 +1541,16 @@ public final class HexOrbEffectsController {
         }
 
         boolean hasEnergized = match.hasFlat || match.hasAnim;
+        boolean hasOverwrite = owMatch.hasFlat || owMatch.hasAnim;
         boolean hasFirePill  = fireMatch.hasFlat || fireMatch.hasAnim;
         boolean hasFractured = fracturedMatch.hasAnim || fracturedMatch.hasFlat;
+        // FRACTURED: shard gain when YOU land a hit (works for socketed gems too)
+        if (hasFractured && FRACTURED_ENABLED){
+            tryGainFracturedShard(player, true);
+        }
         boolean fireActive   = isFirePunchActive(player);
 
-        if (!hasEnergized && !hasFirePill && !fireActive && !hasFractured){
+        if (!hasEnergized && !hasOverwrite && !hasFirePill && !fireActive && !hasFractured){
             if (DEBUG_PROC) debugOncePerSecond(player, "[HexOrb] no supported gem/pill on held/armor");
             return;
         }
@@ -1180,6 +1562,13 @@ public final class HexOrbEffectsController {
                         "dmg=" + amount + " hasFlat=" + match.hasFlat + " hasAnim=" + match.hasAnim);
                 debugSocketKeysOncePerSecond(player, match.debugStack);
             }
+            if (hasOverwrite && owMatch.debugStack != null){
+                debugOncePerSecond(player, "[HexOrb] hit(" + phase + ") overwrite " +
+                        "tgt=" + safeEntName(target) + " " +
+                        "dmg=" + amount + " hasFlat=" + owMatch.hasFlat + " hasAnim=" + owMatch.hasAnim);
+                debugSocketKeysOncePerSecond(player, owMatch.debugStack);
+            }
+
             if (hasFirePill && fireMatch.debugStack != null){
                 debugOncePerSecond(player, "[HexOrb] hit(" + phase + ") firepill " +
                         "tgt=" + safeEntName(target) + " " +
@@ -1194,7 +1583,7 @@ public final class HexOrbEffectsController {
                 if (hasFirePill){
                     // Prefer ANIM if present, else FLAT
                     boolean fireAnim = fireMatch.hasAnim;
-                    tryStartFirePunch(player, fireAnim);
+                    tryStartFirePunch(player, fireAnim, fireMatch.debugStack);
                 }
                 // If active, apply bonus hit damage + track finisher DoT/explosion
                 applyFirePunchHit(player, target, amount);
@@ -1204,13 +1593,25 @@ public final class HexOrbEffectsController {
         // Existing energized procs
         if (hasEnergized){
             if (match.hasAnim){
-                tryProcEnergizedAnim(player, target, amount);
-                tryProcEnergizedHeal(player, true);
+                tryProcEnergizedAnim(player, target, amount, match.debugStack);
+                tryProcEnergizedHeal(player, true, match.debugStack);
             } else {
-                tryProcEnergizedFlat(player, target, amount);
-                tryProcEnergizedHeal(player, false);
+                tryProcEnergizedFlat(player, target, amount, match.debugStack);
+                tryProcEnergizedHeal(player, false, match.debugStack);
             }
         }
+// Overwrite (Energized Rainbow): single big Strength-scaled proc hit
+        if (hasOverwrite && OVERWRITE_ENABLED){
+            if (!(target instanceof EntityPlayer) || OVERWRITE_AFFECT_PLAYERS){
+                if (owMatch.hasAnim){
+                    tryProcOverwrite(player, target, true, owMatch.debugStack);
+                } else {
+                    tryProcOverwrite(player, target, false, owMatch.debugStack);
+                }
+            }
+        }
+
+
 
         // Fractured: low-body chaos surge
         if (hasFractured && FRACTURED_ENABLED){
@@ -1289,6 +1690,93 @@ public final class HexOrbEffectsController {
         String voidType;      // rolled type (best effort)
         boolean found;        // true if we found a matching void orb/gem host
     }
+
+    private static final class VoidSource{
+        final ItemStack host;
+        final String type;
+        final boolean isAnim;
+
+        VoidSource(ItemStack host, String type, boolean isAnim){
+            this.host = host;
+            this.type = type;
+            this.isAnim = isAnim;
+        }
+    }
+
+    /** Collect ALL Void orb sources (direct held/armor + socketed) so passive procs still work even when only one is "selected" for HUD. */
+    private static void collectVoidSources(EntityPlayer p, java.util.List<VoidSource> out){
+        if (p == null || out == null) return;
+
+        // Held
+        collectVoidSourcesFromHost(p.getHeldItem(), out);
+
+        // Armor
+        try{
+            if (p.inventory != null && p.inventory.armorInventory != null){
+                ItemStack[] armor = p.inventory.armorInventory;
+                for (int i = 0; i < armor.length; i++){
+                    collectVoidSourcesFromHost(armor[i], out);
+                }
+            }
+        }catch(Throwable ignored){}
+    }
+
+    private static void collectVoidSourcesFromHost(ItemStack host, java.util.List<VoidSource> out){
+        if (host == null) return;
+
+        // Direct Void orb item
+        if (isDirectVoidOrbItem(host)){
+            String type = readVoidTypeFromHostItem(host);
+            if (type == null || type.trim().isEmpty()) type = "Gravity Well";
+
+            String key = directVoidGemKey(host);
+            boolean anim = keyMatchesWanted(key, GEM_VOID_ANIM) || (normalizeGemKey(key) != null && normalizeGemKey(key).contains("anim"));
+            out.add(new VoidSource(host, type, anim));
+        }
+
+        int filled = getFilled(host);
+        if (filled <= 0) return;
+
+        for (int i = 0; i < filled; i++){
+            String gemKey = getGemKeyAt(host, i);
+
+            boolean isVoidKey = keyMatchesWanted(gemKey, GEM_VOID_FLAT) || keyMatchesWanted(gemKey, GEM_VOID_ANIM);
+            if (!isVoidKey){
+                String nk = normalizeGemKey(gemKey);
+                if (nk != null && nk.contains("void")) isVoidKey = true;
+            }
+            if (!isVoidKey) continue;
+
+            boolean anim = keyMatchesWanted(gemKey, GEM_VOID_ANIM) || (normalizeGemKey(gemKey) != null && normalizeGemKey(gemKey).contains("anim"));
+
+            String type = null;
+            ItemStack gem = getGemAtSafe(host, i);
+            if (gem != null){
+                type = readVoidTypeFromHostItem(gem);
+            }
+            if (type == null || type.trim().isEmpty()) type = readVoidTypeFromHostItem(host);
+            if (type == null || type.trim().isEmpty()) type = "Gravity Well";
+
+            out.add(new VoidSource(host, type, anim));
+        }
+    }
+
+    private static ItemStack getGemAtSafe(ItemStack host, int idx){
+        if (host == null) return null;
+        try{
+            ItemStack g = HexSocketAPI.getGemAt(host, idx);
+            if (g != null) return g;
+        }catch(Throwable ignored){}
+        try{
+            if (M_getGemAt != null){
+                Object o = M_getGemAt.invoke(null, host, idx);
+                if (o instanceof ItemStack) return (ItemStack)o;
+            }
+        }catch(Throwable ignored){}
+        return null;
+    }
+
+
 
     /** Some servers treat orbs as wearable/held items (not only socketed). Detect that too. */
     private static boolean isDirectVoidOrbItem(ItemStack s){
@@ -1451,6 +1939,41 @@ public final class HexOrbEffectsController {
 
         return m;
     }
+
+    /**
+     * Finds a VoidMatch for the Null Shell orb specifically, even if other Void passives are present.
+     * Uses collectVoidSources() so multiple socketed Void gems won't mask Null Shell.
+     */
+    private static VoidMatch findNullShellMatch(EntityPlayer p){
+        VoidMatch m = new VoidMatch();
+        if (p == null) return m;
+
+        try{
+            ArrayList<VoidSource> sources = new ArrayList<VoidSource>(4);
+            collectVoidSources(p, sources);
+
+            for (int i = 0; i < sources.size(); i++){
+                VoidSource s = sources.get(i);
+                if (s == null) continue;
+                if (!isVoidTypeNullShell(s.type)) continue;
+
+                m.found = true;
+                m.voidType = (s.type != null && s.type.trim().length() > 0) ? s.type : "Null Shell";
+                m.debugStack = (s.host != null) ? s.host : p.getHeldItem();
+                m.hasAnim = s.isAnim;
+                m.hasFlat = !s.isAnim;
+                return m;
+            }
+        } catch (Throwable ignored) {}
+
+        return m;
+    }
+
+    private static boolean hasNullShellEquipped(EntityPlayer p){
+        VoidMatch m = findNullShellMatch(p);
+        return m != null && m.found && m.debugStack != null;
+    }
+
 
     // -------------------------------------------------------------
     // Void: Null Shell - Dash/Trail (Step 1)
@@ -1879,8 +2402,8 @@ public final class HexOrbEffectsController {
         d.setInteger(VNS_KEY_CHARGE, c);
 
         // Mirror to host item for HUD if we can
-        VoidMatch m = findVoidMatch(p);
-        if (m != null && m.found && isVoidTypeNullShell(m.voidType)){
+        VoidMatch m = findNullShellMatch(p);
+        if (m != null && m.found) {
             stampNullShellChargeOntoHostStack(p, m.voidType, serverNow(p.worldObj));
         }
     }
@@ -1894,7 +2417,7 @@ public final class HexOrbEffectsController {
         int charge = data.getInteger(VNS_KEY_CHARGE);
         if (charge < 0) charge = 0;
         if (charge > max) charge = max;
-        VoidMatch m = findVoidMatch(owner);
+        VoidMatch m = findNullShellMatch(owner);
         if (m == null || m.debugStack == null) return;
         stampNullShellChargeHud(owner, m.debugStack, voidType, charge, max, now, data);
     }
@@ -2082,7 +2605,7 @@ public final class HexOrbEffectsController {
         if (p == null || p.worldObj == null || p.worldObj.isRemote) return false;
         if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return false;
 
-        VoidMatch match = findVoidMatch(p);
+        VoidMatch match = findNullShellMatch(p);
         if (match == null || !match.found){
             nsDbg(p, "Dash: no void orb host found (held/armor).");
             return false;
@@ -2140,7 +2663,7 @@ public final class HexOrbEffectsController {
         if (p == null || p.worldObj == null || p.worldObj.isRemote) return false;
         if (!VOID_ENABLED || !VOID_NULL_SHELL_ENABLED) return false;
 
-        VoidMatch match = findVoidMatch(p);
+        VoidMatch match = findNullShellMatch(p);
         if (match == null || !match.found){
             nsDbg(p, "Defense: no void orb host found (held/armor).");
             return false;
@@ -2282,8 +2805,8 @@ public final class HexOrbEffectsController {
         doNullShellVoidPush(p, mult);
 
         // HUD stamp for cooldown bar
-        VoidMatch m = findVoidMatch(p);
-        if (m != null && m.found && m.debugStack != null){
+        VoidMatch m = findNullShellMatch(p);
+        if (m != null && m.found && m.debugStack != null) {
             stampVoidHud(p, m.debugStack, m.voidType, "Void Push", d.getLong("HexOrbCD_VoidNullPush"), 0L, NS_PUSH_COOLDOWN_TICKS);
         }
 
@@ -2306,6 +2829,12 @@ public final class HexOrbEffectsController {
 
 
     private static final class EnergizedMatch {
+        boolean hasFlat;
+        boolean hasAnim;
+        ItemStack debugStack;
+    }
+
+    private static final class OverwriteMatch {
         boolean hasFlat;
         boolean hasAnim;
         ItemStack debugStack;
@@ -2348,6 +2877,54 @@ public final class HexOrbEffectsController {
                 ItemStack a = armor[i];
                 if (a == null) continue;
                 if (hasGemSocketed(a, GEM_ENERGIZED_FLAT)){
+                    m.hasFlat = true;
+                    m.debugStack = a;
+                    return m;
+                }
+            }
+        }
+
+        return m;
+    }
+
+
+    /**
+     * Checks Overwrite gems (Energized Rainbow meta 16/17) on held item first, then armor.
+     * Priority: held anim > held flat > armor anim > armor flat.
+     */
+    private static OverwriteMatch findOverwriteMatch(EntityPlayer p){
+        OverwriteMatch m = new OverwriteMatch();
+        if (p == null) return m;
+
+        ItemStack held = p.getHeldItem();
+        if (held != null){
+            if (hasGemSocketed(held, GEM_OVERWRITE_ANIM)){
+                m.hasAnim = true;
+                m.debugStack = held;
+                return m;
+            }
+            if (hasGemSocketed(held, GEM_OVERWRITE_FLAT)){
+                m.hasFlat = true;
+                m.debugStack = held;
+                return m;
+            }
+        }
+
+        if (p.inventory != null && p.inventory.armorInventory != null){
+            ItemStack[] armor = p.inventory.armorInventory;
+            for (int i = 0; i < armor.length; i++){
+                ItemStack a = armor[i];
+                if (a == null) continue;
+                if (hasGemSocketed(a, GEM_OVERWRITE_ANIM)){
+                    m.hasAnim = true;
+                    m.debugStack = a;
+                    return m;
+                }
+            }
+            for (int i = 0; i < armor.length; i++){
+                ItemStack a = armor[i];
+                if (a == null) continue;
+                if (hasGemSocketed(a, GEM_OVERWRITE_FLAT)){
                     m.hasFlat = true;
                     m.debugStack = a;
                     return m;
@@ -2432,11 +3009,14 @@ public final class HexOrbEffectsController {
     // -------------------------------------------------------------
     // FLAT PROC: Rainbow Shockwave (AoE)
     // -------------------------------------------------------------
-    private static void tryProcEnergizedFlat(EntityPlayer p, EntityLivingBase primary, float baseDamage){
+    private static void tryProcEnergizedFlat(EntityPlayer p, EntityLivingBase primary, float baseDamage, ItemStack host){
         if (p == null || primary == null) return;
 
         if (!roll(p, ENERGIZED_FLAT_PROC_CHANCE)) return;
         if (!cooldownReady(p, "HexOrbCD_EnergizedFlat", ENERGIZED_FLAT_COOLDOWN_TICKS)) return;
+        long hudNow = (p.worldObj != null) ? p.worldObj.getTotalWorldTime() : 0L;
+        stampEnergizedHud(host, "shock", "Unique Attacks", "Shockwave", hudNow, ENERGIZED_FLAT_COOLDOWN_TICKS);
+
 
         World w = p.worldObj;
 
@@ -2472,7 +3052,7 @@ public final class HexOrbEffectsController {
             if (hit >= ENERGIZED_FLAT_MAX_HITS) break;
         }
 
-        maybeStartSwirl(p, primary, baseDamage, false);
+        maybeStartSwirl(p, primary, baseDamage, false, host);
 
         playRainbowBurst(w, primary.posX, primary.posY + 1.0, primary.posZ);
         w.playSoundAtEntity(primary, "random.levelup", 0.8f, 1.35f);
@@ -2483,11 +3063,14 @@ public final class HexOrbEffectsController {
     // -------------------------------------------------------------
     // ANIM PROC: Rainbow Chain Arc
     // -------------------------------------------------------------
-    private static void tryProcEnergizedAnim(EntityPlayer p, EntityLivingBase primary, float baseDamage){
+    private static void tryProcEnergizedAnim(EntityPlayer p, EntityLivingBase primary, float baseDamage, ItemStack host){
         if (p == null || primary == null) return;
 
         if (!roll(p, ENERGIZED_ANIM_PROC_CHANCE)) return;
         if (!cooldownReady(p, "HexOrbCD_EnergizedAnim", ENERGIZED_ANIM_COOLDOWN_TICKS)) return;
+        long hudNow = (p.worldObj != null) ? p.worldObj.getTotalWorldTime() : 0L;
+        stampEnergizedHud(host, "arc", "Unique Attacks", "Chain Arc", hudNow, ENERGIZED_ANIM_COOLDOWN_TICKS);
+
 
         World w = p.worldObj;
 
@@ -2536,7 +3119,7 @@ public final class HexOrbEffectsController {
             if (chained >= ENERGIZED_ANIM_CHAIN_HITS) break;
         }
 
-        maybeStartSwirl(p, primary, baseDamage, true);
+        maybeStartSwirl(p, primary, baseDamage, true, host);
 
         playRainbowBurst(w, primary.posX, primary.posY + 1.0, primary.posZ);
         w.playSoundAtEntity(primary, "fireworks.blast", 0.7f, 1.15f);
@@ -2547,7 +3130,47 @@ public final class HexOrbEffectsController {
     // -------------------------------------------------------------
     // Heal proc: short regen on attacker (no script needed)
     // -------------------------------------------------------------
-    private static void tryProcEnergizedHeal(EntityPlayer p, boolean isAnim){
+
+    private static void tryProcOverwrite(EntityPlayer p, EntityLivingBase primary, boolean isAnim, ItemStack hudHost){
+        if (p == null || primary == null) return;
+
+        double chance = isAnim ? OVERWRITE_PROC_CHANCE_ANIM : OVERWRITE_PROC_CHANCE_FLAT;
+        if (!roll(p, chance)) return;
+
+        String cdKey = isAnim ? "HexOrbCD_OverwriteAnim" : "HexOrbCD_OverwriteFlat";
+        long now = serverNow(p.worldObj);
+        if (!cooldownReady(p, cdKey, OVERWRITE_COOLDOWN_TICKS, now)) return;
+
+        // HUD stamp (Overwrite cooldown)
+        if (hudHost != null){
+            try { stampOverwriteHudEffect(p, hudHost, isAnim, now + (long) OVERWRITE_COOLDOWN_TICKS, OVERWRITE_COOLDOWN_TICKS); } catch (Throwable ignored) {}
+        }
+
+        // Strength-scaled bonus hit (DBC-friendly)
+        double strEff = 0.0;
+        try { strEff = getStrengthEffective(p); } catch (Throwable ignored) {}
+
+        float base = (float)(strEff * OVERWRITE_STR_TO_DAMAGE + OVERWRITE_BASE_DAMAGE);
+        float mult = isAnim ? OVERWRITE_MULT_ANIM : OVERWRITE_MULT_FLAT;
+
+        float dmg = base * mult;
+        if (Float.isNaN(dmg) || Float.isInfinite(dmg)) dmg = 1.0f;
+        if (dmg < 0f) dmg = 0f;
+
+        // VFX first (so even if DBC ignores damage you still *see* it proc)
+        try {
+            playRainbowSpark(primary.worldObj, primary.posX, primary.posY + (primary.height * 0.6), primary.posZ);
+        } catch (Throwable ignored) {}
+
+        dealProcDamage(p, primary, dmg, "Overwrite");
+
+        // Light sound cue (optional)
+        try {
+            p.worldObj.playSoundEffect(primary.posX, primary.posY, primary.posZ, "random.orb", 0.45f, isAnim ? 1.35f : 1.20f);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void tryProcEnergizedHeal(EntityPlayer p, boolean isAnim, ItemStack host){
         if (p == null) return;
         if (!ENERGIZED_HEAL_ENABLED) return;
 
@@ -2555,9 +3178,14 @@ public final class HexOrbEffectsController {
         if (chance <= 0.0) return;
         if (!rollChance(p, chance)) return;
 
+        long now = serverNow(p.worldObj);
+
         String cdKey = isAnim ? "HexOrbCD_HealAnim" : "HexOrbCD_HealFlat";
         int cdTicks = isAnim ? ENERGIZED_ANIM_HEAL_COOLDOWN_TICKS : ENERGIZED_HEAL_COOLDOWN_TICKS;
-        if (!cooldownReady(p, cdKey, cdTicks)) return;
+        if (!cooldownReady(p, cdKey, cdTicks, now)) return;
+        long hudNow = (p.worldObj != null) ? p.worldObj.getTotalWorldTime() : now;
+        stampEnergizedHud(host, "heal", "Unique Attacks", "Heal", hudNow, cdTicks);
+
 
         startHealBuff(p, isAnim);
     }
@@ -2841,6 +3469,8 @@ public final class HexOrbEffectsController {
             if (stats == null) return false;
 
             DBC_RESTORE_HP_PCT.invoke(stats, pct);
+            // Some builds can overshoot max slightly; clamp just in case.
+            clampBodyToMax(p);
             return true;
         } catch (Throwable ignored) {
             return false;
@@ -2872,7 +3502,7 @@ public final class HexOrbEffectsController {
         d.removeTag(FP_KEY_FIN);
     }
 
-    private static void tryStartFirePunch(EntityPlayer p, boolean isAnim){
+    private static void tryStartFirePunch(EntityPlayer p, boolean isAnim, ItemStack hudHost){
         if (!FIRE_PUNCH_ENABLED || p == null) return;
 
         World w = p.worldObj;
@@ -2885,7 +3515,7 @@ public final class HexOrbEffectsController {
         // cooldown gate
         String cdKey = isAnim ? "HexOrbCD_FirePunchAnim" : "HexOrbCD_FirePunchFlat";
         int cdTicks  = isAnim ? FIRE_PUNCH_ANIM_COOLDOWN_TICKS : FIRE_PUNCH_COOLDOWN_TICKS;
-        if (!cooldownReady(p, cdKey, cdTicks)) return;
+        if (!cooldownReady(p, cdKey, cdTicks, now)) return;
 
         // chance roll
         double chance = isAnim ? FIRE_PUNCH_CHANCE_ANIM : FIRE_PUNCH_CHANCE_FLAT;
@@ -2900,6 +3530,11 @@ public final class HexOrbEffectsController {
         d.setBoolean(FP_KEY_ANIM, isAnim);
         d.setInteger(FP_KEY_LASTTGT, 0);
         d.setBoolean(FP_KEY_FIN, false);
+
+        // HUD stamp (Fire Punch buff + cooldown)
+        if (hudHost != null){
+            try { stampFirePunchHud(p, hudHost, isAnim, now + (long) dur, dur, now + (long) cdTicks, cdTicks); } catch (Throwable ignored) {}
+        }
 
         // activation VFX
         if (w != null){
@@ -3174,149 +3809,242 @@ public final class HexOrbEffectsController {
 
     private static void tryProcVoidOnAttack(EntityPlayer attacker, EntityLivingBase target, float dealtDamage){
         if (attacker == null || target == null) return;
-        World w = attacker.worldObj;
-        if (w == null || w.isRemote) return;
+        if (!VOID_ENABLED) return;
 
-        // must have a void gem equipped (held item or armor)
-        VoidMatch match = findVoidMatch(attacker);
-        if (!match.hasFlat && !match.hasAnim) return;
+        World w = serverWorld0(attacker);
+        if (w == null) return;
 
-        String type = match.voidType;
+        // Collect all Void sources so multiple socketed Void orbs can all contribute their passive procs.
+        java.util.ArrayList<VoidSource> sources = new java.util.ArrayList<VoidSource>(4);
+        collectVoidSources(attacker, sources);
 
-        // Gravity Well: offensive version centers on the hit target
-        if (isVoidTypeGravityWell(type)){
-            if (!roll(attacker, VOID_GW_PROC_CHANCE_ON_HIT)) return;
-            if (!cooldownReady(attacker, "HexOrbCD_VoidGW", VOID_GW_COOLDOWN_TICKS)) return;
-
-            long now = serverNow(w);
-            stampVoidHud(attacker, match.debugStack, type, "Gravity Well",
-                    now + (long) VOID_GW_COOLDOWN_TICKS,
-                    now + (long) VOID_GW_DURATION_TICKS,
-                    VOID_GW_COOLDOWN_TICKS);
-
-            float base = dealtDamage;
-            if (Float.isNaN(base) || Float.isInfinite(base)) base = 1.0f;
-            if (base < 0.5f) base = 0.5f;
-
-            // center on the target you hit (feels offensive)
-            double cx = target.posX;
-            double cy = target.posY + (target.height * 0.5);
-            double cz = target.posZ;
-
-            startVoidGravityWellAt(attacker, cx, cy, cz, base, match.hasAnim);
-            return;
+        // Fallback to legacy single-match behavior (in case something in the socket API changes).
+        if (sources.isEmpty()){
+            VoidMatch match = findVoidMatch(attacker);
+            if (match == null || (!match.hasFlat && !match.hasAnim)) return;
+            sources.add(new VoidSource(match.debugStack, match.voidType, match.hasAnim));
         }
 
-        // Entropy: apply a DoT to the target (and heal you at the end)
-        if (isVoidTypeEntropy(type)){
-            if (!VOID_ENTROPY_ENABLED) return;
-            if (!roll(attacker, VOID_ENTROPY_PROC_CHANCE_ON_HIT)) return;
-            if (!cooldownReady(attacker, "HexOrbCD_VoidEntropy", VOID_ENTROPY_COOLDOWN_TICKS)) return;
+        VoidSource srcGW = null, srcENT = null, srcAM = null, srcNS = null;
+        boolean gwAnim = false, entAnim = false, amAnim = false, nsAnim = false;
+        String typeGW = null, typeENT = null, typeAM = null, typeNS = null;
 
-            long now = serverNow(w);
-            stampVoidHud(attacker, match.debugStack, type, "Entropy",
-                    now + (long) VOID_ENTROPY_COOLDOWN_TICKS,
-                    now + (long) VOID_ENTROPY_DURATION_TICKS,
-                    VOID_ENTROPY_COOLDOWN_TICKS);
+        for (int i = 0; i < sources.size(); i++){
+            VoidSource s = sources.get(i);
+            if (s == null) continue;
+            String t = s.type;
 
-            applyVoidEntropy(attacker, target, match.hasAnim, now);
-            return;
+            if (isVoidTypeGravityWell(t)){
+                if (srcGW == null) srcGW = s;
+                gwAnim |= s.isAnim;
+                if (typeGW == null) typeGW = t;
+                continue;
+            }
+            if (isVoidTypeEntropy(t)){
+                if (srcENT == null) srcENT = s;
+                entAnim |= s.isAnim;
+                if (typeENT == null) typeENT = t;
+                continue;
+            }
+            if (isVoidTypeAbyssMark(t)){
+                if (srcAM == null) srcAM = s;
+                amAnim |= s.isAnim;
+                if (typeAM == null) typeAM = t;
+                continue;
+            }
+            if (isVoidTypeNullShell(t)){
+                if (srcNS == null) srcNS = s;
+                nsAnim |= s.isAnim;
+                if (typeNS == null) typeNS = t;
+            }
         }
 
+        long now = serverNow(w);
 
-        // Abyss Mark: AoE marks (detonate after timer)
-        if (isVoidTypeAbyssMark(type)){
-            if (!VOID_ABYSS_MARK_ENABLED) return;
-            if (!roll(attacker, VOID_ABYSS_MARK_PROC_CHANCE_ON_HIT)) return;
-
-            long now = serverNow(w);
-            applyVoidAbyssMarkAoE(attacker, target, match.debugStack, type, match.hasAnim, now);
-            return;
+        // Gravity Well (offensive)
+        if (srcGW != null && VOID_GW_ENABLED){
+            if (roll(attacker, VOID_GW_PROC_CHANCE_ON_HIT) && cooldownReady(attacker, "HexOrbCD_VoidGW", VOID_GW_COOLDOWN_TICKS, now)){
+                ProcPos procPos = procPosNearTarget(w, target);
+                if (procPos != null){
+                    ItemStack host = srcGW.host != null ? srcGW.host : attacker.getHeldItem();
+                    stampVoidHudEffect(attacker, host, "gw", typeOr(typeGW, "Gravity Well"), "Gravity Well",
+                            now + VOID_GW_COOLDOWN_TICKS, now + VOID_GW_FIELD_DURATION_TICKS, VOID_GW_COOLDOWN_TICKS);
+                    startVoidGravityWellAt(attacker, procPos.x, procPos.y, procPos.z, dealtDamage, gwAnim);
+                }
+            }
         }
 
-        // Null Shell: charge bonus on HIT (rare)
-        if (isVoidTypeNullShell(type)){
-            long now = serverNow(w);
-            tryBoostVoidNullShellCharge(attacker, match, now);
-            return;
+        // Entropy (offensive)
+        if (srcENT != null && VOID_ENTROPY_ENABLED){
+            if (roll(attacker, VOID_ENTROPY_PROC_CHANCE_ON_HIT) && cooldownReady(attacker, "HexOrbCD_VoidEntropy", VOID_ENTROPY_COOLDOWN_TICKS, now)){
+                ItemStack host = srcENT.host != null ? srcENT.host : attacker.getHeldItem();
+                stampVoidHudEffect(attacker, host, "entropy", typeOr(typeENT, "Entropy"), "Entropy",
+                        now + VOID_ENTROPY_COOLDOWN_TICKS, now + VOID_ENTROPY_DURATION_TICKS, VOID_ENTROPY_COOLDOWN_TICKS);
+                applyVoidEntropy(attacker, target, entAnim, now);
+            }
         }
 
+        // Abyss Mark (offensive) - no shared cooldown (mark has its own per-target logic)
+        if (srcAM != null && VOID_ABYSS_MARK_ENABLED){
+            if (roll(attacker, VOID_ABYSS_MARK_PROC_CHANCE_ON_HIT)){
+                ItemStack host = srcAM.host != null ? srcAM.host : attacker.getHeldItem();
+                applyVoidAbyssMarkAoE(attacker, target, host, typeOr(typeAM, "Abyss Mark"), amAnim, now);
+            }
+        }
+
+        // Null Shell: charge gain
+        if (srcNS != null && VOID_NULL_SHELL_ENABLED){
+            VoidMatch m = new VoidMatch();
+            m.found = true;
+            m.debugStack = srcNS.host != null ? srcNS.host : attacker.getHeldItem();
+            m.voidType = typeOr(typeNS, "Null Shell");
+            m.hasAnim = nsAnim;
+            m.hasFlat = !nsAnim;
+            tryBoostVoidNullShellCharge(attacker, m, now);
+        }
     }
 
     private static void tryProcVoidOnDamaged(EntityPlayer victim, DamageSource src, float incomingDamage){
         if (victim == null || src == null) return;
-        World w = victim.worldObj;
-        if (w == null || w.isRemote) return;
+        if (!VOID_ENABLED) return;
 
-        // prevent recursion / weird sources
-        String dt = src.getDamageType();
-        if ("hexorb".equals(dt)) return;
-        if ("thorns".equals(dt)) return;
+        World w = serverWorld0(victim);
+        if (w == null) return;
 
-        // must have a void gem equipped (held item or armor)
-        VoidMatch match = findVoidMatch(victim);
-        if (!match.hasFlat && !match.hasAnim) return;
+        // Collect all Void sources so multiple socketed Void orbs can all contribute their passive procs.
+        java.util.ArrayList<VoidSource> sources = new java.util.ArrayList<VoidSource>(4);
+        collectVoidSources(victim, sources);
 
-        String type = match.voidType;
-
-        // Gravity Well: defensive proc centered on you
-        if (isVoidTypeGravityWell(type)){
-            if (!roll(victim, VOID_GW_PROC_CHANCE)) return;
-            if (!cooldownReady(victim, "HexOrbCD_VoidGW", VOID_GW_COOLDOWN_TICKS)) return;
-
-            long now = serverNow(w);
-            stampVoidHud(victim, match.debugStack, type, "Gravity Well",
-                    now + (long) VOID_GW_COOLDOWN_TICKS,
-                    now + (long) VOID_GW_DURATION_TICKS,
-                    VOID_GW_COOLDOWN_TICKS);
-
-            startVoidGravityWell(victim, incomingDamage, match.hasAnim);
-            return;
+        // Fallback to legacy single-match behavior (in case something in the socket API changes).
+        if (sources.isEmpty()){
+            VoidMatch match = findNullShellMatch(victim);
+            if (match == null || (!match.hasFlat && !match.hasAnim)) return;
+            sources.add(new VoidSource(match.debugStack, match.voidType, match.hasAnim));
         }
 
-        // Entropy: defensive version curses the attacker (if any)
-        if (isVoidTypeEntropy(type)){
-            if (!VOID_ENTROPY_ENABLED) return;
+        VoidSource srcGW = null, srcENT = null, srcAM = null, srcNS = null;
+        boolean gwAnim = false, entAnim = false, amAnim = false, nsAnim = false;
+        String typeGW = null, typeENT = null, typeAM = null, typeNS = null;
 
-            Entity srcEnt = src.getEntity();
-            EntityLivingBase attacker = (srcEnt instanceof EntityLivingBase) ? (EntityLivingBase) srcEnt : null;
-            if (attacker == null || attacker == victim) return;
+        for (int i = 0; i < sources.size(); i++){
+            VoidSource s = sources.get(i);
+            if (s == null) continue;
+            String t = s.type;
 
-            if (!roll(victim, VOID_ENTROPY_PROC_CHANCE)) return;
-            if (!cooldownReady(victim, "HexOrbCD_VoidEntropy", VOID_ENTROPY_COOLDOWN_TICKS)) return;
-
-            long now = serverNow(w);
-            stampVoidHud(victim, match.debugStack, type, "Entropy",
-                    now + (long) VOID_ENTROPY_COOLDOWN_TICKS,
-                    now + (long) VOID_ENTROPY_DURATION_TICKS,
-                    VOID_ENTROPY_COOLDOWN_TICKS);
-
-            applyVoidEntropy(victim, attacker, match.hasAnim, now);
-            return;
+            if (isVoidTypeGravityWell(t)){
+                if (srcGW == null) srcGW = s;
+                gwAnim |= s.isAnim;
+                if (typeGW == null) typeGW = t;
+                continue;
+            }
+            if (isVoidTypeEntropy(t)){
+                if (srcENT == null) srcENT = s;
+                entAnim |= s.isAnim;
+                if (typeENT == null) typeENT = t;
+                continue;
+            }
+            if (isVoidTypeAbyssMark(t)){
+                if (srcAM == null) srcAM = s;
+                amAnim |= s.isAnim;
+                if (typeAM == null) typeAM = t;
+                continue;
+            }
+            if (isVoidTypeNullShell(t)){
+                if (srcNS == null) srcNS = s;
+                nsAnim |= s.isAnim;
+                if (typeNS == null) typeNS = t;
+            }
         }
 
+        long now = serverNow(w);
 
-        // Abyss Mark: AoE marks (detonate after timer) - defensive proc is centered on YOU
-        if (isVoidTypeAbyssMark(type)){
-            if (!VOID_ABYSS_MARK_ENABLED) return;
-            if (!roll(victim, VOID_ABYSS_MARK_PROC_CHANCE)) return;
-
-            long now = serverNow(w);
-            applyVoidAbyssMarkAoE(victim, victim, match.debugStack, type, match.hasAnim, now);
-            return;
+        // Gravity Well (defensive)
+        if (srcGW != null && VOID_GW_ENABLED){
+            if (roll(victim, VOID_GW_DEF_PROC_CHANCE) && cooldownReady(victim, "HexOrbCD_VoidGWDef", VOID_GW_DEF_COOLDOWN_TICKS, now)){
+                ProcPos procPos = procPosNearSelf(w, victim);
+                if (procPos != null){
+                    ItemStack host = srcGW.host != null ? srcGW.host : victim.getHeldItem();
+                    stampVoidHudEffect(victim, host, "gw", typeOr(typeGW, "Gravity Well"), "Gravity Well",
+                            now + VOID_GW_DEF_COOLDOWN_TICKS, now + VOID_GW_DEF_FIELD_DURATION_TICKS, VOID_GW_DEF_COOLDOWN_TICKS);
+                    startVoidGravityWellAt(victim, procPos.x, procPos.y, procPos.z, incomingDamage, gwAnim);
+                }
+            }
         }
 
-        // Null Shell: (defensive) we do the TRUE dodge inside LivingAttack/LivingHurt so we can cancel damage.
-// Here we only handle the optional "gain extra charge when hit" behavior.
-        if (isVoidTypeNullShell(type)){
-            long now = serverNow(w);
-            tryBoostVoidNullShellCharge(victim, match, now);
-            return;
+        // Entropy (defensive)
+        if (srcENT != null && VOID_ENTROPY_ENABLED){
+            if (roll(victim, VOID_ENTROPY_DEF_PROC_CHANCE) && cooldownReady(victim, "HexOrbCD_VoidEntropyDef", VOID_ENTROPY_DEF_COOLDOWN_TICKS, now)){
+                ItemStack host = srcENT.host != null ? srcENT.host : victim.getHeldItem();
+                stampVoidHudEffect(victim, host, "entropy", typeOr(typeENT, "Entropy"), "Entropy",
+                        now + VOID_ENTROPY_DEF_COOLDOWN_TICKS, now + VOID_ENTROPY_DEF_DURATION_TICKS, VOID_ENTROPY_DEF_COOLDOWN_TICKS);
+                // Defensive Entropy: curse the attacker (if any)
+                Entity srcEnt = src.getEntity();
+                EntityLivingBase attacker = (srcEnt instanceof EntityLivingBase) ? (EntityLivingBase) srcEnt : null;
+                if (attacker != null && attacker != victim){
+                    applyVoidEntropy(victim, attacker, entAnim, now);
+                }
+            }
         }
 
-        if (DEBUG_PROC && type == null){
-            debugOncePerSecond(victim, "[HexOrb][Void] type missing on host=" + itemLabel(match.debugStack));
+        // Abyss Mark (defensive) - centered on YOU
+        if (srcAM != null && VOID_ABYSS_MARK_ENABLED){
+            if (roll(victim, VOID_ABYSS_MARK_PROC_CHANCE)){
+                ItemStack host = srcAM.host != null ? srcAM.host : victim.getHeldItem();
+                applyVoidAbyssMarkAoE(victim, victim, host, typeOr(typeAM, "Abyss Mark"), amAnim, now);
+            }
         }
+
+        // Null Shell: charge gain only here; actual dodge is handled elsewhere.
+        if (srcNS != null && VOID_NULL_SHELL_ENABLED){
+            VoidMatch m = new VoidMatch();
+            m.found = true;
+            m.debugStack = srcNS.host != null ? srcNS.host : victim.getHeldItem();
+            m.voidType = typeOr(typeNS, "Null Shell");
+            m.hasAnim = nsAnim;
+            m.hasFlat = !nsAnim;
+            tryBoostVoidNullShellCharge(victim, m, now);
+        }
+    }
+    // -------------------------------------------------------------
+    // Void helpers
+    // -------------------------------------------------------------
+    private static String typeOr(String type, String fallback){
+        if (type != null){
+            String t = type.trim();
+            if (t.length() > 0) return t;
+        }
+        return (fallback != null && fallback.length() > 0) ? fallback : "Void";
+    }
+
+    private static final class ProcPos {
+        public final double x;
+        public final double y;
+        public final double z;
+        ProcPos(double x, double y, double z){
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+    }
+
+    /** Pick a reasonable proc position near the target's torso (used for Gravity Well). */
+    private static ProcPos procPosNearTarget(World w, EntityLivingBase target){
+        if (w == null || target == null) return null;
+        double x = target.posX;
+        double y = target.posY + Math.max(0.25, target.height * 0.55);
+        double z = target.posZ;
+        if (Double.isNaN(x) || Double.isNaN(y) || Double.isNaN(z)) return null;
+        return new ProcPos(x, y, z);
+    }
+
+    /** Proc position near the owner's torso (used for defensive Gravity Well). */
+    private static ProcPos procPosNearSelf(World w, EntityLivingBase self){
+        if (w == null || self == null) return null;
+        double x = self.posX;
+        double y = self.posY + Math.max(0.25, self.height * 0.55);
+        double z = self.posZ;
+        if (Double.isNaN(x) || Double.isNaN(y) || Double.isNaN(z)) return null;
+        return new ProcPos(x, y, z);
     }
 
     private static boolean isVoidTypeGravityWell(String t){
@@ -3365,7 +4093,7 @@ public final class HexOrbEffectsController {
         }
 
         // must have a void gem equipped (held item or armor)
-        VoidMatch match = findVoidMatch(victim);
+        VoidMatch match = findNullShellMatch(victim);
         if (match == null || (!match.hasFlat && !match.hasAnim)) return false;
         if (!match.found || !isVoidTypeNullShell(match.voidType)) return false;
 
@@ -3410,7 +4138,7 @@ public final class HexOrbEffectsController {
         if (now < next) return;
         data.setLong(VNS_KEY_NEXT_PASSIVE, now + 20);
 
-        VoidMatch match = findVoidMatch(p);
+        VoidMatch match = findNullShellMatch(p);
         if (match == null || match.debugStack == null) return;
 
         String type = match.voidType;
@@ -3461,7 +4189,7 @@ public final class HexOrbEffectsController {
         }
 
         // Only keep the buff if the player still has Null Shell equipped
-        VoidMatch match = findVoidMatch(p);
+        VoidMatch match = findNullShellMatch(p);
         if (match == null || !match.found || !isVoidTypeNullShell(match.voidType)){
             data.removeTag(VNS_KEY_DEF_END);
             data.removeTag(VNS_KEY_DEF_NEXT_FX);
@@ -3518,6 +4246,28 @@ public final class HexOrbEffectsController {
         if (p == null) return;
         World w = p.worldObj;
         if (w == null || w.isRemote) return;
+
+        // --- Visual: spawn the 3D HexBlast so everyone nearby sees the Void Push ---
+        // (Keep push damage/KB logic below unchanged; blast is visual-only here to avoid double-hits.)
+        try {
+            float visMult = (mult > 1.01f) ? 1.25f : 1.05f;
+            int life = (mult > 1.01f) ? 22 : 18;
+
+            EntityHexBlast b = new EntityHexBlast(w, p, p.posX, p.posY + 0.9, p.posZ);
+            b.lifeTicks = life;
+            b.maxRadius = NS_PUSH_RADIUS * visMult;
+
+            // Void palette (deep purple -> violet -> cyan -> white)
+            b.color     = 0x2B0040;
+            b.color1    = 0x5B1CCF;
+            b.color2    = 0x00D4FF;
+            b.color3    = 0xFFFFFF;
+            b.colorMode = 1;     // gradient over lifetime
+            b.doDamage  = false; // visual-only (push already handles damage)
+
+            b.syncToClients();
+            w.spawnEntityInWorld(b);
+        } catch (Throwable ignored) {}
 
         float radius = NS_PUSH_RADIUS;
         AxisAlignedBB bb = AxisAlignedBB.getBoundingBox(
@@ -4124,7 +4874,7 @@ public final class HexOrbEffectsController {
         if (list == null || list.isEmpty()){
             boolean applied = applyVoidAbyssMarkSingle(owner, center, isAnim, now, expireTick);
             if (applied){
-                stampVoidHud(owner, hudHost, type, "Abyss Mark", expireTick, expireTick, VOID_ABYSS_MARK_DURATION_TICKS);
+                stampVoidHudEffect(owner, hudHost, "abyss", type, "Abyss Mark", expireTick, expireTick, VOID_ABYSS_MARK_DURATION_TICKS);
             }
             return;
         }
@@ -4166,7 +4916,7 @@ public final class HexOrbEffectsController {
         }
 
         if (appliedCount > 0){
-            stampVoidHud(owner, hudHost, type, "Abyss Mark", expireTick, expireTick, VOID_ABYSS_MARK_DURATION_TICKS);
+            stampVoidHudEffect(owner, hudHost, "abyss", type, "Abyss Mark", expireTick, expireTick, VOID_ABYSS_MARK_DURATION_TICKS);
 
             // "cast" burst at the center so it feels like an AoE application
             spawnVoidGravityBurstParticles(w, ox, oy, oz, isAnim ? 2.05f : 1.65f, isAnim);
@@ -4665,6 +5415,404 @@ public final class HexOrbEffectsController {
         return null;
     }
 
+    // ---------------------------------------------------------------------
+    // Socketed orb tag fixups (keeps active abilities working after socketing)
+    // ---------------------------------------------------------------------
+    private static final String SOCK_FIX_LAST = "HexSockTagFixLast";
+
+    private static final String TAG_ROLLED  = "HexOrbRolled";
+    private static final String TAG_PROFILE = "HexOrbProfile";
+    private static final String FRACTURED_PREFIX = "FRACTURED_";
+
+    private static final String TAG_FR_SHARDS   = "HexFracShards";
+    private static final String TAG_FR_SNAP     = "HexFracSnapTicks";
+    private static final String TAG_FR_SNAP_MAX = "HexFracSnapMax";
+
+    private static void tickSocketedOrbTagFixups(EntityPlayer p, long now){
+        if (p == null || p.worldObj == null || p.worldObj.isRemote) return;
+
+        NBTTagCompound data = p.getEntityData();
+        if (data == null) return;
+
+        long last = data.getLong(SOCK_FIX_LAST);
+        if (last != 0L && (now - last) < 20L) return;  // once per second
+        data.setLong(SOCK_FIX_LAST, now);
+
+        boolean changed = false;
+
+        ItemStack held = p.getHeldItem();
+        if (held != null) changed |= fixupFracturedSocketedTags(held);
+
+        if (p.inventory != null && p.inventory.armorInventory != null){
+            for (int i = 0; i < p.inventory.armorInventory.length; i++){
+                ItemStack a = p.inventory.armorInventory[i];
+                if (a != null) changed |= fixupFracturedSocketedTags(a);
+            }
+        }
+
+        if (changed && (p instanceof EntityPlayerMP)){
+            try { ((EntityPlayerMP) p).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private static boolean fixupFracturedSocketedTags(ItemStack host){
+        if (host == null) return false;
+
+        int filled = 0;
+        try { filled = HexSocketAPI.getSocketsFilled(host); } catch (Throwable ignored) {}
+        if (filled <= 0) return false;
+
+        boolean changedAny = false;
+
+        for (int i = 0; i < filled; i++){
+            ItemStack gem = null;
+            try { gem = HexSocketAPI.getGemAt(host, i); } catch (Throwable ignored) {}
+            if (gem == null) continue;
+
+            NBTTagCompound tag = gem.getTagCompound();
+            if (tag == null) continue;
+
+            // Fractured: profile OR marker tags
+            boolean isFr = false;
+            String prof = null;
+            try { prof = tag.getString(TAG_PROFILE); } catch (Throwable ignored) {}
+            if (prof != null && prof.startsWith(FRACTURED_PREFIX)) isFr = true;
+            if (tag.hasKey(TAG_FR_SHARDS) || tag.hasKey(TAG_FR_SNAP) || tag.hasKey(TAG_FR_SNAP_MAX)) isFr = true;
+            if (!isFr) continue;
+
+            boolean gemChanged = false;
+
+            if (!tag.getBoolean(TAG_ROLLED)){
+                tag.setBoolean(TAG_ROLLED, true);
+                gemChanged = true;
+            }
+
+            if (prof == null || prof.length() == 0 || !prof.startsWith(FRACTURED_PREFIX)){
+                tag.setString(TAG_PROFILE, "FRACTURED_SOCKETED");
+                gemChanged = true;
+            }
+
+            if (!tag.hasKey(TAG_FR_SHARDS)){
+                tag.setInteger(TAG_FR_SHARDS, 0);
+                gemChanged = true;
+            }
+            if (!tag.hasKey(TAG_FR_SNAP)){
+                tag.setInteger(TAG_FR_SNAP, 0);
+                gemChanged = true;
+            }
+            if (!tag.hasKey(TAG_FR_SNAP_MAX)){
+                tag.setInteger(TAG_FR_SNAP_MAX, 0);
+                gemChanged = true;
+            }
+
+            if (gemChanged){
+                try { gem.setTagCompound(tag); } catch (Throwable ignored) {}
+                try { HexSocketAPI.setGemAt(host, i, gem); } catch (Throwable ignored) {}
+                changedAny = true;
+            }
+        }
+
+        return changedAny;
+    }
+
+    // -------------------------------------------------------------
+    // Fractured snap cooldown (dimension-safe tick-down)
+    // Cooldown is stored as remaining ticks on the gem itself:
+    //   TAG_FR_SNAP (remaining) / TAG_FR_SNAP_MAX (max for HUD)
+    // This avoids using absolute world time (dimension time mismatch).
+    // -------------------------------------------------------------
+    private static void tickFracturedSnapCooldown(EntityPlayer p){
+        if (p == null) return;
+        if (p.worldObj == null || p.worldObj.isRemote) return;
+
+        // Held orb itself + socketed gems on held host
+        ItemStack held = null;
+        try { held = p.getCurrentEquippedItem(); } catch (Throwable ignored) {}
+        if (held != null){
+            tickFracturedCooldownOnStack(held);
+            tickFracturedCooldownOnSocketedGems(held);
+        }
+
+        // Armor hosts
+        try {
+            if (p.inventory != null && p.inventory.armorInventory != null){
+                ItemStack[] armor = p.inventory.armorInventory;
+                for (int i = 0; i < armor.length; i++){
+                    ItemStack host = armor[i];
+                    if (host == null) continue;
+                    tickFracturedCooldownOnStack(host);
+                    tickFracturedCooldownOnSocketedGems(host);
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void tickFracturedCooldownOnStack(ItemStack stack){
+        if (stack == null) return;
+        NBTTagCompound tag = stack.getTagCompound();
+        if (tag == null) return;
+
+        // Only touch stacks that look like fractured (marker tags survive socketing)
+        if (!looksLikeFractured(tag)) return;
+
+        int cd = tag.getInteger(TAG_FR_SNAP);
+        if (cd > 0){
+            cd -= 1;
+            if (cd < 0) cd = 0;
+            tag.setInteger(TAG_FR_SNAP, cd);
+
+            // Ensure max exists so HUD doesn't divide by 0
+            int mx = tag.getInteger(TAG_FR_SNAP_MAX);
+            if (mx <= 0) tag.setInteger(TAG_FR_SNAP_MAX, Math.max(1, cd));
+        }
+    }
+
+    private static void tickFracturedCooldownOnSocketedGems(ItemStack host){
+        if (host == null) return;
+
+        int filled;
+        try { filled = HexSocketAPI.getSocketsFilled(host); }
+        catch (Throwable t){ return; }
+
+        if (filled <= 0) return;
+
+        for (int i = 0; i < filled; i++){
+            ItemStack gem = null;
+            try { gem = HexSocketAPI.getGemAt(host, i); } catch (Throwable ignored) {}
+            if (gem == null) continue;
+
+            NBTTagCompound tag = gem.getTagCompound();
+            if (tag == null) continue;
+
+            if (!looksLikeFractured(tag)) continue;
+
+            int cd = tag.getInteger(TAG_FR_SNAP);
+            if (cd > 0){
+                cd -= 1;
+                if (cd < 0) cd = 0;
+                tag.setInteger(TAG_FR_SNAP, cd);
+
+                int mx = tag.getInteger(TAG_FR_SNAP_MAX);
+                if (mx <= 0) tag.setInteger(TAG_FR_SNAP_MAX, Math.max(1, cd));
+
+                // Write back into socket so the host item NBT updates
+                try { HexSocketAPI.setGemAt(host, i, gem); } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    private static boolean looksLikeFractured(NBTTagCompound tag){
+        return tag != null && (tag.hasKey(TAG_FR_SHARDS) || tag.hasKey(TAG_FR_SNAP) || tag.hasKey(TAG_FR_SNAP_MAX));
+    }
+
+
+
+    // -------------------------------------------------------------
+    // FRACTURED: shard gain on hit / got hit (works when the gem is socketed)
+    // -------------------------------------------------------------
+    private static final String FR_SHARD_GAIN_LAST_T = "HexFracShardGainLastT";
+
+    private static final class FracturedGemRef {
+        final ItemStack host;  // null if the fractured orb is held directly
+        final int idx;         // socket index on host, or -1 if held directly
+        final ItemStack stack; // the fractured orb stack
+        FracturedGemRef(ItemStack host, int idx, ItemStack stack){
+            this.host = host;
+            this.idx = idx;
+            this.stack = stack;
+        }
+    }
+
+    private static void tryGainFracturedShard(EntityPlayer p, boolean onHit){
+        if (p == null) return;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return;
+        if (!FRACTURED_ENABLED) return;
+
+        // throttle using player ticks (not absolute world time)
+        int throttle = FRACTURED_SHARD_GAIN_THROTTLE_TICKS;
+        if (throttle < 0) throttle = 0;
+        if (throttle > 0){
+            try {
+                NBTTagCompound ed = p.getEntityData();
+                int nowT = p.ticksExisted;
+                int lastT = ed.getInteger(FR_SHARD_GAIN_LAST_T);
+                if (lastT != 0 && (nowT - lastT) < throttle) return;
+                ed.setInteger(FR_SHARD_GAIN_LAST_T, nowT);
+            } catch (Throwable ignored) {}
+        }
+
+        double chance = onHit ? FRACTURED_SHARD_GAIN_CHANCE_ON_HIT : FRACTURED_SHARD_GAIN_CHANCE_ON_GOTHIT;
+        if (chance <= 0.0) return;
+        if (chance < 1.0 && Math.random() > chance) return;
+
+        FracturedGemRef ref = findEquippedFracturedGemRef(p);
+        if (ref == null || ref.stack == null) return;
+
+        NBTTagCompound tag = ref.stack.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        ensureFracturedIdentity(tag);
+
+        int max = FRACTURED_MAX_SHARDS;
+        if (max <= 0) max = 5;
+
+        int shards = 0;
+        try { shards = tag.getInteger(TAG_FR_SHARDS); } catch (Throwable ignored) {}
+
+        if (shards < max){
+            shards += 1;
+            if (shards > max) shards = max;
+            tag.setInteger(TAG_FR_SHARDS, shards);
+
+            try { ref.stack.setTagCompound(tag); } catch (Throwable ignored) {}
+
+            if (ref.host != null && ref.idx >= 0){
+                try { HexSocketAPI.setGemAt(ref.host, ref.idx, ref.stack); } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    private static void ensureFracturedIdentity(NBTTagCompound tag){
+        if (tag == null) return;
+
+        // rolled flag (some socket paths lose it)
+        try {
+            if (!tag.getBoolean(TAG_ROLLED)) tag.setBoolean(TAG_ROLLED, true);
+        } catch (Throwable ignored) {
+            try { tag.setBoolean(TAG_ROLLED, true); } catch (Throwable ignored2) {}
+        }
+
+        // profile tag (helps other parts of the system know it's fractured)
+        try {
+            String prof = tag.getString(TAG_PROFILE);
+            if (prof == null || prof.length() == 0 || !prof.startsWith(FRACTURED_PREFIX)){
+                tag.setString(TAG_PROFILE, "FRACTURED_SOCKETED");
+            }
+        } catch (Throwable ignored) {
+            try { tag.setString(TAG_PROFILE, "FRACTURED_SOCKETED"); } catch (Throwable ignored2) {}
+        }
+
+        // make sure shard/cooldown markers exist
+        try { if (!tag.hasKey(TAG_FR_SHARDS)) tag.setInteger(TAG_FR_SHARDS, 0); } catch (Throwable ignored) {}
+        try { if (!tag.hasKey(TAG_FR_SNAP)) tag.setInteger(TAG_FR_SNAP, 0); } catch (Throwable ignored) {}
+        try { if (!tag.hasKey(TAG_FR_SNAP_MAX)) tag.setInteger(TAG_FR_SNAP_MAX, 0); } catch (Throwable ignored) {}
+    }
+
+    private static boolean isFracturedStack(ItemStack s){
+        if (s == null) return false;
+        NBTTagCompound t = null;
+        try { t = s.getTagCompound(); } catch (Throwable ignored) {}
+        if (t == null) return false;
+
+        if (looksLikeFractured(t)) return true;
+
+        try {
+            String prof = t.getString(TAG_PROFILE);
+            return prof != null && prof.startsWith(FRACTURED_PREFIX);
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static boolean gemKeyMatchesFractured(String key){
+        if (key == null) return false;
+        String k = normalizeGemKey(key);
+        String flat = normalizeGemKey(GEM_FRACTURED_FLAT);
+        String anim = normalizeGemKey(GEM_FRACTURED_ANIM);
+
+        if (k.equals(flat) || k.equals(anim)) return true;
+
+        if (k.startsWith("gems/")){
+            String sub = k.substring(5);
+            if (sub.equals(flat) || sub.equals(anim)) return true;
+        }
+        if (flat.startsWith("gems/") && k.equals(flat.substring(5))) return true;
+        if (anim.startsWith("gems/") && k.equals(anim.substring(5))) return true;
+
+        return false;
+    }
+
+    private static FracturedGemRef findEquippedFracturedGemRef(EntityPlayer p){
+        if (p == null) return null;
+
+        // 1) held item itself
+        ItemStack held = null;
+        try { held = p.getHeldItem(); } catch (Throwable ignored) {}
+        if (isFracturedStack(held)) return new FracturedGemRef(null, -1, held);
+
+        // 2) socketed on held host
+        FracturedGemRef r = findSocketedFracturedOnHost(held);
+        if (r != null) return r;
+
+        // 3) armor (item itself or socketed)
+        try {
+            if (p.inventory != null && p.inventory.armorInventory != null){
+                ItemStack[] armor = p.inventory.armorInventory;
+
+                // prefer "item itself" first
+                for (int i = 0; i < armor.length; i++){
+                    ItemStack a = armor[i];
+                    if (isFracturedStack(a)) return new FracturedGemRef(null, -1, a);
+                }
+
+                for (int i = 0; i < armor.length; i++){
+                    ItemStack host = armor[i];
+                    FracturedGemRef rr = findSocketedFracturedOnHost(host);
+                    if (rr != null) return rr;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        return null;
+    }
+
+    private static FracturedGemRef findSocketedFracturedOnHost(ItemStack host){
+        if (host == null) return null;
+
+        int filled = 0;
+        try { filled = HexSocketAPI.getSocketsFilled(host); } catch (Throwable ignored) {}
+        if (filled <= 0) return null;
+
+        // Prefer match-by-key first (works even if the gem NBT is missing marker tags)
+        for (int i = 0; i < filled; i++){
+            String key = null;
+            try { key = getGemKeyAt(host, i); } catch (Throwable ignored) {}
+            if (key == null) continue;
+            if (!gemKeyMatchesFractured(key)) continue;
+
+            ItemStack gem = null;
+            try { gem = HexSocketAPI.getGemAt(host, i); } catch (Throwable ignored) {}
+            if (gem == null) continue;
+
+            return new FracturedGemRef(host, i, gem);
+        }
+
+        // Fallback: marker-tag detection (in case gem key APIs change)
+        for (int i = 0; i < filled; i++){
+            ItemStack gem = null;
+            try { gem = HexSocketAPI.getGemAt(host, i); } catch (Throwable ignored) {}
+            if (gem == null) continue;
+
+            NBTTagCompound t = null;
+            try { t = gem.getTagCompound(); } catch (Throwable ignored) {}
+            if (t == null) continue;
+
+            if (looksLikeFractured(t)) return new FracturedGemRef(host, i, gem);
+
+            try {
+                String prof = t.getString(TAG_PROFILE);
+                if (prof != null && prof.startsWith(FRACTURED_PREFIX)) return new FracturedGemRef(host, i, gem);
+            } catch (Throwable ignored) {}
+        }
+
+        return null;
+    }
+
+
+
+
+
+
     private static String normalizeGemKeyForCompare(ItemStack gem){
         if (gem == null) return "";
         // In many builds, the gem key is stored in gem.getTagCompound().getString("HexGemKey").
@@ -4847,12 +5995,15 @@ public final class HexOrbEffectsController {
     }
 
 
-    private static void maybeStartSwirl(EntityPlayer attacker, EntityLivingBase target, float baseDamage, boolean isAnim){
+    private static void maybeStartSwirl(EntityPlayer attacker, EntityLivingBase target, float baseDamage, boolean isAnim, ItemStack host){
         if (!ENERGIZED_SWIRL_ENABLED) return;
         if (attacker == null || target == null) return;
 
         boolean canMove = true;
         if (target instanceof EntityPlayer && !ENERGIZED_SWIRL_AFFECT_PLAYERS) canMove = false;
+
+        long hudNow = (attacker.worldObj != null) ? attacker.worldObj.getTotalWorldTime() : 0L;
+
 
         // Variant: Rainbow Fist (huge punch + massive rainbow blast + beams)
         if (ENERGIZED_FIST_ENABLED){
@@ -4864,6 +6015,7 @@ public final class HexOrbEffectsController {
 
                 if (chance > 0.0 && roll(attacker, chance)
                         && cooldownReady(attacker, isAnim ? "HexOrbCD_FistAnim" : "HexOrbCD_FistFlat", cd)){
+                    stampEnergizedHud(host, "fist", "Unique Attacks", "Rainbow Fist", hudNow, cd);
                     doRainbowFist(attacker, target, baseDamage, isAnim);
                     return;
                 }
@@ -4880,6 +6032,7 @@ public final class HexOrbEffectsController {
 
                 if (chance > 0.0 && rollChance(attacker, chance)
                         && cooldownReady(attacker, isAnim ? "HexOrbCD_RushAnim" : "HexOrbCD_RushFlat", cd)){
+                    stampEnergizedHud(host, "rush", "Unique Attacks", "Rainbow Rush", hudNow, cd);
                     if (startRainbowRush(attacker, target, baseDamage, isAnim)){
                         return;
                     }
@@ -4904,6 +6057,7 @@ public final class HexOrbEffectsController {
                 float exDmg  = Math.max(1.0f, (exBase * exScale + exBonus) * ENERGIZED_GLOBAL_DAMAGE_MULT);
 
                 // liftTotal = 0 for horizontal push swirl, dotPerApp = 0 (no DoT)
+                stampEnergizedHud(host, "pblast", "Unique Attacks", "Push Blast", hudNow, ticks);
                 startSwirl(attacker, target, ticks, canMove, exDmg, exRadius, 0.0f, 999999,
                         swirlRadius, 0.0f, radPerTick, tickParts);
 
@@ -4938,6 +6092,7 @@ public final class HexOrbEffectsController {
             dotPerApp = Math.max(0.0f, (dotBase * dotScale + dotBonus) * ENERGIZED_GLOBAL_DAMAGE_MULT);
         }
 
+        stampEnergizedHud(host, "swirl", "Unique Attacks", "Swirl", hudNow, ticks);
         startSwirl(attacker, target, ticks, canMove, exDmg, exRadius, dotPerApp, Math.max(1, dotInt),
                 swirlRadius, liftTotal, radPerTick, tickParts);
     }
@@ -5082,9 +6237,17 @@ public final class HexOrbEffectsController {
 
         long now = serverNow(w);
 
+        // DARKFIRE: process outgoing-nerf refunds (runs once per server tick)
+        tickCinderRefundQueue(now);
+
+
+        // DARKFIRE: apply pending Ashen hits (for DBC body-delta support)
+        tickDarkfireAshenPending(ent, data, w, now);
         // Heal buff update (independent of swirl; works in any dimension)
         if (ent instanceof EntityPlayer){
             tickHealBuff((EntityPlayer) ent, data, w, now);
+            syncAshenHudTimers((EntityPlayer) ent, data, now);
+            tickDarkfireAshenLifesteal((EntityPlayer) ent, data, w, now);
             tickFirePunchBuff((EntityPlayer) ent, data, w, now);
             tickVoidGravityWell((EntityPlayer) ent, data, w, now);
         }
@@ -5094,10 +6257,14 @@ public final class HexOrbEffectsController {
         tickFireDot(ent, data, w, now);
         tickVoidEntropy(ent, data, w, now);
         tickVoidAbyssMark(ent, data, w, now);
-
+        tickDarkfireEmberMark(ent, data, w, now);
 
         if (ent instanceof EntityPlayer){
             EntityPlayer p = (EntityPlayer) ent;
+            tickSocketedOrbTagFixups(p, now);
+            tickFracturedSnapCooldown(p);
+            tickDarkfireShadowSpreadCharge(p, w, data, now);
+            tickDarkfireEmberOwnerList(p, data, w, now);
             tickVoidNullShellCharge(p, w, data, now);
             tickVoidNullShellDefenseBuff(p, w, data, now);
             tickVoidNullShellPushCharge(w, p, data, now);
@@ -5227,6 +6394,10 @@ public final class HexOrbEffectsController {
             }
         }
 
+
+
+        // Darkfire passive visual: Cinder Weakness (particles while debuff is active)
+        tickCinderWeaknessVfx(w, ent);
     }
 
     @SubscribeEvent
@@ -5875,6 +7046,36 @@ public final class HexOrbEffectsController {
         return roll(p, chance);
     }
 
+    /**
+     * Returns a server-side World instance for the entity's current dimension when possible.
+     * Falls back to the entity's worldObj if a server world cannot be obtained.
+     *
+     * Despite the name, this does NOT force dimension 0; it simply prefers a server-side World.
+     */
+    private static World serverWorld0(Entity e){
+        if (e == null) return null;
+        World w = e.worldObj;
+        if (w == null) return null;
+
+        // Already server-side?
+        if (!w.isRemote && (w instanceof WorldServer)) return w;
+
+        // Try to get the server world for the current dimension.
+        try {
+            int dim = (w.provider != null) ? w.provider.dimensionId : 0;
+            WorldServer ws = DimensionManager.getWorld(dim);
+            if (ws != null) return ws;
+        } catch (Throwable ignored) {}
+
+        // Last resort: overworld server (keeps proc logic from breaking in edge cases).
+        try {
+            WorldServer ws0 = DimensionManager.getWorld(0);
+            if (ws0 != null) return ws0;
+        } catch (Throwable ignored) {}
+
+        return w;
+    }
+
 
     /**
      * Global server tick time (dimension 0) for cooldown/logic.
@@ -5887,6 +7088,11 @@ public final class HexOrbEffectsController {
         } catch (Throwable ignored) {}
         return (fallback != null) ? fallback.getTotalWorldTime() : 0L;
     }
+
+    private static String safeStr(String s){
+        return (s == null) ? "" : s;
+    }
+
 
     private static boolean cooldownReady(EntityPlayer p, String key, int cdTicks){
         if (cdTicks <= 0) return true;
@@ -6259,7 +7465,19 @@ public final class HexOrbEffectsController {
 
         tag.setLong("HexVoidHudCDEnd", cdEndTick);
         tag.setLong("HexVoidHudActiveEnd", activeEndTick);
-        tag.setInteger("HexVoidHudCDMax", cdMaxTicks);
+        tag.setInteger("HexVoidHudCDMax", Math.max(0, cdMaxTicks));
+
+        // Client HUD timebase: store a local-dimension stamp + remaining ticks
+        // so the HUD can count down visually even though server cooldown logic uses global (dim0) time.
+        try{
+            long localNow = (owner != null && owner.worldObj != null) ? owner.worldObj.getTotalWorldTime() : 0L;
+            long srvNow = serverNow((owner != null) ? owner.worldObj : null);
+            long remNow = cdEndTick - srvNow;
+            if (remNow < 0L) remNow = 0L;
+            if (remNow > (long) Integer.MAX_VALUE) remNow = (long) Integer.MAX_VALUE;
+            tag.setLong("HexVoidHudLocalStamp", localNow);
+            tag.setInteger("HexVoidHudLocalRem", (int) remNow);
+        }catch(Throwable ignored){}
 
         host.setTagCompound(tag);
 
@@ -6269,6 +7487,322 @@ public final class HexOrbEffectsController {
                 ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges();
             } catch (Throwable ignored) {}
         }
+    }
+
+
+    /**
+     * Per-effect Void HUD cooldown stamp (so multiple Void passives can display simultaneous cooldown bars
+     * even when they share the same socket-host item).
+     *
+     * Keys written (suffix = effectKey):
+     *  - HexVoidHudType_<suf>
+     *  - HexVoidHudAbility_<suf>
+     *  - HexVoidHudCDEnd_<suf>
+     *  - HexVoidHudActiveEnd_<suf>
+     *  - HexVoidHudCDMax_<suf>
+     *  - HexVoidHudLocalStamp_<suf>
+     *  - HexVoidHudLocalRem_<suf>
+     */
+    private static void stampVoidHudEffect(EntityPlayer owner, ItemStack host, String effectKey, String voidType, String abilityName, long cdEndTick, long activeEndTick, int cdMaxTicks){
+        if (host == null) return;
+        if (effectKey == null) return;
+
+        // sanitize suffix
+        String suf = effectKey.trim().toLowerCase();
+        if (suf.length() == 0) return;
+        try{
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < suf.length(); i++){
+                char c = suf.charAt(i);
+                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'){
+                    sb.append(c);
+                }
+            }
+            suf = sb.toString();
+        }catch(Throwable ignored){}
+        if (suf.length() == 0) return;
+
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+// If this effect is already active on this HUD carrier stack, don't refresh/restart it.
+// (Prevents rapid re-procs from visually resetting the countdown.)
+        try {
+            long exCdEnd = tag.getLong("HexVoidHudCDEnd_" + suf);
+            long exActEnd = tag.getLong("HexVoidHudActiveEnd_" + suf);
+            long exEnd = Math.max(exCdEnd, exActEnd);
+            long nowTick = serverNow((owner != null) ? owner.worldObj : null);
+            if (exEnd > nowTick) {
+                // Keep existing timing; only fill missing labels (if any).
+                if (voidType != null && voidType.trim().length() > 0) {
+                    String kT = "HexVoidHudType_" + suf;
+                    if (!tag.hasKey(kT)) tag.setString(kT, voidType);
+                }
+                if (abilityName != null && abilityName.trim().length() > 0) {
+                    String kA = "HexVoidHudAbility_" + suf;
+                    if (!tag.hasKey(kA)) tag.setString(kA, abilityName);
+                }
+                host.setTagCompound(tag);
+                return;
+            }
+        } catch (Throwable ignored) {}
+
+        if (voidType != null && voidType.length() > 0){
+            tag.setString("HexVoidHudType_" + suf, voidType);
+        }
+        if (abilityName != null && abilityName.length() > 0){
+            tag.setString("HexVoidHudAbility_" + suf, abilityName);
+        }
+
+        tag.setLong("HexVoidHudCDEnd_" + suf, cdEndTick);
+        tag.setLong("HexVoidHudActiveEnd_" + suf, activeEndTick);
+        tag.setInteger("HexVoidHudCDMax_" + suf, Math.max(0, cdMaxTicks));
+
+        // Client HUD timebase: store a local-dimension stamp + remaining ticks
+        // so the HUD can count down visually even though server cooldown logic uses global (dim0) time.
+        try{
+            long localNow = (owner != null && owner.worldObj != null) ? owner.worldObj.getTotalWorldTime() : 0L;
+            long srvNow = serverNow((owner != null) ? owner.worldObj : null);
+            long remNow = cdEndTick - srvNow;
+            if (remNow < 0L) remNow = 0L;
+            if (remNow > (long) Integer.MAX_VALUE) remNow = (long) Integer.MAX_VALUE;
+            tag.setLong("HexVoidHudLocalStamp_" + suf, localNow);
+            tag.setInteger("HexVoidHudLocalRem_" + suf, (int) remNow);
+        }catch(Throwable ignored){}
+
+        host.setTagCompound(tag);
+
+        // push changes to client ASAP in MP
+        if (owner instanceof EntityPlayerMP){
+            try {
+                ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+
+    // -------------------------------------------------------------
+    // OVERWRITE HUD: stamp cooldown on the host item so client HUD can render it
+    // -------------------------------------------------------------
+    private static void stampOverwriteHudEffect(EntityPlayer owner, ItemStack host, boolean isAnim,
+                                                long cdEndTick, int cdMaxTicks){
+        if (host == null) return;
+
+        String suf = isAnim ? "anim" : "flat";
+
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        tag.setString("HexOverwriteHudType_" + suf, "Overwrite");
+        tag.setString("HexOverwriteHudAbility_" + suf, "Overwrite");
+
+        tag.setLong("HexOverwriteHudCDEnd_" + suf, cdEndTick);
+        tag.setInteger("HexOverwriteHudCDMax_" + suf, Math.max(0, cdMaxTicks));
+
+        // Client HUD timebase: store local stamp + remaining ticks
+        try{
+            long localNow = (owner != null && owner.worldObj != null) ? owner.worldObj.getTotalWorldTime() : 0L;
+            long srvNow = serverNow((owner != null) ? owner.worldObj : null);
+            long remNow = cdEndTick - srvNow;
+            if (remNow < 0L) remNow = 0L;
+            if (remNow > (long) Integer.MAX_VALUE) remNow = (long) Integer.MAX_VALUE;
+            tag.setLong("HexOverwriteHudLocalStamp_" + suf, localNow);
+            tag.setInteger("HexOverwriteHudLocalRem_" + suf, (int) remNow);
+        }catch(Throwable ignored){}
+
+        host.setTagCompound(tag);
+
+        if (owner instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+    // -------------------------------------------------------------
+    // FIRE PILL HUD: stamp buff + cooldown on the host item so client HUD can render it
+    // -------------------------------------------------------------
+    private static void stampFirePunchHud(EntityPlayer owner, ItemStack host, boolean isAnim,
+                                          long buffEndTick, int buffMaxTicks,
+                                          long cdEndTick, int cdMaxTicks){
+        if (host == null) return;
+
+        String suf = isAnim ? "anim" : "flat";
+
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        tag.setString("HexFireHudType_" + suf, "Fire Punch");
+        tag.setString("HexFireHudAbility_" + suf, "Fire Punch");
+
+        tag.setLong("HexFireHudBuffEnd_" + suf, buffEndTick);
+        tag.setInteger("HexFireHudBuffMax_" + suf, Math.max(0, buffMaxTicks));
+
+        tag.setLong("HexFireHudCDEnd_" + suf, cdEndTick);
+        tag.setInteger("HexFireHudCDMax_" + suf, Math.max(0, cdMaxTicks));
+
+        try{
+            long localNow = (owner != null && owner.worldObj != null) ? owner.worldObj.getTotalWorldTime() : 0L;
+            long srvNow = serverNow((owner != null) ? owner.worldObj : null);
+
+            long buffRem = buffEndTick - srvNow;
+            if (buffRem < 0L) buffRem = 0L;
+            if (buffRem > (long) Integer.MAX_VALUE) buffRem = (long) Integer.MAX_VALUE;
+
+            long cdRem = cdEndTick - srvNow;
+            if (cdRem < 0L) cdRem = 0L;
+            if (cdRem > (long) Integer.MAX_VALUE) cdRem = (long) Integer.MAX_VALUE;
+
+            tag.setLong("HexFireHudBuffLocalStamp_" + suf, localNow);
+            tag.setInteger("HexFireHudBuffLocalRem_" + suf, (int) buffRem);
+
+            tag.setLong("HexFireHudCDLocalStamp_" + suf, localNow);
+            tag.setInteger("HexFireHudCDLocalRem_" + suf, (int) cdRem);
+        }catch(Throwable ignored){}
+
+        host.setTagCompound(tag);
+
+        if (owner instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+
+    // -------------------------------------------------------------
+    // ENERGIZED / SWIRLY HUD stamping (Unique Attacks)
+    // -------------------------------------------------------------
+    private static void stampEnergizedHud(ItemStack host, String suf, String typeLabel, String abilityLabel, long now, int ticks){
+        if (host == null) return;
+        if (suf == null || suf.length() == 0) return;
+        if (ticks <= 0) return;
+
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        try { tag.setString("HexEnergizedHudType_" + suf, safeStr(typeLabel)); } catch (Throwable ignored) {}
+        try { tag.setString("HexEnergizedHudAbility_" + suf, safeStr(abilityLabel)); } catch (Throwable ignored) {}
+
+        try { tag.setLong("HexEnergizedHudCDEnd_" + suf, now + (long)ticks); } catch (Throwable ignored) {}
+        try { tag.setInteger("HexEnergizedHudCDMax_" + suf, ticks); } catch (Throwable ignored) {}
+
+        // Local timer fields (client will count down using its local world time)
+        try { tag.setLong("HexEnergizedHudLocalStamp_" + suf, now); } catch (Throwable ignored) {}
+        try { tag.setInteger("HexEnergizedHudLocalRem_" + suf, ticks); } catch (Throwable ignored) {}
+
+        host.setTagCompound(tag);
+    }
+
+    private static void stampCinderHudTimers(EntityPlayer owner, ItemStack host, String targetName,
+                                             long debuffStart, long debuffEnd, int debuffMaxTicks,
+                                             long cdStart, long cdEnd, int cdMaxTicks){
+        if (host == null) return;
+
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        tag.setLong("HexDarkFireHudDebuffStart", debuffStart);
+        tag.setLong("HexDarkFireHudDebuffEnd", debuffEnd);
+        tag.setInteger("HexDarkFireHudDebuffMax", debuffMaxTicks);
+
+        tag.setLong("HexDarkFireHudCDStart", cdStart);
+        tag.setLong("HexDarkFireHudCDEnd", cdEnd);
+        tag.setInteger("HexDarkFireHudCDMax", cdMaxTicks);
+
+        if (targetName != null && targetName.length() > 0){
+            tag.setString("HexDarkFireHudTarget", targetName);
+        }
+
+        host.setTagCompound(tag);
+        // If this pill came from a socket, persist the updated NBT back into the host socket.
+        commitDarkfireIfSocketed(owner, host);
+
+        // push changes to client ASAP in MP
+        if (owner instanceof EntityPlayerMP){
+            try {
+                ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+
+
+
+
+
+    // Fix: keep Ashen HUD timers consistent across dimensions.
+
+    /**
+     * Keeps the Darkfire HUD timers stable across dimension changes.
+     * Server logic uses {@link #serverNow(World)} (overworld time), but the HUD is rendered clientside using the
+     * CURRENT dimension's {@code world.getTotalWorldTime()}. So we re-stamp the HUD start/end in LOCAL world time
+     * based on remaining GLOBAL time.
+     */
+    private static void syncAshenHudTimers(EntityPlayer p, NBTTagCompound pdata, long nowGlobal){
+        if (p == null || pdata == null) return;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return;
+
+        // Throttle to avoid writing item NBT every tick.
+        long next = 0L;
+        try { next = pdata.getLong(DF_ASHEN_HUD_SYNC_NEXT_T); } catch (Throwable ignored) {}
+        if (next > 0L && nowGlobal < next) return;
+        try { pdata.setLong(DF_ASHEN_HUD_SYNC_NEXT_T, nowGlobal + 10L); } catch (Throwable ignored) {} // ~0.5s
+
+        ItemStack pill = getEquippedDarkfirePillForPassive(p);
+        if (pill == null) return;
+        if (!isHeldDarkfireAshenLifesteal(pill)) return;
+
+        long endGlobal = 0L;
+        long cdEndGlobal = 0L;
+        try { endGlobal = pdata.getLong(DF_ASHEN_END_T); } catch (Throwable ignored) {}
+        try { cdEndGlobal = pdata.getLong(DF_ASHEN_CD_END_T); } catch (Throwable ignored) {}
+
+        int durTicks = DARKFIRE_ASHEN_BUFF_DURATION_TICKS;
+        if (durTicks <= 0) durTicks = 1;
+        int cdTicks = DARKFIRE_ASHEN_COOLDOWN_TICKS;
+        if (cdTicks < 0) cdTicks = 0;
+
+        long localNow = w.getTotalWorldTime();
+
+        boolean active = (endGlobal > 0L && nowGlobal < endGlobal);
+        boolean cooldown = (!active && cdTicks > 0 && cdEndGlobal > 0L && nowGlobal < cdEndGlobal);
+
+        // If neither buff nor cooldown are active, clear HUD timers so the HUD fully disappears (no empty bars / flicker).
+        if (!active && !cooldown){
+            try { stampCinderHudTimers(p, pill, "", 0L, 0L, 0, 0L, 0L, 0); } catch (Throwable ignored) {}
+            return;
+        }
+
+        long buffStartLocal = 0L;
+        long buffEndLocal   = 0L;
+
+        long cdStartLocal = 0L;
+        long cdEndLocal   = 0L;
+
+        if (active){
+            long remain = endGlobal - nowGlobal;
+            if (remain < 0L) remain = 0L;
+
+            buffEndLocal   = localNow + remain;
+            buffStartLocal = buffEndLocal - (long) durTicks;
+
+            // Cooldown begins AFTER buff ends. We stamp the window now so the client can render it immediately once buff ends.
+            if (cdTicks > 0 && cdEndGlobal > 0L){
+                cdStartLocal = buffEndLocal;
+                cdEndLocal   = cdStartLocal + (long) cdTicks;
+            }
+        } else {
+            // Cooldown only (buff ended already)
+            long cdRemain = cdEndGlobal - nowGlobal;
+            if (cdRemain < 0L) cdRemain = 0L;
+            if (cdRemain > (long) cdTicks) cdRemain = (long) cdTicks;
+
+            cdEndLocal   = localNow + cdRemain;
+            cdStartLocal = cdEndLocal - (long) cdTicks;
+        }
+
+        try {
+            int dMax  = active ? durTicks : 0;
+            int cdMax = (cdTicks > 0) ? cdTicks : 0;
+            stampCinderHudTimers(p, pill, "Self", buffStartLocal, buffEndLocal, dMax, cdStartLocal, cdEndLocal, cdMax);
+        } catch (Throwable ignored) {}
     }
 
 
@@ -6323,6 +7857,49 @@ public final class HexOrbEffectsController {
             p.addChatMessage(new ChatComponentText(msg));
         } catch (Throwable ignored) {}
     }
+
+    // =====================
+    // Darkfire debug helper
+    // Hold SNEAK while testing to see these chat debug lines.
+    // =====================
+    private static final String DF_DBG_NEXT_T = "HexDF_DbgNextT";
+    // Darkfire debug (chat). Set false to silence debug output.
+    public static volatile boolean DEBUG_DARKFIRE = true;
+
+    private static boolean darkfireDebugEnabled(EntityPlayer p) {
+        return (DEBUG_DARKFIRE || DEBUG_PROC || (p != null && p.isSneaking()));
+    }
+
+    private static void darkfireDebug(EntityPlayer p, String msg) {
+        if (p == null || msg == null) return;
+        // SNEAK = debug; also allow global DEBUG_PROC as an override when you want always-on spam (not recommended).
+        if (!darkfireDebugEnabled(p) && !DEBUG_PROC) return;
+        try {
+            NBTTagCompound d = p.getEntityData();
+            long now = serverNow(p.worldObj);
+            long next = 0L;
+            try { next = d.getLong(DF_DBG_NEXT_T); } catch (Throwable ignored) {}
+            if (next != 0L && now < next) return;
+            d.setLong(DF_DBG_NEXT_T, now + 10L); // throttle (~0.5s)
+            p.addChatMessage(new ChatComponentText(msg));
+        } catch (Throwable ignored) {}
+    }
+
+    private static boolean cinderDebugVictim(EntityPlayer p, long now){
+        if (p == null) return false;
+        if (!DARKFIRE_CINDER_DEBUG_VICTIM) return false;
+        try {
+            NBTTagCompound d = p.getEntityData();
+            long last = 0L;
+            try { last = d.getLong("dfCinderDbgLast"); } catch (Throwable ignored) {}
+            if (now - last < 20L) return false; // 1s throttle
+            d.setLong("dfCinderDbgLast", now);
+            return true;
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+
 
     private static void debugSocketKeysOncePerSecond(EntityPlayer p, ItemStack held){
         if (!DEBUG_PROC || !DEBUG_SOCKET_KEYS || p == null || held == null) return;
@@ -6718,5 +8295,2876 @@ public final class HexOrbEffectsController {
             ((net.minecraft.world.WorldServer) p.worldObj).func_147487_a("spell", x, y, z, 24, 0.35D, 0.35D, 0.35D, 0.04D);
         }
     }
+
+
+
+
+    // =============================================================
+    // DARKFIRE - Active at 25%: Blackfire Burn (server-side)
+    // =============================================================
+
+    private static final String DF_BURN_NEXT_FIRE_T = "HexDF_BurnNextFireT";
+
+
+    private static final String DF_SHADOW_NEXT_DASH_T = "HexDF_ShadowNextDashT";
+    // Cinder Weakness debuff (stored on TARGET entity NBT)
+    private static final String DF_CINDER_WEAK_UNTIL_T  = "HexDF_CinderWeakUntilT";
+
+    private static final String DF_CINDER_NPC_MS_ORIG = "dfCinderNpcMsOrig";
+    private static final String DF_CINDER_NPC_MS_APPLIED = "dfCinderNpcMsApplied";
+    private static final String DF_CINDER_WEAK_NEXT_T   = "HexDF_CinderWeakNextT";
+
+
+    private static final String DF_CINDER_VFX_NEXT_T    = "HexDF_CinderVfxNextT";
+    private static final String DF_CINDER_FIRE_CANCEL_UNTIL_T = "HexDF_CinderFireCancelUntilT"; // cancel vanilla fire tick dmg (visual only)
+
+    // Ashen Lifesteal self-buff (stored on PLAYER entity NBT)
+    private static final String DF_ASHEN_END_T        = "HexDF_AshenEndT";
+    private static final String DF_ASHEN_CD_END_T     = "HexDF_AshenCdEndT";
+    private static final String DF_ASHEN_REGEN_NEXT_T = "HexDF_AshenRegenNextT";
+    private static final String DF_ASHEN_HUD_SYNC_NEXT_T  = "HexDF_AshenHudSyncNextT";
+    private static final String DF_ASHEN_PEND_TAG       = "HexDF_AshenPend"; // pending hit snapshot for DBC body-delta
+    /**
+     * Fires a short-range "blackfire" shot (hitscan). If it hits an entity:
+     * - applies Shadow Burn visuals (custom black flames)
+     * - applies a 10s DoT that scales from the ATTACKER's STR + DEX
+     *
+     * Consumes 25% of the Darkfire charge bar.
+     *
+     * @return true if fired (charge was spent), false if blocked/insufficient charge.
+     */
+    public static boolean tryDarkfireBlackfireBurn(net.minecraft.entity.player.EntityPlayerMP p){
+        if (p == null || p.worldObj == null || p.worldObj.isRemote) return false;
+
+        ItemStack held = getHeldDarkfirePill(p);
+        if (held == null) return false;
+
+        // Must have any Darkfire type selected (charging applies to all types)
+        if (!isHeldDarkfireBlackflameBurn(held)) return false;
+
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null) return false;
+
+        int max = tag.hasKey(DARKFIRE_TAG_CHARGE_MAX) ? tag.getInteger(DARKFIRE_TAG_CHARGE_MAX) : DARKFIRE_SS_CHARGE_MAX;
+        if (max <= 0) max = DARKFIRE_SS_CHARGE_MAX;
+
+        int cur = tag.hasKey(DARKFIRE_TAG_CHARGE) ? tag.getInteger(DARKFIRE_TAG_CHARGE) : 0;
+        if (cur < 0) cur = 0;
+
+        int cost = (int) Math.ceil((double) max * ((double) DARKFIRE_BURN_COST_PCT / 100.0D));
+        if (cost < 1) cost = 1;
+
+        if (cur < cost) return false;
+
+        // Anti-spam cooldown (server tick time)
+        try {
+            NBTTagCompound ed = p.getEntityData();
+            long nowT = p.worldObj.getTotalWorldTime();
+            long next = (ed != null && ed.hasKey(DF_BURN_NEXT_FIRE_T, 99)) ? ed.getLong(DF_BURN_NEXT_FIRE_T) : 0L;
+            if (nowT < next) return false;
+            if (ed != null) ed.setLong(DF_BURN_NEXT_FIRE_T, nowT + Math.max(1, DARKFIRE_BURN_FIRE_COOLDOWN_T));
+        } catch (Throwable ignored) {}
+
+        // Spend charge first (so even a miss costs something - keeps it fair)
+        consumeDarkfireChargeAndSync(p, held, cost, max);
+
+        // Find entity in line-of-sight (hitscan)
+        net.minecraft.entity.EntityLivingBase target = findLookTarget(p, DARKFIRE_BURN_RANGE_BLOCKS, 0.6F);
+
+        if (target != null){
+            // Attacker scaling (STR + DEX)
+            double sum = 0D;
+            try {
+                HexPlayerStats.Snapshot s = HexPlayerStats.snapshot((net.minecraft.entity.player.EntityPlayer) p);
+                sum = Math.max(0D, s.getStatEffective("str") + s.getStatEffective("dex"));
+            } catch (Throwable ignored) {}
+
+            float dmg = DARKFIRE_BURN_BASE_DMG_PER_TICK + (float)(Math.sqrt(sum) * (double) DARKFIRE_BURN_SQRT_SCALE);
+            if (Float.isNaN(dmg) || Float.isInfinite(dmg)) dmg = DARKFIRE_BURN_BASE_DMG_PER_TICK;
+            if (dmg < 1f) dmg = 1f;
+            if (dmg > DARKFIRE_BURN_DMG_CAP_PER_TICK) dmg = DARKFIRE_BURN_DMG_CAP_PER_TICK;
+
+            try {
+                ShadowBurnHandler.applyShadowBurn(target, p.worldObj, DARKFIRE_BURN_DURATION_TICKS, dmg, true);
+            } catch (Throwable ignored) {}
+        }
+
+        return true;
+    }
+
+
+    /**
+     * Spend Darkfire charge / gate checks for Blackfire Burn without applying to a target.
+     * This is used when the caller performs its own ray-hit selection (e.g., action 9 packet).
+     *
+     * @return true if fired (charge was spent), false if denied/insufficient charge.
+     */
+    /**
+     * DARKFIRE (Action 16): Shadowflame Trail
+     * - Costs 25% of Darkfire charge (same pool as Blackflame Burn)
+     * - Dashes wherever the player is looking
+     * - Spawns a "void trail" + black flames overlay along the dash path
+     *
+     * Cooldown is stamped onto the pill NBT so the client HUD can show a cooldown bar.
+     * This also works while socketed because commitDarkfireIfSocketed(...) persists the tag back to the socket host.
+     */
+    public static boolean tryDarkfireShadowflameTrailDash(net.minecraft.entity.player.EntityPlayerMP p){
+        if (p == null || p.worldObj == null || p.worldObj.isRemote) return false;
+
+        ItemStack pill = getHeldDarkfirePill(p);
+        if (pill == null) return false;
+
+        // Must be the Shadowflame Trail type
+        if (!isHeldDarkfireShadowflameTrail(pill)) return false;
+
+        NBTTagCompound tag = pill.getTagCompound();
+        if (tag == null) return false;
+
+        int max = tag.hasKey(DARKFIRE_TAG_CHARGE_MAX) ? tag.getInteger(DARKFIRE_TAG_CHARGE_MAX) : DARKFIRE_SS_CHARGE_MAX;
+        if (max <= 0) max = DARKFIRE_SS_CHARGE_MAX;
+
+        int cur = tag.hasKey(DARKFIRE_TAG_CHARGE) ? tag.getInteger(DARKFIRE_TAG_CHARGE) : 0;
+        if (cur < 0) cur = 0;
+
+        int cost = (int) Math.ceil((double) max * ((double) DARKFIRE_BURN_COST_PCT / 100.0D));
+        if (cost < 1) cost = 1;
+        if (cur < cost) return false;
+
+        long nowT = p.worldObj.getTotalWorldTime();
+
+        // Cooldown stored on the pill so the client HUD can render it (works for socketed pills too)
+        long cdEnd = tag.hasKey(DFSH_CD_END, 99) ? tag.getLong(DFSH_CD_END) : 0L;
+        if (cdEnd > 0L && nowT < cdEnd) return false;
+
+        // Start position for the overlay trail
+        double sx = p.posX;
+        double sy = p.posY;
+        double sz = p.posZ;
+
+        // Direction from look vec
+        net.minecraft.util.Vec3 look = null;
+        try { look = p.getLookVec(); } catch (Throwable ignored) {}
+        if (look == null) return false;
+
+        double dist = DARKFIRE_SHADOWFLAME_DASH_DISTANCE;
+        if (dist <= 0.0D) dist = 7.0D;
+
+        boolean dashed = doNullShellDash3D(p, look.xCoord, look.yCoord, look.zCoord, dist);
+        if (!dashed) return false;
+
+        // Stamp cooldown BEFORE syncing, so the inventory sync that happens from the charge spend carries this too.
+        int cdTicks = DARKFIRE_SHADOWFLAME_DASH_COOLDOWN_T;
+        if (cdTicks < 1) cdTicks = 1;
+
+        try {
+            tag.setLong(DFSH_CD_END, nowT + (long) cdTicks);
+            tag.setInteger(DFSH_CD_MAX, cdTicks);
+        } catch (Throwable ignored) {}
+
+        // Spend charge only if dash succeeded (also commits if socketed and sends inventory sync)
+        consumeDarkfireChargeAndSync(p, pill, cost, max);
+
+        // Overlay "black flames" along the void trail
+        try {
+            if (p.worldObj instanceof net.minecraft.world.WorldServer){
+                net.minecraft.world.WorldServer ws = (net.minecraft.world.WorldServer) p.worldObj;
+                spawnShadowflameTrailOverlay(ws, sx, sy + 0.15D, sz, p.posX, p.posY + 0.15D, p.posZ);
+            }
+        } catch (Throwable ignored) {}
+
+        // Simple audio cue (safe)
+        try { p.worldObj.playSoundAtEntity(p, "mob.endermen.portal", 0.65F, 0.70F); } catch (Throwable ignored) {}
+
+        return true;
+    }
+
+    public static boolean tryConsumeDarkfireBlackfireBurn(net.minecraft.entity.player.EntityPlayerMP p){
+        if (p == null || p.worldObj == null || p.worldObj.isRemote) return false;
+
+        ItemStack held = getHeldDarkfirePill(p);
+        if (held == null) return false;
+
+        // Must have Blackflame Burn selected for Action 9/10/11
+        if (!isHeldDarkfireBlackflameBurn(held)) return false;
+
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null) return false;
+
+        int max = tag.hasKey(DARKFIRE_TAG_CHARGE_MAX) ? tag.getInteger(DARKFIRE_TAG_CHARGE_MAX) : DARKFIRE_SS_CHARGE_MAX;
+        if (max <= 0) max = DARKFIRE_SS_CHARGE_MAX;
+
+        int cur = tag.hasKey(DARKFIRE_TAG_CHARGE) ? tag.getInteger(DARKFIRE_TAG_CHARGE) : 0;
+        if (cur < 0) cur = 0;
+
+        int cost = (int) Math.ceil((double) max * ((double) DARKFIRE_BURN_COST_PCT / 100.0D));
+        if (cost < 1) cost = 1;
+
+        if (cur < cost) return false;
+
+        // Anti-spam cooldown (server tick time)
+        try {
+            NBTTagCompound ed = p.getEntityData();
+            long nowT = p.worldObj.getTotalWorldTime();
+            long next = (ed != null && ed.hasKey(DF_BURN_NEXT_FIRE_T, 99)) ? ed.getLong(DF_BURN_NEXT_FIRE_T) : 0L;
+            if (nowT < next) return false;
+            if (ed != null) ed.setLong(DF_BURN_NEXT_FIRE_T, nowT + Math.max(1, DARKFIRE_BURN_FIRE_COOLDOWN_T));
+        } catch (Throwable ignored) {}
+
+        // Spend charge
+        consumeDarkfireChargeAndSync(p, held, cost, max);
+        return true;
+    }
+
+    public static boolean tryConsumeDarkfireBlackfireBurnBig(net.minecraft.entity.player.EntityPlayerMP p){
+        if (p == null || p.worldObj == null || p.worldObj.isRemote) return false;
+
+        ItemStack held = getHeldDarkfirePill(p);
+        if (held == null) return false;
+
+        // Must be a Darkfire pill with Shadow Spread selected
+        if (!isHeldDarkfireBlackflameBurn(held)) return false;
+
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null) return false;
+
+        int max = tag.hasKey(DARKFIRE_TAG_CHARGE_MAX) ? tag.getInteger(DARKFIRE_TAG_CHARGE_MAX) : DARKFIRE_SS_CHARGE_MAX;
+        if (max <= 0) max = DARKFIRE_SS_CHARGE_MAX;
+
+        int cur = tag.hasKey(DARKFIRE_TAG_CHARGE) ? tag.getInteger(DARKFIRE_TAG_CHARGE) : 0;
+        if (cur < 0) cur = 0;
+
+        int cost = (int) Math.ceil((double) max * ((double) DARKFIRE_BURN_BIG_COST_PCT / 100.0D));
+        if (cost < 1) cost = 1;
+
+        if (cur < cost) return false;
+
+        // Anti-spam cooldown (server tick time) - same key as the 25% version.
+        try {
+            NBTTagCompound ed = p.getEntityData();
+            long nowT = p.worldObj.getTotalWorldTime();
+            long next = (ed != null && ed.hasKey(DF_BURN_NEXT_FIRE_T, 99)) ? ed.getLong(DF_BURN_NEXT_FIRE_T) : 0L;
+            if (nowT < next) return false;
+
+            if (ed != null) ed.setLong(DF_BURN_NEXT_FIRE_T, nowT + Math.max(1, DARKFIRE_BURN_FIRE_COOLDOWN_T));
+        } catch (Throwable ignored) {}
+
+        // Spend charge + sync for HUD
+        consumeDarkfireChargeAndSync(p, held, cost, max);
+        return true;
+    }
+
+    // ===== Darkfire 100% Rapid Fire (hold CTRL) =====
+    private static final String DF_RF_ACTIVE_KEY      = "Hex_DF_RF_Active";
+    private static final String DF_RF_START_T_KEY     = "Hex_DF_RF_StartT";
+    private static final String DF_RF_NEXT_FIRE_T_KEY = "Hex_DF_RF_NextT";
+
+    /**
+     * Server-side validation + charge consumption for a rapid-fire shot.
+     * - To BEGIN rapid-fire, the Darkfire charge must be FULL (100%).
+     * - Each subsequent shot consumes a small percent of the bar.
+     * - Includes a server-side cooldown so clients can't spam packets too fast.
+     */
+    public static boolean tryConsumeDarkfireRapidFireShot(EntityPlayerMP p) {
+        if (p == null || p.worldObj == null) return false;
+        if (p.worldObj.isRemote) return false;
+
+        ItemStack held = getHeldDarkfirePill(p);
+        if (held == null) return false;
+
+        // Only Shadow Spread participates in active Darkfire abilities for now.
+        if (!isHeldDarkfireBlackflameBurn(held)) return false;
+
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null) return false;
+
+        int max = tag.getInteger(DARKFIRE_TAG_CHARGE_MAX);
+        if (max <= 0) max = DARKFIRE_SS_CHARGE_MAX;
+
+        int cur = tag.getInteger(DARKFIRE_TAG_CHARGE);
+
+        // percent cost per shot
+        int cost = (int) Math.ceil(max * (DARKFIRE_RF_SHOT_COST_PCT / 100.0D));
+        if (cost < 1) cost = 1;
+
+        NBTTagCompound ed = p.getEntityData();
+        long nowT = p.worldObj.getTotalWorldTime();
+
+        boolean active = ed.getBoolean(DF_RF_ACTIVE_KEY);
+
+        // server-side cooldown gate
+        long nextT = 0L;
+        if (ed.hasKey(DF_RF_NEXT_FIRE_T_KEY, 99)) nextT = ed.getLong(DF_RF_NEXT_FIRE_T_KEY);
+        if (nowT < nextT) return false;
+
+        if (!active) {
+            // Must be full to START
+            if (cur < max) return false;
+
+            ed.setBoolean(DF_RF_ACTIVE_KEY, true);
+            ed.setLong(DF_RF_START_T_KEY, nowT);
+        }
+
+        if (cur < cost) {
+            // out of fuel -> stop
+            stopDarkfireRapidFire(p);
+            return false;
+        }
+
+        // Consume charge and sync to client
+        consumeDarkfireChargeAndSync(p, held, cost, max);
+
+        // next allowed shot
+        ed.setLong(DF_RF_NEXT_FIRE_T_KEY, nowT + Math.max(1, DARKFIRE_RF_SHOT_COOLDOWN_T));
+        return true;
+    }
+
+    /** Stop / cleanup server-side rapid-fire state. */
+    public static void stopDarkfireRapidFire(EntityPlayerMP p) {
+        if (p == null) return;
+        try {
+            NBTTagCompound ed = p.getEntityData();
+            ed.removeTag(DF_RF_ACTIVE_KEY);
+            ed.removeTag(DF_RF_START_T_KEY);
+            ed.removeTag(DF_RF_NEXT_FIRE_T_KEY);
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Apply rapid-fire impact + DoT to a target. Size:
+     * 0 = small, 1 = medium, 2 = big.
+     *
+     * Overcharge is derived from time since rapid-fire began (up to 2x).
+     */
+    public static void applyDarkfireRapidFireHit(EntityPlayerMP attacker, EntityLivingBase target, int size) {
+        if (attacker == null || attacker.worldObj == null) return;
+        if (attacker.worldObj.isRemote) return;
+        if (target == null || target.isDead) return;
+
+        // Visual: flame/smoke trail (server -> nearby clients)
+        try { spawnDarkfireRapidFireTrail(attacker, target, size); } catch (Throwable ignored) {}
+
+        // Base scaling (same stats as Blackfire Burn)
+        float str = (float) getStrengthEffective(attacker);
+        float dex = (float) getDexterityEffective(attacker);
+
+        float sum = (str + dex);
+        if (sum < 0f) sum = 0f;
+
+        float baseDot = (sum * 4.0F) + 900.0F; // stronger than 25% baseline
+        if (baseDot < 0f) baseDot = 0f;
+
+        float baseImpact = baseDot * 26.0F;
+
+        // Overcharge: ramps 1.0 -> 2.0 over DARKFIRE_RF_OVERCHARGE_TICKS
+        float overMult = 1.0F;
+        try {
+            NBTTagCompound ed = attacker.getEntityData();
+            if (ed != null && ed.getBoolean(DF_RF_ACTIVE_KEY) && ed.hasKey(DF_RF_START_T_KEY, 99)) {
+                long startT = ed.getLong(DF_RF_START_T_KEY);
+                long nowT = attacker.worldObj.getTotalWorldTime();
+                long dt = nowT - startT;
+                if (dt < 0L) dt = 0L;
+
+                float t = (float) dt / (float) Math.max(1, DARKFIRE_RF_OVERCHARGE_TICKS);
+                if (t < 0f) t = 0f;
+                if (t > 1f) t = 1f;
+                overMult = 1.0F + t;
+            }
+        } catch (Throwable ignored) {}
+
+        // Size tuning
+        int dur;
+        float dotMult;
+        float impactMult;
+        if (size <= 0) {
+            dur = DARKFIRE_RF_DOT_TICKS_SMALL;
+            dotMult = DARKFIRE_RF_DOT_MULT_SMALL;
+            impactMult = DARKFIRE_RF_IMPACT_MULT_SMALL;
+        } else if (size == 1) {
+            dur = DARKFIRE_RF_DOT_TICKS_MED;
+            dotMult = DARKFIRE_RF_DOT_MULT_MED;
+            impactMult = DARKFIRE_RF_IMPACT_MULT_MED;
+        } else {
+            dur = DARKFIRE_RF_DOT_TICKS_BIG;
+            dotMult = DARKFIRE_RF_DOT_MULT_BIG;
+            impactMult = DARKFIRE_RF_IMPACT_MULT_BIG;
+        }
+
+        float dot = baseDot * dotMult * overMult;
+        float impact = baseImpact * impactMult * overMult;
+
+        // Cap DoT per tick (reuse existing caps; big uses the big cap)
+        float cap = (size >= 2 ? DARKFIRE_BURN_BIG_DMG_CAP_PER_TICK : DARKFIRE_BURN_DMG_CAP_PER_TICK);
+        if (dot > cap) dot = cap;
+
+        // Impact (proc damage)
+        dealProcDamage(attacker, target, impact);
+
+        // DoT (shadow burn)
+        ShadowBurnHandler.applyShadowBurn(target, attacker.worldObj, dur, dot, true);
+    }
+
+
+
+
+    /**
+     * Apply the Blackfire Burn hit effects to a specific target:
+     * - immediate impact hit (DBC body dmg with vanilla fallback)
+     * - Shadow Burn DoT (custom flames + ticking dmg), scaled from attacker's STR + DEX
+     */
+    public static void applyDarkfireBlackfireBurnHit(net.minecraft.entity.player.EntityPlayerMP attacker, net.minecraft.entity.EntityLivingBase target){
+        if (attacker == null || target == null) return;
+        if (attacker.worldObj == null || attacker.worldObj.isRemote) return;
+        if (target.isDead) return;
+
+        // Attacker scaling (STR + DEX effective)
+        double sum = 0D;
+        try {
+            HexPlayerStats.Snapshot s = HexPlayerStats.snapshot((net.minecraft.entity.player.EntityPlayer) attacker);
+            sum = Math.max(0D, s.getStatEffective("str") + s.getStatEffective("dex"));
+        } catch (Throwable ignored) {}
+
+        float dot = DARKFIRE_BURN_BASE_DMG_PER_TICK + (float)(Math.sqrt(sum) * (double) DARKFIRE_BURN_SQRT_SCALE);
+        if (Float.isNaN(dot) || Float.isInfinite(dot)) dot = DARKFIRE_BURN_BASE_DMG_PER_TICK;
+        if (dot < 1f) dot = 1f;
+        if (dot > DARKFIRE_BURN_DMG_CAP_PER_TICK) dot = DARKFIRE_BURN_DMG_CAP_PER_TICK;
+
+        // Immediate impact hit so it "feels" like it connects (still uses same scaling).
+        float impact = dot * 26.0f;
+        if (impact < 1f) impact = 1f;
+        // Keep impact sane: up to 6x per-tick cap
+        float impactCap = DARKFIRE_BURN_DMG_CAP_PER_TICK * 6.0f;
+        if (impact > impactCap) impact = impactCap;
+
+        // Guaranteed impact that matches the rest of the orb proc scaling (DBC + vanilla fallback).
+        try { dealProcDamage(attacker, target, impact, "darkfire"); } catch (Throwable ignored) {}
+
+        // Apply DoT + custom flames (ShadowBurnHandler already uses DBC body dmg with vanilla fallback)
+        try {
+            ShadowBurnHandler.applyShadowBurn(target, attacker.worldObj, DARKFIRE_BURN_DURATION_TICKS, dot, true);
+        } catch (Throwable ignored) {}
+    }
+
+    public static void applyDarkfireBlackfireBurnHitBig(net.minecraft.entity.player.EntityPlayerMP attacker, net.minecraft.entity.EntityLivingBase target){
+        if (attacker == null || target == null) return;
+        if (attacker.worldObj == null || attacker.worldObj.isRemote) return;
+        if (target.isDead) return;
+
+        // Same scaling as 25% (STR + DEX effective) but multiplied and capped separately.
+        double sum = 0D;
+        try {
+            HexPlayerStats.Snapshot s = HexPlayerStats.snapshot((net.minecraft.entity.player.EntityPlayer) attacker);
+            sum = Math.max(0D, s.getStatEffective("str") + s.getStatEffective("dex"));
+        } catch (Throwable ignored) {}
+
+        float dot = DARKFIRE_BURN_BASE_DMG_PER_TICK + (float)(Math.sqrt(sum) * (double) DARKFIRE_BURN_SQRT_SCALE);
+        if (Float.isNaN(dot) || Float.isInfinite(dot)) dot = DARKFIRE_BURN_BASE_DMG_PER_TICK;
+
+        dot *= DARKFIRE_BURN_BIG_MULT;
+
+        if (dot < 1f) dot = 1f;
+
+        float cap = DARKFIRE_BURN_BIG_DMG_CAP_PER_TICK;
+        if (cap < 1f) cap = 1f;
+        if (dot > cap) dot = cap;
+
+        // Immediate impact (feels like a heavier flame hit)
+        float impact = dot * 26.0f;
+        if (impact < 1f) impact = 1f;
+
+        float impactCap = cap * 6.0f;
+        if (impact > impactCap) impact = impactCap;
+
+        // DBC body damage with vanilla fallback (same helper used elsewhere)
+        try { dealProcDamage(attacker, target, impact, "darkfire"); } catch (Throwable ignored) {}
+
+        // DoT + flames (same duration as 25%, higher per-tick)
+        try {
+            ShadowBurnHandler.applyShadowBurn(target, attacker.worldObj, DARKFIRE_BURN_DURATION_TICKS, dot, true);
+        } catch (Throwable ignored) {}
+
+        // Debug marker (tick time)
+        try {
+            target.getEntityData().setLong("Hex_DF_LastHit", attacker.worldObj.getTotalWorldTime());
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Rapid-fire trail FX. This is purely visual (no gameplay) and is server-safe:
+     * uses WorldServer.func_147487_a to send vanilla particles to nearby clients.
+     */
+    private static void spawnDarkfireRapidFireTrail(EntityPlayerMP attacker, EntityLivingBase target, int size){
+        if (attacker == null || attacker.worldObj == null || target == null) return;
+        if (!(attacker.worldObj instanceof net.minecraft.world.WorldServer)) return;
+
+        net.minecraft.world.WorldServer ws = (net.minecraft.world.WorldServer) attacker.worldObj;
+
+        double sx = attacker.posX;
+        double sy = attacker.posY + (double) attacker.getEyeHeight() * 0.90D;
+        double sz = attacker.posZ;
+
+        double ex = target.posX;
+        double ey = target.posY + (double) target.height * 0.55D;
+        double ez = target.posZ;
+
+        double dx = ex - sx;
+        double dy = ey - sy;
+        double dz = ez - sz;
+
+        double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist < 0.001D) dist = 0.001D;
+
+        int steps = (int) Math.round(dist * 6.0D);
+        if (steps < 8) steps = 8;
+        if (steps > 32) steps = 32;
+
+        double inv = 1.0D / (double) (steps - 1);
+
+        double spread = 0.020D;
+        double speed  = 0.010D;
+
+        // Slightly beefier visuals for bigger shots
+        if (size >= 2){
+            spread = 0.050D;
+            speed  = 0.020D;
+        } else if (size == 1){
+            spread = 0.035D;
+            speed  = 0.015D;
+        }
+
+        for (int i = 0; i < steps; i++){
+            double t = (double) i * inv;
+            double x = sx + dx * t;
+            double y = sy + dy * t;
+            double z = sz + dz * t;
+
+            // Flame core
+            ws.func_147487_a("flame", x, y, z, 1, spread, spread, spread, speed);
+
+            // Dark smoke every other point
+            if ((i & 1) == 0){
+                ws.func_147487_a("smoke", x, y, z, 1, spread * 1.25D, spread * 1.25D, spread * 1.25D, speed * 0.50D);
+            }
+
+            // Occasional witch magic gives a darker vibe without needing custom particles
+            if ((i % 6) == 0){
+                ws.func_147487_a("witchMagic", x, y, z, 1, spread * 0.80D, spread * 0.80D, spread * 0.80D, speed * 0.80D);
+            }
+        }
+
+        // Small impact puff at the target
+        ws.func_147487_a("largesmoke", ex, ey, ez, 2 + Math.max(0, size), 0.060D, 0.060D, 0.060D, 0.020D);
+    }
+
+
+
+
+    /** Reduces Darkfire charge and syncs. */
+    /** Extra overlay for Shadowflame Trail dash: smoke/witchMagic/flame along a line. */
+    private static void spawnShadowflameTrailOverlay(net.minecraft.world.WorldServer ws,
+                                                     double sx, double sy, double sz,
+                                                     double ex, double ey, double ez){
+        if (ws == null) return;
+
+        double dx = ex - sx;
+        double dy = ey - sy;
+        double dz = ez - sz;
+
+        double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist < 0.001D) dist = 0.001D;
+
+        int steps = (int) Math.round(dist * 6.0D);
+        if (steps < 10) steps = 10;
+        if (steps > 40) steps = 40;
+
+        double inv = 1.0D / (double) (steps - 1);
+
+        double spread = 0.045D;
+        double speed  = 0.010D;
+
+        for (int i = 0; i < steps; i++){
+            double t = (double) i * inv;
+            double x = sx + dx * t;
+            double y = sy + dy * t;
+            double z = sz + dz * t;
+
+            // Dark smoke backbone (reads as "black flame")
+            ws.func_147487_a("smoke", x, y, z, 1, spread, spread, spread, speed);
+
+            // Witch magic gives the purple/void tint
+            ws.func_147487_a("witchMagic", x, y, z, 1, spread * 0.85D, spread * 0.85D, spread * 0.85D, speed * 0.85D);
+
+            // Occasional flame flicker (we keep it light so it doesn't look like normal fire)
+            if ((i & 1) == 0){
+                ws.func_147487_a("flame", x, y, z, 1, spread * 0.55D, spread * 0.55D, spread * 0.55D, speed * 0.75D);
+            }
+
+            // A little portal sparkle every few points
+            if ((i % 6) == 0){
+                ws.func_147487_a("portal", x, y, z, 1, spread * 0.40D, spread * 0.40D, spread * 0.40D, speed * 0.65D);
+            }
+        }
+
+        // End puff
+        ws.func_147487_a("largesmoke", ex, ey, ez, 2, 0.08D, 0.08D, 0.08D, 0.010D);
+        ws.func_147487_a("witchMagic", ex, ey, ez, 2, 0.08D, 0.08D, 0.08D, 0.010D);
+    }
+
+
+    private static void consumeDarkfireChargeAndSync(EntityPlayer p, ItemStack held, int cost, int max){
+        if (held == null || p == null) return;
+
+        if (max <= 0) max = DARKFIRE_SS_CHARGE_MAX;
+
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null){
+            tag = new NBTTagCompound();
+            held.setTagCompound(tag);
+        }
+
+        int cur = tag.hasKey(DARKFIRE_TAG_CHARGE) ? tag.getInteger(DARKFIRE_TAG_CHARGE) : 0;
+        if (cur < 0) cur = 0;
+
+        int before = cur;
+
+        if (cost > 0){
+            cur -= cost;
+            if (cur < 0) cur = 0;
+        }
+
+        boolean changed = (cur != before);
+
+        // Always keep max present for HUD
+        if (!tag.hasKey(DARKFIRE_TAG_CHARGE_MAX) || tag.getInteger(DARKFIRE_TAG_CHARGE_MAX) != max){
+            tag.setInteger(DARKFIRE_TAG_CHARGE_MAX, max);
+            changed = true;
+        }
+
+        if (changed){
+            tag.setInteger(DARKFIRE_TAG_CHARGE, cur);
+            commitDarkfireIfSocketed(p, held);
+
+            try { p.inventory.markDirty(); } catch (Throwable ignored) {}
+            try { p.inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+            if (p instanceof net.minecraft.entity.player.EntityPlayerMP){
+                try {
+                    ((net.minecraft.entity.player.EntityPlayerMP) p).inventoryContainer.detectAndSendChanges();
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    private static void setShadowflameTrailCooldownAndSync(EntityPlayer p, ItemStack pill, long nowT, int cdTicks){
+        if (p == null || pill == null) return;
+        if (cdTicks < 1) cdTicks = 1;
+        if (nowT < 0L) {
+            try { nowT = p.worldObj.getTotalWorldTime(); } catch (Throwable ignored) { nowT = 0L; }
+        }
+
+        NBTTagCompound tag = pill.getTagCompound();
+        if (tag == null){
+            tag = new NBTTagCompound();
+            pill.setTagCompound(tag);
+        }
+
+        long end = nowT + (long) cdTicks;
+
+        tag.setLong(DFSH_CD_END, end);
+        tag.setLong(DFSH_CD_MAX, (long) cdTicks);
+
+        commitDarkfireIfSocketed(p, pill);
+
+        try { p.inventory.markDirty(); } catch (Throwable ignored) {}
+        try { p.inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        if (p instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP) p).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+
+
+    /**
+     * Simple 1.7.10 hitscan entity selection along the player's look vector.
+     * This mirrors the "good enough" hit scan used by other orb actions.
+     */
+    private static net.minecraft.entity.EntityLivingBase findLookTarget(EntityPlayer p, double range, float pad){
+        if (p == null || p.worldObj == null) return null;
+
+        net.minecraft.util.Vec3 look = null;
+        try { look = p.getLookVec(); } catch (Throwable ignored) {}
+        if (look == null) return null;
+
+        net.minecraft.util.Vec3 start = net.minecraft.util.Vec3.createVectorHelper(
+                p.posX,
+                p.posY + (double) p.getEyeHeight(),
+                p.posZ
+        );
+
+        net.minecraft.util.Vec3 end = net.minecraft.util.Vec3.createVectorHelper(
+                start.xCoord + look.xCoord * range,
+                start.yCoord + look.yCoord * range,
+                start.zCoord + look.zCoord * range
+        );
+
+        // Clamp by first block hit if any
+        try {
+            net.minecraft.util.MovingObjectPosition mop = p.worldObj.rayTraceBlocks(start, end);
+            if (mop != null && mop.hitVec != null){
+                end = mop.hitVec;
+            }
+        } catch (Throwable ignored) {}
+
+        net.minecraft.entity.EntityLivingBase best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        try {
+            net.minecraft.util.AxisAlignedBB scan = p.boundingBox
+                    .addCoord(look.xCoord * range, look.yCoord * range, look.zCoord * range)
+                    .expand(pad, pad, pad);
+
+            @SuppressWarnings("unchecked")
+            java.util.List<net.minecraft.entity.Entity> ents = p.worldObj.getEntitiesWithinAABBExcludingEntity(p, scan);
+
+            if (ents != null){
+                for (int i = 0; i < ents.size(); i++){
+                    net.minecraft.entity.Entity e = ents.get(i);
+                    if (!(e instanceof net.minecraft.entity.EntityLivingBase)) continue;
+                    if (!e.canBeCollidedWith()) continue;
+
+                    net.minecraft.entity.EntityLivingBase elb = (net.minecraft.entity.EntityLivingBase) e;
+                    if (elb.isDead) continue;
+                    if (elb == p) continue;
+
+                    net.minecraft.util.AxisAlignedBB bb = elb.boundingBox.expand(0.3D, 0.3D, 0.3D);
+                    net.minecraft.util.MovingObjectPosition hit = bb.calculateIntercept(start, end);
+                    if (hit == null || hit.hitVec == null) continue;
+
+                    double dsq = start.squareDistanceTo(hit.hitVec);
+                    if (dsq < bestDistSq){
+                        bestDistSq = dsq;
+                        best = elb;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        return best;
+    }
+
+// =============================================================
+    // DARKFIRE - Shadow Spread charge system (server-side)
+    // =============================================================
+
+    /** Passive charge tick: once per second while holding the Darkfire pill set to "Shadow Spread". */
+    private static void tickDarkfireShadowSpreadCharge(EntityPlayer p, World w, NBTTagCompound data, long now){
+        if (p == null || w == null || data == null || w.isRemote) return;
+
+        ItemStack held = getHeldDarkfirePill(p);
+        if (held == null) return;
+        if (!isHeldDarkfireShadowSpread(held)) return;
+
+        long next = data.getLong(DFSS_KEY_NEXT_PASSIVE);
+        if (now < next) return;
+        data.setLong(DFSS_KEY_NEXT_PASSIVE, now + 20);
+
+        int gain = DARKFIRE_SS_PASSIVE_GAIN_PER_SEC;
+        if (roll(p, DARKFIRE_SS_PASSIVE_BIG_CHANCE)){
+            gain += DARKFIRE_SS_PASSIVE_BIG_BONUS;
+        }
+
+        addDarkfireChargeAndSync(p, held, gain, DARKFIRE_SS_CHARGE_MAX);
+    }
+
+
+
+    // -------------------------------------------------------------------------
+    // DARKFIRE: Ember Detonation mark ticking (particles + expiry) + owner list upkeep
+    // -------------------------------------------------------------------------
+
+    private static void tickDarkfireEmberMark(EntityLivingBase ent, NBTTagCompound data, World w, long now){
+        if (ent == null || data == null || w == null || w.isRemote) return;
+
+        int ownerId = 0;
+        long exp = 0L;
+        try {
+            ownerId = data.getInteger(DFEM_KEY_OWNER);
+            exp = data.getLong(DFEM_KEY_EXPIRE);
+        } catch (Throwable ignored) {}
+
+        if (ownerId <= 0 || exp <= 0L) return;
+
+        // Expired or dead -> clear
+        if (ent.isDead || now >= exp){
+            clearDarkfireEmberMark(data);
+            return;
+        }
+
+        // Periodic particle pulse
+        long nextFx = 0L;
+        try { nextFx = data.getLong(DFEM_KEY_NEXT_FX); } catch (Throwable ignored) {}
+        if (now >= nextFx){
+            data.setLong(DFEM_KEY_NEXT_FX, now + Math.max(1, DARKFIRE_EMBER_MARK_FX_EVERY_TICKS));
+            boolean isAnim = false;
+            try { isAnim = data.getBoolean(DFEM_KEY_ANIM); } catch (Throwable ignored) {}
+            spawnDarkfireEmberMarkParticles(w,
+                    ent.posX,
+                    ent.posY + (double)(ent.height * 0.60F),
+                    ent.posZ,
+                    isAnim
+            );
+        }
+    }
+
+    private static void clearDarkfireEmberMark(NBTTagCompound data){
+        if (data == null) return;
+        try {
+            data.setInteger(DFEM_KEY_OWNER, 0);
+            data.setLong(DFEM_KEY_EXPIRE, 0L);
+            data.setBoolean(DFEM_KEY_ANIM, false);
+            data.setLong(DFEM_KEY_NEXT_FX, 0L);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void tickDarkfireEmberOwnerList(EntityPlayer owner, NBTTagCompound ownerData, World w, long now){
+        if (owner == null || ownerData == null || w == null || w.isRemote) return;
+
+        // prune roughly once per second
+        long next = 0L;
+        try { next = ownerData.getLong(DFEM_KEY_NEXT_PRUNE); } catch (Throwable ignored) {}
+        if (now < next) return;
+        ownerData.setLong(DFEM_KEY_NEXT_PRUNE, now + 20L);
+
+        if (!ownerData.hasKey(DFEM_LIST_KEY, 9)) return;
+
+        NBTTagList list = null;
+        try { list = ownerData.getTagList(DFEM_LIST_KEY, 10); } catch (Throwable ignored) {}
+        if (list == null || list.tagCount() <= 0) return;
+
+        NBTTagList out = new NBTTagList();
+        int oid = owner.getEntityId();
+
+        for (int i = 0; i < list.tagCount(); i++){
+            NBTTagCompound e = null;
+            try { e = list.getCompoundTagAt(i); } catch (Throwable ignored) {}
+            if (e == null) continue;
+
+            int id = e.getInteger(DFEM_LIST_ID);
+            long exp = e.getLong(DFEM_LIST_EXP);
+            if (id <= 0 || exp <= 0L) continue;
+            if (now >= exp) continue;
+
+            Entity ent = null;
+            try { ent = w.getEntityByID(id); } catch (Throwable ignored) {}
+            if (!(ent instanceof EntityLivingBase)) continue;
+
+            NBTTagCompound td = null;
+            try { td = ((EntityLivingBase) ent).getEntityData(); } catch (Throwable ignored) {}
+            if (td == null) continue;
+
+            int curOwner = td.getInteger(DFEM_KEY_OWNER);
+            long curExp = td.getLong(DFEM_KEY_EXPIRE);
+            if (curOwner != oid) continue;
+            if (curExp <= 0L || now >= curExp) continue;
+
+            // keep freshest expiry and anim flag
+            e.setLong(DFEM_LIST_EXP, curExp);
+            e.setByte(DFEM_LIST_ANIM, (byte)(td.getBoolean(DFEM_KEY_ANIM) ? 1 : 0));
+            out.appendTag(e);
+        }
+
+        ownerData.setTag(DFEM_LIST_KEY, out);
+    }
+
+    private static void trackDarkfireEmberMarkOnOwner(EntityPlayer owner, int targetId, long expireTick, boolean isAnim){
+        if (owner == null || targetId <= 0) return;
+        NBTTagCompound data = owner.getEntityData();
+        if (data == null) return;
+
+        NBTTagList list;
+        if (data.hasKey(DFEM_LIST_KEY, 9)){
+            try { list = data.getTagList(DFEM_LIST_KEY, 10); } catch (Throwable t){ list = new NBTTagList(); }
+        } else {
+            list = new NBTTagList();
+        }
+
+        // update existing
+        for (int i = 0; i < list.tagCount(); i++){
+            NBTTagCompound e = list.getCompoundTagAt(i);
+            if (e == null) continue;
+            if (e.getInteger(DFEM_LIST_ID) == targetId){
+                long cur = e.getLong(DFEM_LIST_EXP);
+                if (expireTick > cur) e.setLong(DFEM_LIST_EXP, expireTick);
+                e.setByte(DFEM_LIST_ANIM, (byte)(isAnim ? 1 : 0));
+                data.setTag(DFEM_LIST_KEY, list);
+                return;
+            }
+        }
+
+        // append
+        NBTTagCompound e = new NBTTagCompound();
+        e.setInteger(DFEM_LIST_ID, targetId);
+        e.setLong(DFEM_LIST_EXP, expireTick);
+        e.setByte(DFEM_LIST_ANIM, (byte)(isAnim ? 1 : 0));
+        list.appendTag(e);
+        data.setTag(DFEM_LIST_KEY, list);
+    }
+
+    private static boolean applyDarkfireEmberMarkSingle(EntityPlayer owner, EntityLivingBase target, boolean isAnim, long now, long expireTick){
+        if (owner == null || target == null) return false;
+        World w = owner.worldObj;
+        if (w == null || w.isRemote) return false;
+
+        NBTTagCompound data = target.getEntityData();
+        if (data == null) return false;
+
+        int ownerId = owner.getEntityId();
+
+        int curOwner = data.getInteger(DFEM_KEY_OWNER);
+        long curExpire = data.getLong(DFEM_KEY_EXPIRE);
+
+        // If already marked by this owner, refresh/extend expiry (up to new expireTick)
+        if (curOwner == ownerId && curExpire > 0L && now < curExpire){
+            if (expireTick > curExpire){
+                data.setLong(DFEM_KEY_EXPIRE, expireTick);
+                data.setBoolean(DFEM_KEY_ANIM, isAnim);
+                // keep FX cadence but allow immediate visible pulse next tick
+                return true;
+            }
+            return false;
+        }
+
+        data.setInteger(DFEM_KEY_OWNER, ownerId);
+        data.setLong(DFEM_KEY_EXPIRE, expireTick);
+        data.setBoolean(DFEM_KEY_ANIM, isAnim);
+        data.setLong(DFEM_KEY_NEXT_FX, 0L);
+
+        return true;
+    }
+
+    private static void spawnDarkfireEmberMarkParticles(World w, double cx, double cy, double cz, boolean isAnim){
+        if (!(w instanceof WorldServer)) return;
+        WorldServer ws = (WorldServer) w;
+
+        // Dark ember shimmer: orange spell + smoke + tiny flame
+        try {
+            ws.func_147487_a("mobSpell", cx, cy, cz, isAnim ? 6 : 4, 1.0, 0.25, 0.05, 0.65);
+            ws.func_147487_a("smoke", cx, cy, cz, isAnim ? 3 : 2, 0.20, 0.18, 0.20, 0.01);
+            ws.func_147487_a("flame", cx, cy, cz, isAnim ? 3 : 2, 0.18, 0.14, 0.18, 0.01);
+            // darker core specks
+            ws.func_147487_a("mobSpell", cx, cy, cz, 1, 0.08, 0.00, 0.00, 0.45);
+        } catch (Throwable ignored) {}
+
+        // Small orbit sparks
+        int rings = isAnim ? 6 : 4;
+        double t = (double) ws.getTotalWorldTime() * 0.40;
+        for (int i = 0; i < rings; i++){
+            double ang = t + (6.283185307179586 * (double) i / (double) rings);
+            double r = (isAnim ? 0.55 : 0.45) + ws.rand.nextDouble() * 0.30;
+            double px = cx + Math.cos(ang) * r;
+            double pz = cz + Math.sin(ang) * r;
+            double py = cy + (ws.rand.nextDouble() * 0.18 - 0.09);
+            try {
+                ws.func_147487_a("flame", px, py, pz, 1, 0.02, 0.02, 0.02, 0.0);
+                ws.func_147487_a("smoke", px, py, pz, 1, 0.02, 0.02, 0.02, 0.0);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private static float computeDarkfireEmberDetonationDamage(EntityPlayer owner, boolean isAnim){
+        double sum = 0.0D;
+        try {
+            HexPlayerStats.Snapshot s = HexPlayerStats.snapshot(owner);
+            if (s != null){
+                sum = s.getStatEffective("str") + s.getStatEffective("wil");
+            }
+        } catch (Throwable ignored) {}
+
+        float dmg = DARKFIRE_EMBER_DETONATE_BASE_DMG;
+        if (sum > 0.0D){
+            dmg += (float)(Math.sqrt(sum) * (double)DARKFIRE_EMBER_DETONATE_SQRT_SCALE);
+        }
+        if (isAnim) dmg *= DARKFIRE_EMBER_ANIM_MULT;
+        if (dmg > DARKFIRE_EMBER_DETONATE_DMG_CAP) dmg = DARKFIRE_EMBER_DETONATE_DMG_CAP;
+        if (dmg < 1f) dmg = 1f;
+        return dmg;
+    }
+
+    private static float computeDarkfireEmberDetonationRadius(EntityPlayer owner){
+        double sum = 0.0D;
+        try {
+            HexPlayerStats.Snapshot s = HexPlayerStats.snapshot(owner);
+            if (s != null){
+                sum = s.getStatEffective("str") + s.getStatEffective("wil");
+            }
+        } catch (Throwable ignored) {}
+
+        float r = DARKFIRE_EMBER_DETONATE_RADIUS_BASE;
+        if (sum > 0.0D){
+            r += (float)(Math.sqrt(sum) * (double)DARKFIRE_EMBER_DETONATE_RADIUS_SQRT_SCALE);
+        }
+        if (r > DARKFIRE_EMBER_DETONATE_RADIUS_CAP) r = DARKFIRE_EMBER_DETONATE_RADIUS_CAP;
+        if (r < 1.5f) r = 1.5f;
+        return r;
+    }
+
+    private static void spawnDarkfireEmberDetonationParticles(World w, double cx, double cy, double cz, float radius, boolean isAnim){
+        if (!(w instanceof WorldServer)) return;
+        WorldServer ws = (WorldServer) w;
+
+        try {
+            ws.func_147487_a("lava", cx, cy, cz, isAnim ? 18 : 12, 0.35, 0.25, 0.35, 0.02);
+            ws.func_147487_a("flame", cx, cy, cz, isAnim ? 28 : 18, 0.65, 0.45, 0.65, 0.03);
+            ws.func_147487_a("smoke", cx, cy, cz, isAnim ? 22 : 14, 0.75, 0.50, 0.75, 0.02);
+            ws.func_147487_a("mobSpell", cx, cy, cz, isAnim ? 20 : 14, 1.0, 0.28, 0.05, 0.90);
+        } catch (Throwable ignored) {}
+
+        // ring burst
+        int rings = isAnim ? 16 : 12;
+        double t = (double) ws.getTotalWorldTime() * 0.30;
+        for (int i = 0; i < rings; i++){
+            double ang = t + (6.283185307179586 * (double) i / (double) rings);
+            double r = radius * (0.65 + 0.25 * ws.rand.nextDouble());
+            double px = cx + Math.cos(ang) * r;
+            double pz = cz + Math.sin(ang) * r;
+            double py = cy + (ws.rand.nextDouble() * 0.35 - 0.12);
+            try {
+                ws.func_147487_a("flame", px, py, pz, 2, 0.10, 0.08, 0.10, 0.01);
+                ws.func_147487_a("smoke", px, py, pz, 1, 0.10, 0.08, 0.10, 0.01);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    /**
+     * Server entrypoint: called from PacketFracturedAction when the player uses the 10% Ember mark shot.
+     * This method ONLY consumes charge. The caller is responsible for doing a hit test and applying marks.
+     */
+    public static boolean tryConsumeDarkfireEmberMarkShot(net.minecraft.entity.player.EntityPlayerMP p){
+        if (p == null || p.worldObj == null) return false;
+        if (p.worldObj.isRemote) return false;
+
+        ItemStack held = getHeldDarkfirePill(p);
+        if (held == null) return false;
+        if (!isHeldDarkfireEmberDetonation(held)) return false;
+
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null) return false;
+
+        // per-shot spam guard
+        long now = serverNow(p.worldObj);
+        NBTTagCompound pdata = p.getEntityData();
+        if (pdata != null){
+            long next = pdata.getLong("HexDF_EmberNextFire");
+            if (now < next) return false;
+            pdata.setLong("HexDF_EmberNextFire", now + (long)Math.max(1, DARKFIRE_EMBER_FIRE_COOLDOWN_T));
+        }
+        int max = tag.hasKey(DARKFIRE_TAG_CHARGE_MAX) ? tag.getInteger(DARKFIRE_TAG_CHARGE_MAX) : DARKFIRE_SS_CHARGE_MAX;
+        if (max <= 0) max = DARKFIRE_SS_CHARGE_MAX;
+
+        int cost = (int) Math.ceil((double) max * ((double) Math.max(1, DARKFIRE_EMBER_MARK_COST_PCT) / 100.0D));
+        if (cost < 1) cost = 1;
+
+        int cur = tag.hasKey(DARKFIRE_TAG_CHARGE) ? tag.getInteger(DARKFIRE_TAG_CHARGE) : 0;
+        if (cur < 0) cur = 0;
+        if (cur < cost) return false;
+
+        consumeDarkfireChargeAndSync(p, held, cost, max);
+        return true;
+    }
+
+    /** Apply mark(s) on impact. Does NOT consume charge. */
+    public static void applyDarkfireEmberMarkImpact(net.minecraft.entity.player.EntityPlayerMP owner,
+                                                    EntityLivingBase center,
+                                                    boolean multi){
+        if (owner == null || center == null) return;
+        World w = owner.worldObj;
+        if (w == null || w.isRemote) return;
+
+        ItemStack held = getHeldDarkfirePill(owner);
+        if (held == null) return;
+        if (!isHeldDarkfireEmberDetonation(held)) return;
+
+        boolean isAnim = false;
+        try { isAnim = isDarkfireAnim(held); } catch (Throwable ignored) {}
+
+        long now = serverNow(w);
+        long expire = now + (long) Math.max(20, DARKFIRE_EMBER_MARK_DURATION_TICKS);
+
+        float radius = multi ? DARKFIRE_EMBER_MARK_RADIUS_MULTI : DARKFIRE_EMBER_MARK_RADIUS;
+        int maxTargets = multi ? DARKFIRE_EMBER_MARK_MAX_TARGETS_MULTI : DARKFIRE_EMBER_MARK_MAX_TARGETS;
+
+        // Always mark the impact target
+        if (applyDarkfireEmberMarkSingle(owner, center, isAnim, now, expire)){
+            trackDarkfireEmberMarkOnOwner(owner, center.getEntityId(), expire, isAnim);
+        }
+
+        // AoE "grab" around impact
+        AxisAlignedBB box = AxisAlignedBB.getBoundingBox(
+                center.posX - (double) radius, center.posY - (double) radius, center.posZ - (double) radius,
+                center.posX + (double) radius, center.posY + (double) radius, center.posZ + (double) radius
+        );
+
+        java.util.List list = null;
+        try { list = w.getEntitiesWithinAABB(EntityLivingBase.class, box); } catch (Throwable ignored) {}
+        if (list == null) list = java.util.Collections.emptyList();
+
+        int added = 0;
+        for (int i = 0; i < list.size() && added < maxTargets; i++){
+            Object o = list.get(i);
+            if (!(o instanceof EntityLivingBase)) continue;
+            EntityLivingBase t = (EntityLivingBase) o;
+            if (t == center) continue;
+            if (t.isDead) continue;
+
+            if (applyDarkfireEmberMarkSingle(owner, t, isAnim, now, expire)){
+                trackDarkfireEmberMarkOnOwner(owner, t.getEntityId(), expire, isAnim);
+                added++;
+            }
+        }
+
+        // impact VFX
+        spawnDarkfireEmberMarkParticles(w,
+                center.posX,
+                center.posY + (double)(center.height * 0.55F),
+                center.posZ,
+                isAnim
+        );
+
+        try {
+            w.playSoundEffect(center.posX, center.posY, center.posZ, "fire.ignite", 0.8F, isAnim ? 1.15F : 0.95F);
+        } catch (Throwable ignored) {}
+    }
+
+    /** Detonate all current Ember marks owned by this player. Called after holding the action key ~5s client-side. */
+    public static void detonateDarkfireEmberMarks(net.minecraft.entity.player.EntityPlayerMP owner){
+        if (owner == null || owner.worldObj == null) return;
+        World w = owner.worldObj;
+        if (w.isRemote) return;
+
+
+        ItemStack held = getHeldDarkfirePill(owner);
+        if (held == null || !isHeldDarkfireEmberDetonation(held)) return;
+        NBTTagCompound pdata = owner.getEntityData();
+        if (pdata == null) return;
+        if (!pdata.hasKey(DFEM_LIST_KEY, 9)) return;
+
+        NBTTagList list = null;
+        try { list = pdata.getTagList(DFEM_LIST_KEY, 10); } catch (Throwable ignored) {}
+        if (list == null || list.tagCount() <= 0) return;
+
+        // server-side safety: detonation should require sneaking
+        if (!owner.isSneaking()) return;
+
+        // Stamp cooldown onto the held pill so the client HUD can display it.
+        try {
+            NBTTagCompound tag = held.getTagCompound();
+            if (tag == null) { tag = new NBTTagCompound(); held.setTagCompound(tag); }
+            long startTick = w.getTotalWorldTime();
+            long cd = (long)Math.max(0, DARKFIRE_EMBER_DETONATE_COOLDOWN_TICKS);
+            tag.setLong(DFEM_CD_START, startTick);
+            tag.setLong(DFEM_CD_END, startTick + cd);
+            tag.setLong(DFEM_CD_MAX, cd);
+        } catch (Throwable ignored) {}
+
+        long now = serverNow(w);
+        int oid = owner.getEntityId();
+
+        // Copy to avoid mutating while iterating
+        java.util.ArrayList<NBTTagCompound> marks = new java.util.ArrayList<NBTTagCompound>();
+        for (int i = 0; i < list.tagCount(); i++){
+            NBTTagCompound e = list.getCompoundTagAt(i);
+            if (e != null) marks.add(e);
+        }
+
+        // clear list immediately to prevent re-entry spam; detonation validates each target anyway
+        pdata.setTag(DFEM_LIST_KEY, new NBTTagList());
+
+        for (int i = 0; i < marks.size(); i++){
+            NBTTagCompound e = marks.get(i);
+            if (e == null) continue;
+
+            int id = e.getInteger(DFEM_LIST_ID);
+            long exp = e.getLong(DFEM_LIST_EXP);
+            boolean isAnim = (e.getByte(DFEM_LIST_ANIM) != 0);
+
+            if (id <= 0 || exp <= 0L) continue;
+            if (now >= exp) continue;
+
+            Entity ent = null;
+            try { ent = w.getEntityByID(id); } catch (Throwable ignored) {}
+            if (!(ent instanceof EntityLivingBase)) continue;
+            EntityLivingBase center = (EntityLivingBase) ent;
+            if (center.isDead) continue;
+
+            NBTTagCompound td = center.getEntityData();
+            if (td == null) continue;
+
+            int curOwner = td.getInteger(DFEM_KEY_OWNER);
+            long curExp = td.getLong(DFEM_KEY_EXPIRE);
+            if (curOwner != oid) continue;
+            if (curExp <= 0L || now >= curExp) continue;
+
+            float dmg = computeDarkfireEmberDetonationDamage(owner, isAnim);
+            float radius = computeDarkfireEmberDetonationRadius(owner);
+
+            // center impact
+            spawnDarkfireEmberDetonationParticles(w,
+                    center.posX,
+                    center.posY + (double)(center.height * 0.45F),
+                    center.posZ,
+                    radius,
+                    isAnim
+            );
+            try {
+                w.playSoundEffect(center.posX, center.posY, center.posZ, "random.explode", 1.0F, isAnim ? 1.05F : 0.95F);
+            } catch (Throwable ignored) {}
+
+            // AoE damage (full on center, slightly reduced on nearby)
+            AxisAlignedBB box = AxisAlignedBB.getBoundingBox(
+                    center.posX - (double) radius, center.posY - (double) radius, center.posZ - (double) radius,
+                    center.posX + (double) radius, center.posY + (double) radius, center.posZ + (double) radius
+            );
+
+            java.util.List victims = null;
+            try { victims = w.getEntitiesWithinAABB(EntityLivingBase.class, box); } catch (Throwable ignored) {}
+            if (victims == null) victims = java.util.Collections.emptyList();
+
+            for (int v = 0; v < victims.size(); v++){
+                Object o = victims.get(v);
+                if (!(o instanceof EntityLivingBase)) continue;
+                EntityLivingBase t = (EntityLivingBase) o;
+                if (t == null || t.isDead) continue;
+                if (t == owner) continue;
+
+                double dx = t.posX - center.posX;
+                double dy = (t.posY + (double)(t.height * 0.50F)) - (center.posY + (double)(center.height * 0.50F));
+                double dz = t.posZ - center.posZ;
+                double dd = dx*dx + dy*dy + dz*dz;
+                if (dd > (double)(radius*radius)) continue;
+
+                float mult = (t == center) ? 1.0F : 0.85F;
+                float dealt = dmg * mult;
+
+                // Apply DBC body damage when possible, vanilla fallback otherwise
+                try {
+                    NS_LOCAL_DBC_APPLIER.deal(owner, t, dealt);
+                } catch (Throwable tEx){
+                    try { t.attackEntityFrom(hexOrbDamageSource(owner), dealt); } catch (Throwable ignored) {}
+                }
+            }
+
+            // Clear mark on this target
+            clearDarkfireEmberMark(td);
+        }
+    }
+
+    /** Charge gain when the player hits something (melee-ish). Throttled so Attack+Hurt doesn't double count. */
+    private static void gainDarkfireShadowSpreadOnHit(EntityPlayer p, World w, NBTTagCompound data, long now){
+        if (p == null || w == null || data == null || w.isRemote) return;
+
+        ItemStack held = getHeldDarkfirePill(p);
+        if (held == null) return;
+        if (!isHeldDarkfireShadowSpread(held)) return;
+
+        long next = data.getLong(DFSS_KEY_NEXT_HIT_GAIN);
+        if (now < next) return;
+        // 1-tick throttle (Attack+Hurt usually same tick)
+        data.setLong(DFSS_KEY_NEXT_HIT_GAIN, now + 1);
+
+        int gain = DARKFIRE_SS_ON_HIT_GAIN;
+        if (roll(p, DARKFIRE_SS_ON_HIT_BIG_CHANCE)){
+            gain += DARKFIRE_SS_ON_HIT_BIG_BONUS;
+        }
+
+        addDarkfireChargeAndSync(p, held, gain, DARKFIRE_SS_CHARGE_MAX);
+    }
+
+    /** Charge gain when the player is hit (any damage). Throttled so multiple phases don't double count. */
+    private static void gainDarkfireShadowSpreadOnGotHit(EntityPlayer p, World w, NBTTagCompound data, long now){
+        if (p == null || w == null || data == null || w.isRemote) return;
+
+        ItemStack held = getHeldDarkfirePill(p);
+        if (held == null) return;
+        if (!isHeldDarkfireShadowSpread(held)) return;
+
+        long next = data.getLong(DFSS_KEY_NEXT_GOTHIT_GAIN);
+        if (now < next) return;
+        data.setLong(DFSS_KEY_NEXT_GOTHIT_GAIN, now + 1);
+
+        int gain = DARKFIRE_SS_ON_GOTHIT_GAIN;
+        if (roll(p, DARKFIRE_SS_ON_GOTHIT_BIG_CHANCE)){
+            gain += DARKFIRE_SS_ON_GOTHIT_BIG_BONUS;
+        }
+
+        addDarkfireChargeAndSync(p, held, gain, DARKFIRE_SS_CHARGE_MAX);
+    }
+
+
+    // -------------------------------------------------------------
+    // DARKFIRE - Passive Type: Cinder Weakness (outgoing damage down)
+    // -------------------------------------------------------------
+
+    private static boolean isHeldDarkfireCinderWeakness(ItemStack held){
+        if (held == null) return false;
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null) return false;
+        String t = tag.getString(DARKFIRE_TAG_TYPE);
+        if (t == null) return false;
+        return DARKFIRE_TYPE_CINDER_WEAKNESS.equalsIgnoreCase(t.trim());
+    }
+
+    private static boolean isCinderWeakened(EntityLivingBase ent, long now){
+        if (ent == null) return false;
+        NBTTagCompound d = ent.getEntityData();
+        if (d == null) return false;
+        long until = 0L;
+        try { until = d.getLong(DF_CINDER_WEAK_UNTIL_T); } catch (Throwable ignored) {}
+        return until > now;
+    }
+
+    // -------------------------------
+// CINDER: DBC victim detection
+// -------------------------------
+    private static boolean isDbcBodyVictim(EntityLivingBase victim) {
+        if (!(victim instanceof EntityPlayer)) return false;
+        try {
+            EntityPlayer p = (EntityPlayer) victim;
+            NBTTagCompound root = p.getEntityData();
+            for (String k : DBC_BODY_CUR_KEYS) {
+                if (root.hasKey(k)) return true;
+                try {
+                    NBTTagCompound pp = root.getCompoundTag("PlayerPersisted");
+                    if (pp != null && pp.hasKey(k)) return true;
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    // -------------------------------
+// CINDER: CustomNPCs melee strength nerf (best-effort, reflection-only)
+// -------------------------------
+    private static boolean isCustomNpcEntity(EntityLivingBase e) {
+        if (e == null) return false;
+        try {
+            String n = e.getClass().getName();
+            return n != null && (n.startsWith("noppes.npcs.") || n.contains(".npcs."));
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static void applyCinderNpcMeleeStrengthNerf(EntityLivingBase target, NBTTagCompound d) {
+        if (target == null || d == null) return;
+        if (!isCustomNpcEntity(target)) return;
+
+        try {
+            if (d.getBoolean(DF_CINDER_NPC_MS_APPLIED)) return;
+
+            Float cur = tryGetCnpcsMeleeStrength(target);
+            if (cur == null) return;
+
+            d.setFloat(DF_CINDER_NPC_MS_ORIG, cur.floatValue());
+            float nerfed = cur.floatValue() * DARKFIRE_CINDER_OUTGOING_MULT;
+            if (nerfed < 0F) nerfed = 0F;
+            if (trySetCnpcsMeleeStrength(target, nerfed)) {
+                d.setBoolean(DF_CINDER_NPC_MS_APPLIED, true);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void restoreCinderNpcMeleeStrengthIfNeeded(EntityLivingBase target, NBTTagCompound d, long now) {
+        if (target == null || d == null) return;
+        boolean applied = false;
+        long until = 0L;
+        try { applied = d.getBoolean(DF_CINDER_NPC_MS_APPLIED); } catch (Throwable ignored) {}
+        if (!applied) return;
+
+        try { until = d.getLong(DF_CINDER_WEAK_UNTIL_T); } catch (Throwable ignored) {}
+        if (until != 0L && now < until) return;
+
+        try {
+            float orig = d.getFloat(DF_CINDER_NPC_MS_ORIG);
+            trySetCnpcsMeleeStrength(target, orig);
+        } catch (Throwable ignored) {}
+
+        try {
+            d.removeTag(DF_CINDER_NPC_MS_APPLIED);
+            d.removeTag(DF_CINDER_NPC_MS_ORIG);
+        } catch (Throwable ignored) {}
+    }
+
+    private static Object reflectGetField(Object obj, String fieldName) {
+        if (obj == null || fieldName == null) return null;
+        Class<?> c = obj.getClass();
+        while (c != null) {
+            try {
+                java.lang.reflect.Field f = c.getDeclaredField(fieldName);
+                f.setAccessible(true);
+                return f.get(obj);
+            } catch (Throwable ignored) {}
+            c = c.getSuperclass();
+        }
+        return null;
+    }
+
+    private static Float reflectGetNumberField(Object obj, String[] names) {
+        if (obj == null || names == null) return null;
+        for (String n : names) {
+            if (n == null) continue;
+            Class<?> c = obj.getClass();
+            while (c != null) {
+                try {
+                    java.lang.reflect.Field f = c.getDeclaredField(n);
+                    f.setAccessible(true);
+                    Object v = f.get(obj);
+                    if (v instanceof Number) return ((Number) v).floatValue();
+                } catch (Throwable ignored) {}
+                c = c.getSuperclass();
+            }
+        }
+        return null;
+    }
+
+    private static boolean reflectSetNumberField(Object obj, String[] names, float value) {
+        if (obj == null || names == null) return false;
+        for (String n : names) {
+            if (n == null) continue;
+            Class<?> c = obj.getClass();
+            while (c != null) {
+                try {
+                    java.lang.reflect.Field f = c.getDeclaredField(n);
+                    f.setAccessible(true);
+                    Class<?> t = f.getType();
+                    if (t == int.class || t == Integer.class) { f.setInt(obj, (int)Math.floor(value)); return true; }
+                    if (t == float.class || t == Float.class) { f.setFloat(obj, value); return true; }
+                    if (t == double.class || t == Double.class) { f.setDouble(obj, (double)value); return true; }
+                    if (t == short.class || t == Short.class) { f.setShort(obj, (short)((int)Math.floor(value))); return true; }
+                    if (t == long.class || t == Long.class) { f.setLong(obj, (long)Math.floor(value)); return true; }
+                } catch (Throwable ignored) {}
+                c = c.getSuperclass();
+            }
+        }
+        return false;
+    }
+
+    private static Float tryGetCnpcsMeleeStrength(EntityLivingBase npc) {
+        try {
+            Object stats = reflectGetField(npc, "stats");
+            if (stats == null) return null;
+
+            Object melee = reflectGetField(stats, "melee");
+            if (melee != null) {
+                Float v = reflectGetNumberField(melee, new String[]{"strength","damage","attackStrength","power","meleeStrength"});
+                if (v != null) return v;
+            }
+
+            return reflectGetNumberField(stats, new String[]{"meleeStrength","melee_damage","meleeDamage","attackStrength"});
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static boolean trySetCnpcsMeleeStrength(EntityLivingBase npc, float value) {
+        try {
+            Object stats = reflectGetField(npc, "stats");
+            if (stats == null) return false;
+
+            Object melee = reflectGetField(stats, "melee");
+            if (melee != null) {
+                if (reflectSetNumberField(melee, new String[]{"strength","damage","attackStrength","power","meleeStrength"}, value)) return true;
+            }
+            return reflectSetNumberField(stats, new String[]{"meleeStrength","melee_damage","meleeDamage","attackStrength"}, value);
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+
+
+
+    // =============================================================
+    // DARKFIRE: Cinder Weakness outgoing damage nerf (refund style)
+    // =============================================================
+    private static final class CinderRefundJob {
+        final int dim;
+        final int victimId;
+        final int attackerId;
+        final boolean useBody;   // true if victim is a DBC player (Body)
+        final float mult;        // desired net multiplier (0..1)
+        final float body0;       // snapshot (pre-hit)
+        final float hp0;         // snapshot (pre-hit)
+        long dueT;               // world time to process
+        int tries;
+
+        CinderRefundJob(int dim, int victimId, int attackerId, boolean useBody, float mult, float body0, float hp0, long dueT){
+            this.dim = dim;
+            this.victimId = victimId;
+            this.attackerId = attackerId;
+            this.useBody = useBody;
+            this.mult = mult;
+            this.body0 = body0;
+            this.hp0 = hp0;
+            this.dueT = dueT;
+            this.tries = 0;
+        }
+    }
+
+    private static final java.util.ArrayDeque<CinderRefundJob> DF_CINDER_REFUND_Q = new java.util.ArrayDeque<CinderRefundJob>();
+    private static long DF_CINDER_REFUND_LAST_T = -1L;
+
+    /** Normalize outgoing mult. Accepts either 0..1, "1.25" meaning 25% less (common mistake), or percent 0..100. */
+    private static float sanitizeCinderOutgoingMult(float mult){
+        float m = mult;
+        // Safety: never allow values that would INCREASE outgoing damage.
+        if (m > 1.0F) {
+            // Common mistake: setting 1.25 for "25% less". Convert 1+pct -> 1-pct.
+            if (m <= 2.0F) m = 2.0F - m;
+                // If someone sets 25 for "25% less", treat as percent.
+            else if (m <= 100.0F) m = 1.0F - (m / 100.0F);
+        }
+        if (m < 0.0F) m = 0.0F;
+        if (m > 1.0F) m = 1.0F;
+        return m;
+    }
+
+    /** Schedule a refund-nerf for this hit (captures pre Body/HP immediately; refund is applied a couple ticks later). */
+    private static void scheduleCinderRefundNerf(EntityLivingBase attacker, EntityLivingBase victim, float mult, long now){
+        if (victim == null || victim.worldObj == null || victim.worldObj.isRemote) return;
+
+        int dim = 0;
+        try { dim = victim.worldObj.provider.dimensionId; } catch (Throwable ignored) {}
+
+        boolean useBody = false;
+        float body0 = -1F;
+        float hp0 = -1F;
+
+        if (victim instanceof EntityPlayer){
+            EntityPlayer vp = (EntityPlayer) victim;
+            body0 = getBodyCurSafe(vp);
+            if (body0 >= 0F) {
+                useBody = true;
+            } else {
+                hp0 = safeHealth(victim);
+            }
+        } else {
+            hp0 = safeHealth(victim);
+        }
+
+        long due = now + (long)Math.max(1, DARKFIRE_CINDER_REFUND_DELAY_T);
+
+        CinderRefundJob job = new CinderRefundJob(
+                dim,
+                victim.getEntityId(),
+                (attacker != null ? attacker.getEntityId() : -1),
+                useBody,
+                sanitizeCinderOutgoingMult(mult),
+                body0,
+                hp0,
+                due
+        );
+
+        // Safety cap: don't let the queue grow unbounded
+        int cap = Math.max(8, DARKFIRE_CINDER_REFUND_MAX_QUEUE);
+        while (DF_CINDER_REFUND_Q.size() >= cap) DF_CINDER_REFUND_Q.pollFirst();
+        DF_CINDER_REFUND_Q.addLast(job);
+    }
+
+    /** Run once per server tick (called from onLivingUpdate). */
+    private static void tickCinderRefundQueue(long now){
+        if (now == DF_CINDER_REFUND_LAST_T) return;
+        DF_CINDER_REFUND_LAST_T = now;
+
+        int maxPerTick = 64; // safety
+        while (maxPerTick-- > 0 && !DF_CINDER_REFUND_Q.isEmpty()){
+            CinderRefundJob job = DF_CINDER_REFUND_Q.peekFirst();
+            if (job == null) break;
+            if (job.dueT > now) break;
+            DF_CINDER_REFUND_Q.pollFirst();
+            tryProcessCinderRefund(job, now);
+        }
+    }
+
+    private static void tryProcessCinderRefund(CinderRefundJob job, long now){
+        if (job == null) return;
+
+        WorldServer ws = null;
+        try { ws = DimensionManager.getWorld(job.dim); } catch (Throwable ignored) {}
+        if (ws == null) return;
+
+        Entity ent = null;
+        try { ent = ws.getEntityByID(job.victimId); } catch (Throwable ignored) {}
+        if (!(ent instanceof EntityLivingBase)) return;
+
+        EntityLivingBase victim = (EntityLivingBase) ent;
+
+        boolean bodyMode = job.useBody && (victim instanceof EntityPlayer);
+        float dmg = 0F;
+        String mode = "HP";
+
+        if (bodyMode){
+            EntityPlayer vp = (EntityPlayer) victim;
+            float body1 = getBodyCurSafe(vp);
+            if (job.body0 >= 0F && body1 >= 0F) {
+                dmg = job.body0 - body1;
+                mode = "Body";
+            }
+        }
+
+        if (dmg <= 0F){
+            float hp1 = safeHealth(victim);
+            if (job.hp0 >= 0F && hp1 >= 0F) {
+                dmg = job.hp0 - hp1;
+                mode = "HP";
+            }
+        }
+
+        // Retry if DBC sync is late or damage got applied after the event
+        if (dmg <= 0.0001F && job.tries < Math.max(0, DARKFIRE_CINDER_REFUND_MAX_RETRIES)){
+            job.tries++;
+            job.dueT = now + 1L;
+            DF_CINDER_REFUND_Q.addLast(job);
+            return;
+        }
+
+        if (dmg <= 0.0001F) return;
+
+        float mult = sanitizeCinderOutgoingMult(job.mult);
+        float net = (float)Math.floor(dmg * mult);
+        float minNet = (float)Math.max(0, DARKFIRE_CINDER_REFUND_MIN_NET);
+        if (net < minNet) net = minNet;
+        if (net > dmg) net = dmg;
+
+        float refunded = dmg - net;
+        if (refunded <= 0.0001F) return;
+
+        // Don't revive unless allowed
+        if (!DARKFIRE_CINDER_REFUND_ALLOW_REVIVE){
+            if ("Body".equals(mode) && victim instanceof EntityPlayer){
+                float b1 = getBodyCurSafe((EntityPlayer)victim);
+                if (b1 <= 0F) return;
+            } else {
+                float h1 = safeHealth(victim);
+                if (h1 <= 0F) return;
+            }
+        }
+
+        boolean applied = false;
+
+        if ("Body".equals(mode) && victim instanceof EntityPlayer){
+            EntityPlayer vp = (EntityPlayer) victim;
+            float curB = getBodyCurSafe(vp);
+            if (curB >= 0F){
+                float maxB = getBodyMaxSafe(vp);
+                float newB = curB + refunded;
+                if (maxB > 0F) newB = Math.min(maxB, newB);
+                if (newB < 0F) newB = 0F;
+                applied = setBodyCurSafe(vp, newB);
+            }
+        } else {
+            float curH = safeHealth(victim);
+            if (curH >= 0F){
+                float maxH = -1F;
+                try { maxH = victim.getMaxHealth(); } catch (Throwable ignored) {}
+                float newH = curH + refunded;
+                if (maxH > 0F) newH = Math.min(maxH, newH);
+                if (newH < 0F) newH = 0F;
+                try { victim.setHealth(newH); applied = true; } catch (Throwable ignored) {}
+            }
+        }
+
+        // Debug: attacker/victim messages (hold SNEAK for spam)
+        if (applied){
+            try {
+                Entity a = ws.getEntityByID(job.attackerId);
+                if (a instanceof EntityPlayer){
+                    EntityPlayer ap = (EntityPlayer) a;
+                    darkfireDebug(ap, "§7[Darkfire] §cCinder Weakness §7hit nerfed on §f" + safeEntName(victim) +
+                            "§7: " + (int)dmg + " -> " + (int)net + " §8(refund " + (int)refunded + ", " + mode + ")");
+                }
+                if (victim instanceof EntityPlayer){
+                    EntityPlayer vp = (EntityPlayer) victim;
+                    if (cinderDebugVictim(vp, now)) {
+                        vp.addChatMessage(new ChatComponentText("§7[Darkfire] §cCinder Weakness §7damage softened: §f" + (int)dmg +
+                                "§7 -> §f" + (int)net + " §8(refund " + (int)refunded + ", " + mode + ")"));
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    // --- Body read/write helpers for refund ---
+
+    // Prefer live DBC values via JRMCoreH reflection (combat-updated), then fall back to NBT keys.
+    private static boolean JRM_BODY_LOOKUP_DONE = false;
+    private static java.lang.reflect.Method JRM_GET_INT_EP_STR = null;
+    private static java.lang.reflect.Method JRM_SET_INT_EP_STR_INT = null;
+
+    private static void ensureJrmBodyMethods(){
+        if (JRM_BODY_LOOKUP_DONE) return;
+        JRM_BODY_LOOKUP_DONE = true;
+        try {
+            Class<?> c = Class.forName("JinRyuu.JRMCore.JRMCoreH");
+            for (java.lang.reflect.Method m : c.getMethods()){
+                if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
+
+                String name = m.getName();
+                Class<?>[] pt = m.getParameterTypes();
+
+                if (JRM_GET_INT_EP_STR == null && "getInt".equals(name) && pt.length == 2){
+                    // Common: getInt(EntityPlayer, String)
+                    if (pt[0].isAssignableFrom(EntityPlayer.class) && pt[1] == String.class){
+                        JRM_GET_INT_EP_STR = m;
+                        continue;
+                    }
+                    // Some builds: getInt(String, EntityPlayer)
+                    if (pt[1].isAssignableFrom(EntityPlayer.class) && pt[0] == String.class){
+                        JRM_GET_INT_EP_STR = m;
+                        continue;
+                    }
+                }
+
+                if (JRM_SET_INT_EP_STR_INT == null && "setInt".equals(name) && pt.length == 3){
+                    boolean lastIsInt = (pt[2] == int.class || pt[2] == Integer.class);
+
+                    // Common: setInt(EntityPlayer, String, int)
+                    if (lastIsInt && pt[0].isAssignableFrom(EntityPlayer.class) && pt[1] == String.class){
+                        JRM_SET_INT_EP_STR_INT = m;
+                        continue;
+                    }
+                    // Some builds: setInt(String, EntityPlayer, int)
+                    if (lastIsInt && pt[1].isAssignableFrom(EntityPlayer.class) && pt[0] == String.class){
+                        JRM_SET_INT_EP_STR_INT = m;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+
+    private static int jrmGetIntSafe(EntityPlayer p, String key){
+        if (p == null || key == null) return Integer.MIN_VALUE;
+        ensureJrmBodyMethods();
+        if (JRM_GET_INT_EP_STR != null){
+            try {
+                Class<?>[] pt = JRM_GET_INT_EP_STR.getParameterTypes();
+                Object r;
+                if (pt.length == 2 && pt[0].isAssignableFrom(EntityPlayer.class)){
+                    r = JRM_GET_INT_EP_STR.invoke(null, p, key);
+                } else {
+                    r = JRM_GET_INT_EP_STR.invoke(null, key, p);
+                }
+                if (r instanceof Integer) return ((Integer) r).intValue();
+            } catch (Throwable ignored) {}
+        }
+        return Integer.MIN_VALUE;
+    }
+
+
+    private static boolean jrmSetIntSafe(EntityPlayer p, String key, int val){
+        if (p == null || key == null) return false;
+        ensureJrmBodyMethods();
+        if (JRM_SET_INT_EP_STR_INT != null){
+            try {
+                Class<?>[] pt = JRM_SET_INT_EP_STR_INT.getParameterTypes();
+                if (pt.length == 3 && pt[0].isAssignableFrom(EntityPlayer.class)){
+                    JRM_SET_INT_EP_STR_INT.invoke(null, p, key, val);
+                } else {
+                    JRM_SET_INT_EP_STR_INT.invoke(null, key, p, val);
+                }
+                return true;
+            } catch (Throwable ignored) {}
+        }
+        return false;
+    }
+
+    private static float getBodyCurSafe(EntityPlayer p){
+        if (p == null) return -1f;
+
+        // 1) Live (combat-updated) value via DBC core if available
+        for (String k : DBC_BODY_CUR_KEYS){
+            int v = jrmGetIntSafe(p, k);
+            if (v >= 0) return (float) v;
+        }
+
+        // 2) Fallback: NBT copies (may be stale on some installs, but better than nothing)
+        NBTTagCompound ed = p.getEntityData();
+        float body = readFirstNumber(ed, DBC_BODY_CUR_KEYS, Float.NaN);
+        if (body == body && body >= 0f) return body;
+
+        NBTTagCompound pp = getOrNull(ed, "PlayerPersisted");
+        body = readFirstNumber(pp, DBC_BODY_CUR_KEYS, Float.NaN);
+        if (body == body && body >= 0f) return body;
+
+        return -1f;
+    }
+
+
+    private static float getBodyMaxSafe(EntityPlayer p){
+        if (p == null) return -1f;
+
+        // 1) Live (combat-updated) max via DBC core if available
+        for (String k : DBC_BODY_MAX_KEYS){
+            int v = jrmGetIntSafe(p, k);
+            if (v > 0) return (float) v;
+        }
+
+        // 2) Fallback: NBT copies
+        NBTTagCompound ed = p.getEntityData();
+        float max = readFirstNumber(ed, DBC_BODY_MAX_KEYS, Float.NaN);
+        if (max == max && max > 0f) return max;
+
+        NBTTagCompound pp = getOrNull(ed, "PlayerPersisted");
+        max = readFirstNumber(pp, DBC_BODY_MAX_KEYS, Float.NaN);
+        if (max == max && max > 0f) return max;
+
+        return -1f;
+    }
+
+
+    private static boolean hasAnyKey(NBTTagCompound tag, String[] keys){
+        if (tag == null || keys == null) return false;
+        try {
+            for (String k : keys){
+                if (k != null && tag.hasKey(k)) return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static void setNumberLike(NBTTagCompound tag, String key, float val){
+        if (tag == null || key == null) return;
+        try {
+            NBTBase base = tag.getTag(key);
+            if (base instanceof NBTTagInt){
+                tag.setInteger(key, Math.round(val));
+            } else if (base instanceof NBTTagShort){
+                int v = Math.round(val);
+                if (v < Short.MIN_VALUE) v = Short.MIN_VALUE;
+                if (v > Short.MAX_VALUE) v = Short.MAX_VALUE;
+                tag.setShort(key, (short) v);
+            } else if (base instanceof NBTTagByte){
+                int v = Math.round(val);
+                if (v < Byte.MIN_VALUE) v = Byte.MIN_VALUE;
+                if (v > Byte.MAX_VALUE) v = Byte.MAX_VALUE;
+                tag.setByte(key, (byte) v);
+            } else if (base instanceof NBTTagLong){
+                tag.setLong(key, (long) Math.round(val));
+            } else if (base instanceof NBTTagDouble){
+                tag.setDouble(key, (double) val);
+            } else {
+                tag.setFloat(key, val); // default / float
+            }
+        } catch (Throwable ignored) {
+            try { tag.setFloat(key, val); } catch (Throwable ignored2) {}
+        }
+    }
+
+    private static boolean setBodyCurSafe(EntityPlayer p, float val){
+        if (p == null) return false;
+
+        // Clamp to [0, max]
+        float max = getBodyMaxSafe(p);
+        if (max > 0f && val > max) val = max;
+        if (val < 0f) val = 0f;
+
+        int iv = (int) Math.floor(val);
+
+        boolean ok = false;
+
+        // 1) Try to set live DBC value (preferred)
+        for (String k : DBC_BODY_CUR_KEYS){
+            ok |= jrmSetIntSafe(p, k, iv);
+        }
+
+        // 2) Also write to NBT copies (some installs read from here)
+        try {
+            NBTTagCompound root = p.getEntityData();
+            if (root != null){
+                for (String k : DBC_BODY_CUR_KEYS){
+                    root.setFloat(k, val);
+                }
+                NBTTagCompound pp = root.getCompoundTag("PlayerPersisted");
+                for (String k : DBC_BODY_CUR_KEYS){
+                    pp.setFloat(k, val);
+                }
+                root.setTag("PlayerPersisted", pp);
+                ok = true;
+            }
+        } catch (Throwable ignored) {}
+
+        return ok;
+    }
+
+    /** Ensures DBC Body is not above max (fixes rare overheal / restoreHealthPercent overshoot). */
+    private static void clampBodyToMax(EntityPlayer p){
+        if (p == null) return;
+        float max = getBodyMaxSafe(p);
+        if (max <= 0f) return;
+        float cur = getBodyCurSafe(p);
+        if (cur < 0f) return;
+        if (cur > max){
+            try { setBodyCurSafe(p, max); } catch (Throwable ignored) {}
+        }
+    }
+
+
+    // Alias used by VFX tick code (kept separate to avoid touching older call sites)
+    private static boolean isCinderWeaknessActive(EntityLivingBase ent, long now){
+        return isCinderWeakened(ent, now);
+    }
+
+
+    private static void applyCinderWeakness(EntityPlayer srcPlayer, EntityLivingBase target, long now){
+        if (srcPlayer == null || target == null) return;
+        if (target.worldObj == null || target.worldObj.isRemote) return;
+
+        // Cooldown rule:
+        // - Debuff lasts DARKFIRE_CINDER_DURATION_TICKS
+        // - Then the target is ineligible for another proc for DARKFIRE_CINDER_COOLDOWN_AFTER_TICKS
+        NBTTagCompound d;
+        try { d = target.getEntityData(); } catch (Throwable t) { return; }
+        if (d == null) return;
+
+        long nextEligible = 0L;
+        try { nextEligible = d.getLong(DF_CINDER_WEAK_NEXT_T); } catch (Throwable ignored) {}
+        if (now < nextEligible) return;
+
+        long duration = Math.max(1L, (long)DARKFIRE_CINDER_DURATION_TICKS);
+        long until = now + duration;
+
+        // Mark debuff window
+        try { d.setLong(DF_CINDER_WEAK_UNTIL_T, until);
+
+            // If this is a CustomNPC, try to nerf its melee strength (best-effort)
+            applyCinderNpcMeleeStrengthNerf(target, d); } catch (Throwable ignored) {}
+
+        // Next eligible time = AFTER debuff ends + cooldown (plus optional grace)
+        long cdAfter = Math.max(0L, (long)DARKFIRE_CINDER_COOLDOWN_AFTER_TICKS);
+        long next = until + cdAfter;
+        long grace = Math.max(0L, (long)DARKFIRE_CINDER_REAPPLY_GRACE_T);
+        if (grace > 0L) next = Math.max(next, now + grace);
+        try { d.setLong(DF_CINDER_WEAK_NEXT_T, next); } catch (Throwable ignored) {}
+
+        // Reset VFX ticker so it starts immediately
+        try { d.setLong(DF_CINDER_VFX_NEXT_T, 0L); } catch (Throwable ignored) {}
+
+        // Stamp HUD timers onto the held Darkfire pill so the client overlay can show Debuff/Cooldown bars.
+        try {
+            ItemStack held = getHeldDarkfirePill(srcPlayer);
+            if (held != null && isHeldDarkfireCinderWeakness(held)) {
+                int dMax = (duration > (long)Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int)duration;
+                int cdMax = (cdAfter > (long)Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int)cdAfter;
+                stampCinderHudTimers(srcPlayer, held, safeEntName(target), now, until, dMax, until, next, cdMax);
+            }
+        } catch (Throwable ignored) {}
+// Debug (hold SNEAK while testing): show proc + timers.
+        if (srcPlayer != null) {
+            int durS = (int)Math.ceil((duration) / 20.0);
+            int cdS = (int)Math.ceil((cdAfter) / 20.0);
+            darkfireDebug(srcPlayer, "§7[Darkfire] §cCinder Weakness §7applied to §f" + safeEntName(target) + "§7 (" + durS + "s, cd " + cdS + "s)");
+        }
+        if (target instanceof EntityPlayer) {
+            EntityPlayer tp = (EntityPlayer) target;
+            int durS = (int)Math.ceil((duration) / 20.0);
+            darkfireDebug(tp, "§7[Darkfire] §cCinder Weakness §7afflicted (" + durS + "s)");
+        }
+        // Visual-only burn: handled via particles in tickCinderWeaknessVfx (no ShadowBurnHandler here to avoid DoT).
+// Extra VFX ping so the passive is obvious even if DOT is tiny
+        try {
+            if (target.worldObj instanceof net.minecraft.world.WorldServer) {
+                net.minecraft.world.WorldServer ws = (net.minecraft.world.WorldServer) target.worldObj;
+                double px = target.posX;
+                double py = target.posY + (double) (target.height * 0.55F);
+                double pz = target.posZ;
+                ws.func_147487_a("portal", px, py, pz, 10, (double)(target.width * 0.35F), (double)(target.height * 0.45F), (double)(target.width * 0.35F), 0.05D);
+                ws.func_147487_a("mobSpell", px, py, pz, 8, (double)(target.width * 0.30F), (double)(target.height * 0.35F), (double)(target.width * 0.30F), 0.02D);
+                ws.func_147487_a("witchMagic", px, py, pz, 6, (double)(target.width * 0.30F), (double)(target.height * 0.30F), (double)(target.width * 0.30F), 0.02D);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** Spawns periodic particles on targets while Cinder Weakness is active (server-side). */
+    private static void tickCinderWeaknessVfx(World w, EntityLivingBase ent){
+        if (w == null || ent == null || w.isRemote) return;
+
+        long tNow = 0L;
+        try { tNow = serverNow(w); } catch (Throwable ignored) {}
+
+        if (!isCinderWeakened(ent, tNow)) {
+            // If a CustomNPC had its melee strength nerfed, restore when the debuff ends.
+            try {
+                NBTTagCompound d0 = ent.getEntityData();
+                if (d0 != null) restoreCinderNpcMeleeStrengthIfNeeded(ent, d0, tNow);
+            } catch (Throwable ignored) {}
+            return;
+        }
+
+        NBTTagCompound d;
+        try { d = ent.getEntityData(); } catch (Throwable t) { return; }
+        if (d == null) return;
+
+        long nextFx = 0L;
+        try { nextFx = d.getLong(DF_CINDER_VFX_NEXT_T); } catch (Throwable ignored) {}
+        if (tNow < nextFx) return;
+
+        // Continuous VFX while the debuff is active (every 2 ticks)
+        try { d.setLong(DF_CINDER_VFX_NEXT_T, tNow + 2L); } catch (Throwable ignored) {}
+
+        if (w instanceof WorldServer){
+            WorldServer ws = (WorldServer) w;
+            double px = ent.posX;
+            double py = ent.posY + (double)(ent.height * 0.55F);
+            double pz = ent.posZ;
+
+            // Void + purple/black spell visuals
+            ws.func_147487_a("portal", px, py, pz, 10, (double)(ent.width * 0.35F), (double)(ent.height * 0.45F), (double)(ent.width * 0.35F), 0.05D);
+            ws.func_147487_a("mobSpell", px, py, pz, 8, (double)(ent.width * 0.30F), (double)(ent.height * 0.35F), (double)(ent.width * 0.30F), 0.02D);
+            ws.func_147487_a("witchMagic", px, py, pz, 6, (double)(ent.width * 0.30F), (double)(ent.height * 0.30F), (double)(ent.width * 0.30F), 0.02D);
+        }
+    }
+
+
+    /** Passive proc: on melee-ish hit, has a chance to apply Cinder Weakness to the target. */
+    private static void tryProcDarkfireCinderWeakness(EntityPlayer p, EntityLivingBase target){
+        if (p == null || target == null) return;
+        if (p.worldObj == null || p.worldObj.isRemote) return;
+        if (target.isDead) return;
+
+        // Must be holding a Darkfire pill and have Cinder Weakness selected
+        ItemStack held = getHeldDarkfirePill(p);
+        if (held == null) return;
+        if (!isHeldDarkfireCinderWeakness(held)) return;
+
+        // Respect affect-players knob
+        if (!DARKFIRE_CINDER_AFFECT_PLAYERS && (target instanceof EntityPlayer)) return;
+
+        // Roll chance
+        if (!roll(p, DARKFIRE_CINDER_PROC_CHANCE)) return;
+
+        long now = serverNow(p.worldObj);
+        applyCinderWeakness(p, target, now);
+    }
+
+
+
+
+    /**
+     * DBC often reports 0/near-0 "vanilla" damage amounts even when Body is being reduced.
+     * For Ashen Lifesteal we need a non-zero proxy so the heal/bonus doesn't silently do nothing.
+     */
+    private static float estimateAshenDamageForHeal(EntityPlayer p){
+        if (p == null) return 0f;
+
+        double est = 0.0;
+
+        // Vanilla attribute fallback
+        try {
+            net.minecraft.entity.ai.attributes.IAttributeInstance ad =
+                    p.getEntityAttribute(net.minecraft.entity.SharedMonsterAttributes.attackDamage);
+            if (ad != null){
+                est = Math.max(est, ad.getAttributeValue());
+            }
+        } catch (Throwable ignored) {}
+
+        // DBC strength proxy (kept intentionally conservative; heal is capped per-hit anyway)
+        try {
+            double str = getStrengthEffective(p);
+            if (str > 0.0){
+                est = Math.max(est, str * 0.02D); // 2% of STR as a rough melee proxy
+            }
+        } catch (Throwable ignored) {}
+
+        // Minimum so the effect is observable in edge cases
+        if (est < 1.0D) est = 2.0D;
+
+        // Safety clamp
+        if (est > 250000.0D) est = 250000.0D;
+
+        return (float) est;
+    }
+
+    // -------------------------------------------------------------
+    // ASHEN: DBC damage amount can be 0 in Forge events.
+    // We snapshot the target's Body/HP now and apply bonus+lifesteal
+    // next tick using the actual delta. This makes Ashen work on
+    // DBC entities (players/mobs) the same way it works on CNPCs.
+    // -------------------------------------------------------------
+
+    private static boolean isLikelyDbcLikeTarget(EntityLivingBase e){
+        if (e == null) return false;
+
+        // DBC players expose Body via JRM keys / bridge
+        if (e instanceof EntityPlayer){
+            try {
+                float mx = getBodyMaxSafe((EntityPlayer) e);
+                if (mx > 0f) return true;
+            } catch (Throwable ignored) {}
+        }
+
+        // Heuristic: many DBC entities live in JinRyuu packages or have telltale classnames
+        try {
+            String cn = e.getClass().getName();
+            if (cn != null){
+                String l = cn.toLowerCase();
+                if (l.contains("jinryuu") || l.contains("dragonblock") || l.contains("jrm") || l.contains("dbc")) return true;
+                if (l.contains("entitynpcshadow")) return true; // your Shadow Dummy style entities
+            }
+            String sn = e.getClass().getSimpleName();
+            if (sn != null){
+                String ls = sn.toLowerCase();
+                if (ls.contains("entitynpcshadow")) return true;
+            }
+        } catch (Throwable ignored) {}
+
+        // Some bridged entities store Body keys in entity data
+        try {
+            NBTTagCompound d = e.getEntityData();
+            if (d != null){
+                if (hasAnyKey(d, DBC_BODY_CUR_KEYS) || hasAnyKey(d, DBC_BODY_MAX_KEYS)) return true;
+            }
+        } catch (Throwable ignored) {}
+
+        return false;
+    }
+
+    private static float getDbcBodyCurAny(EntityLivingBase e){
+        if (e == null) return -1f;
+        if (e instanceof EntityPlayer){
+            try { return getBodyCurSafe((EntityPlayer) e); } catch (Throwable ignored) {}
+            return -1f;
+        }
+        try {
+            NBTTagCompound d = e.getEntityData();
+            if (d == null) return -1f;
+
+            // try common keys used by the DBC bridge / addons
+            for (int i = 0; i < DBC_BODY_CUR_KEYS.length; i++){
+                String k = DBC_BODY_CUR_KEYS[i];
+                if (k == null || k.length() == 0) continue;
+                if (!d.hasKey(k)) continue;
+
+                try { return d.getFloat(k); } catch (Throwable ignored) {}
+                try { return (float) d.getDouble(k); } catch (Throwable ignored) {}
+                try { return (float) d.getInteger(k); } catch (Throwable ignored) {}
+                try {
+                    String s = d.getString(k);
+                    if (s != null && s.length() > 0){
+                        return Float.parseFloat(s);
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+        return -1f;
+    }
+
+
+    /**
+     * Apply Ashen bonus damage in a DBC-compatible way.
+     * - For DBC players: reduce Body directly (attackEntityFrom often doesn't affect Body for custom sources).
+     * - Otherwise: fall back to the normal proc damage path.
+     */
+    /**
+     * Apply Ashen bonus damage in a DBC-compatible way.
+     * - For DBC players: reduce Body directly (custom proc sources often won't affect Body).
+     * - For other DBC-like entities that expose Body keys in entity NBT: reduce that numeric value.
+     * - Otherwise: fall back to the normal proc damage path.
+     */
+    private static void applyAshenExtraDamage(EntityPlayer attacker, EntityLivingBase target, float extra){
+        if (attacker == null || target == null) return;
+        if (extra <= 0f) return;
+
+        // 1) DBC player victims: apply directly to Body
+        if (target instanceof EntityPlayer){
+            EntityPlayer vp = (EntityPlayer) target;
+            try {
+                float maxB = getBodyMaxSafe(vp);
+                float curB = getBodyCurSafe(vp);
+                if (maxB > 0f && curB >= 0f){
+                    try { vp.hurtResistantTime = 0; vp.hurtTime = 0; } catch (Throwable ignored) {}
+                    setBodyCurSafe(vp, curB - extra);
+                    return;
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        // 2) Some non-player DBC entities store "Body" on entity NBT. Only touch it if keys already exist.
+        try {
+            NBTTagCompound d = target.getEntityData();
+            if (d != null && hasAnyKey(d, DBC_BODY_CUR_KEYS)){
+                float cur = getDbcBodyCurAny(target);
+                if (cur >= 0f){
+                    float nv = cur - extra;
+                    if (nv < 0f) nv = 0f;
+                    for (String k : DBC_BODY_CUR_KEYS){
+                        if (d.hasKey(k)){
+                            writeNumericLikeExisting(d, k, nv);
+                        }
+                    }
+                    try { target.hurtResistantTime = 0; target.hurtTime = 0; } catch (Throwable ignored) {}
+                    return;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        // 3) Fallback: vanilla / configured proc damage
+        dealProcDamage(attacker, target, extra, "darkfire.ashen.extra");
+    }
+
+
+    private static void queueAshenPendingHit(EntityPlayer attacker, EntityLivingBase target, long now){
+        if (attacker == null || target == null) return;
+        try {
+            NBTTagCompound td = target.getEntityData();
+            if (td == null) return;
+
+            NBTTagCompound pend;
+            if (td.hasKey(DF_ASHEN_PEND_TAG, 10)){
+                pend = td.getCompoundTag(DF_ASHEN_PEND_TAG);
+            } else {
+                pend = new NBTTagCompound();
+                td.setTag(DF_ASHEN_PEND_TAG, pend);
+            }
+
+            String key = String.valueOf(attacker.getEntityId());
+
+            NBTTagCompound one = new NBTTagCompound();
+            one.setLong("t0", now);
+
+            float b0 = getDbcBodyCurAny(target);
+            if (b0 >= 0f) one.setFloat("b0", b0);
+
+            float h0 = safeHealth(target);
+            if (h0 >= 0f) one.setFloat("h0", h0);
+
+            // fallback so the effect is still observable if delta can't be computed
+            float hint = estimateAshenDamageForHeal(attacker);
+            if (hint > 0f) one.setFloat("hint", hint);
+
+            pend.setTag(key, one);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void tickDarkfireAshenPending(EntityLivingBase target, NBTTagCompound data, World w, long now){
+        if (target == null || data == null) return;
+        if (w == null || w.isRemote) return;
+        if (!data.hasKey(DF_ASHEN_PEND_TAG, 10)) return;
+
+        NBTTagCompound pend = null;
+        try { pend = data.getCompoundTag(DF_ASHEN_PEND_TAG); } catch (Throwable ignored) {}
+        if (pend == null) return;
+
+        java.util.Set keys;
+        try { keys = pend.func_150296_c(); } catch (Throwable ignored) { keys = null; }
+        if (keys == null || keys.isEmpty()){
+            try { data.removeTag(DF_ASHEN_PEND_TAG); } catch (Throwable ignored) {}
+            return;
+        }
+
+        java.util.ArrayList<String> kcopy = new java.util.ArrayList<String>();
+        try {
+            for (Object o : keys){
+                if (o == null) continue;
+                kcopy.add(String.valueOf(o));
+            }
+        } catch (Throwable ignored) {}
+
+        if (kcopy.isEmpty()) return;
+
+        for (int i = 0; i < kcopy.size(); i++){
+            String k = kcopy.get(i);
+            if (k == null || k.length() == 0) continue;
+
+            NBTTagCompound one = null;
+            try { one = pend.getCompoundTag(k); } catch (Throwable ignored) {}
+            if (one == null) { try { pend.removeTag(k); } catch (Throwable ignored) {} continue; }
+
+            long t0 = 0L;
+            try { t0 = one.getLong("t0"); } catch (Throwable ignored) {}
+            if (t0 <= 0L) { try { pend.removeTag(k); } catch (Throwable ignored) {} continue; }
+
+            // Wait at least 1 server tick so the damage has actually applied
+            if (now <= t0) continue;
+
+            int attackerId = -1;
+            try { attackerId = Integer.parseInt(k); } catch (Throwable ignored) {}
+            if (attackerId < 0) { try { pend.removeTag(k); } catch (Throwable ignored) {} continue; }
+
+            Entity ent = null;
+            try { ent = w.getEntityByID(attackerId); } catch (Throwable ignored) {}
+            if (!(ent instanceof EntityPlayer)){
+                try { pend.removeTag(k); } catch (Throwable ignored) {}
+                continue;
+            }
+
+            EntityPlayer attacker = (EntityPlayer) ent;
+
+            // Must still have Ashen selected
+            ItemStack held = getEquippedDarkfirePillForPassive(attacker);
+            if (held == null || !isHeldDarkfireAshenLifesteal(held)){
+                try { pend.removeTag(k); } catch (Throwable ignored) {}
+                continue;
+            }
+
+            // Must still be within active buff window (prevents late ticks applying after buff ends)
+            long end = 0L;
+            try { end = attacker.getEntityData().getLong(DF_ASHEN_END_T); } catch (Throwable ignored) {}
+            if (end <= 0L || now >= end){
+                try { pend.removeTag(k); } catch (Throwable ignored) {}
+                continue;
+            }
+
+            // Compute actual damage delta (prefer DBC Body delta, fallback to vanilla HP delta)
+            float dmgBase = 0f;
+
+            float b0 = -1f;
+            try { b0 = one.getFloat("b0"); } catch (Throwable ignored) {}
+            float b1 = getDbcBodyCurAny(target);
+            if (b0 >= 0f && b1 >= 0f){
+                dmgBase = b0 - b1;
+            }
+
+            if (dmgBase <= 0f){
+                float h0 = -1f;
+                try { h0 = one.getFloat("h0"); } catch (Throwable ignored) {}
+                float h1 = safeHealth(target);
+                if (h0 >= 0f && h1 >= 0f){
+                    dmgBase = h0 - h1;
+                }
+            }
+
+            // fallback hint if we still couldn't get a positive delta
+            if (dmgBase <= 0f){
+                try { dmgBase = one.getFloat("hint"); } catch (Throwable ignored) {}
+            }
+
+            if (dmgBase < 0f) dmgBase = 0f;
+
+            // Bonus damage (next-tick) + lifesteal heal
+            float extra = 0f;
+            if (dmgBase > 0f && DARKFIRE_ASHEN_DAMAGE_BONUS_PCT > 0f){
+                extra = dmgBase * DARKFIRE_ASHEN_DAMAGE_BONUS_PCT;
+                if (extra > 0f){
+                    // force i-frame reset for this secondary hit so it lands on DBC players too
+                    try {
+                        target.hurtResistantTime = 0;
+                        target.hurtTime = 0;
+                    } catch (Throwable ignored) {}
+                    applyAshenExtraDamage(attacker, target, extra);
+                }
+            }
+
+            float dmgForHeal = dmgBase + Math.max(0f, extra);
+            if (dmgForHeal > 0f && DARKFIRE_ASHEN_LIFESTEAL_PCT_OF_DAMAGE > 0f){
+                float healAbs = dmgForHeal * DARKFIRE_ASHEN_LIFESTEAL_PCT_OF_DAMAGE;
+
+                float maxBody = getBodyMaxSafe(attacker);
+                if (maxBody > 0f && DARKFIRE_ASHEN_HEAL_MAX_PCT_BODY_PER_HIT > 0f){
+                    float cap = maxBody * DARKFIRE_ASHEN_HEAL_MAX_PCT_BODY_PER_HIT;
+                    if (cap > 0f && healAbs > cap) healAbs = cap;
+                }
+
+                applyAshenBodyHeal(attacker, healAbs);
+            }
+
+            try { pend.removeTag(k); } catch (Throwable ignored) {}
+        }
+
+        // Clean up container if empty
+        try {
+            java.util.Set left = pend.func_150296_c();
+            if (left == null || left.isEmpty()){
+                data.removeTag(DF_ASHEN_PEND_TAG);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+
+    private static void tryProcDarkfireAshenLifesteal(EntityPlayer p, EntityLivingBase target, float baseAmount){
+        if (p == null || target == null) return;
+        if (p.worldObj == null || p.worldObj.isRemote) return;
+        if (target.isDead) return;
+
+        // Passive: requires an equipped Darkfire pill of type Ashen Lifesteal (held or socketed); does NOT require Darkfire to be the selected family
+        ItemStack held = getEquippedDarkfirePillForPassive(p);
+        if (held == null) return;
+        if (!isHeldDarkfireAshenLifesteal(held)) return;
+
+        NBTTagCompound d = p.getEntityData();
+        long now = serverNow(p.worldObj);
+
+        long end   = 0L;
+        long cdEnd = 0L;
+        try { end   = d.getLong(DF_ASHEN_END_T); } catch (Throwable ignored) {}
+        try { cdEnd = d.getLong(DF_ASHEN_CD_END_T); } catch (Throwable ignored) {}
+
+        boolean active = (end > 0L && now < end);
+
+        // If not active, attempt to start the buff (respect cooldown)
+        if (!active){
+            if (cdEnd > 0L && now < cdEnd) return;
+
+            if (!roll(p, DARKFIRE_ASHEN_PROC_CHANCE)) return;
+
+            long dur = Math.max(1L, (long)DARKFIRE_ASHEN_BUFF_DURATION_TICKS);
+            long cd  = Math.max(0L, (long)DARKFIRE_ASHEN_COOLDOWN_TICKS);
+
+            long newEnd = now + dur;
+            long newCdEnd = newEnd + cd;
+
+            try { d.setLong(DF_ASHEN_END_T, newEnd); } catch (Throwable ignored) {}
+            try { d.setLong(DF_ASHEN_CD_END_T, newCdEnd); } catch (Throwable ignored) {}
+// Stamp HUD timers onto the held pill (same format as the old Cinder Weakness HUD)
+            try {
+                int dMax  = (dur > (long)Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int)dur;
+                int cdMax = (cd  > (long)Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int)cd;
+                {
+                    long localNow = 0L;
+                    try { localNow = p.worldObj.getTotalWorldTime(); } catch (Throwable ignored) {}
+                    long buffEndLocal = localNow + dur;
+                    long cdStartLocal = buffEndLocal;
+                    long cdEndLocal = cdStartLocal + cd;
+                    stampCinderHudTimers(p, held, "Self", localNow, buffEndLocal, dMax, cdStartLocal, cdEndLocal, cdMax);
+                }
+            } catch (Throwable ignored) {}
+
+            active = true;
+            end = newEnd;
+        }
+
+        if (!active) return;
+
+        // DBC-like targets: always snapshot and compute actual delta next tick.
+        // (Forge LivingHurtEvent 'amount' is often unreliable when DBC Body is reduced.)
+        if (isLikelyDbcLikeTarget(target)){
+            queueAshenPendingHit(p, target, now);
+            return;
+        }
+
+        // Non-DBC / normal path (or unknown edge cases): use the event amount, fallback to a conservative proxy.
+        float base = baseAmount;
+        if (base <= 0f){
+            base = estimateAshenDamageForHeal(p);
+        }
+
+        // While buffed: apply extra damage + lifesteal heal based on damage dealt.
+        float extra = 0f;
+        if (DARKFIRE_ASHEN_DAMAGE_BONUS_PCT > 0f && base > 0f){
+            extra = base * DARKFIRE_ASHEN_DAMAGE_BONUS_PCT;
+            if (extra > 0f){
+                applyAshenExtraDamage(p, target, extra);
+            }
+        }
+
+        float dmgForHeal = base + Math.max(0f, extra);
+        if (dmgForHeal > 0f && DARKFIRE_ASHEN_LIFESTEAL_PCT_OF_DAMAGE > 0f){
+            float healAbs = dmgForHeal * DARKFIRE_ASHEN_LIFESTEAL_PCT_OF_DAMAGE;
+
+            // cap heal per hit to a % of max Body (prevents 1-taps from fully healing)
+            float maxBody = getBodyMaxSafe(p);
+            if (maxBody > 0f && DARKFIRE_ASHEN_HEAL_MAX_PCT_BODY_PER_HIT > 0f){
+                float cap = maxBody * DARKFIRE_ASHEN_HEAL_MAX_PCT_BODY_PER_HIT;
+                if (cap > 0f && healAbs > cap) healAbs = cap;
+            }
+
+            applyAshenBodyHeal(p, healAbs);
+        }
+    }
+
+    private static void tickDarkfireAshenLifesteal(EntityPlayer p, NBTTagCompound data, World w, long now){
+        if (p == null || data == null) return;
+        if (w == null || w.isRemote) return;
+
+        long end = 0L;
+        try { end = data.getLong(DF_ASHEN_END_T); } catch (Throwable ignored) {}
+        if (end <= 0L) return;
+
+        // Buff ended -> stop (cooldown continues via DF_ASHEN_CD_END_T)
+        if (now >= end){
+            try { data.removeTag(DF_ASHEN_END_T); } catch (Throwable ignored) {}
+            try { data.removeTag(DF_ASHEN_REGEN_NEXT_T); } catch (Throwable ignored) {} // legacy leftover; harmless
+            return;
+        }
+
+        // IMPORTANT: No passive or "baseline" healing.
+        // Ashen Lifesteal healing is applied ONLY on successful attacks (see tryProcDarkfireAshenLifesteal / pending hit delta).
+    }
+
+
+    private static boolean isHeldDarkfireAshenLifesteal(ItemStack held){
+        if (held == null) return false;
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null) return false;
+        String t = "";
+        try { t = tag.getString(DARKFIRE_TAG_TYPE); } catch (Throwable ignored) {}
+        if (t == null) t = "";
+        return DARKFIRE_TYPE_ASHEN_LIFESTEAL.equalsIgnoreCase(t.trim());
+    }
+
+    private static boolean isHeldDarkfireEmberDetonation(ItemStack held){
+        if (held == null) return false;
+        try {
+            NBTTagCompound tag = held.getTagCompound();
+            if (tag == null) return false;
+            String t = tag.getString(DARKFIRE_TAG_TYPE);
+            if (t == null) return false;
+            return DARKFIRE_TYPE_EMBER_DETONATION.equalsIgnoreCase(t.trim());
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+
+    /**
+     * Apply Body/HP healing in the same reliable way as the Energized/Rainbow systems:
+     * - Prefer DBC Body add via NBT (absolute), then
+     * - fall back to DBC restore percent bridge, then
+     * - fall back to vanilla heal.
+     */
+    private static void applyAshenBodyHeal(EntityPlayer p, float healAbs){
+        if (p == null) return;
+        if (healAbs <= 0f) return;
+
+        // Hard cap (safety) to avoid int overflow in NBT on absurd hits
+        if (healAbs > 2.0E9f) healAbs = 2.0E9f;
+
+        boolean ok = false;
+
+        // Prefer the reflection-based bridge first (most reliable across installs),
+        // but only restore what we're missing so we never "overheal" above max.
+        float maxBody = getBodyMaxSafe(p);
+        float curBody = getBodyCurSafe(p);
+
+        if (maxBody > 0f){
+            float missing = (curBody >= 0f) ? (maxBody - curBody) : -1f;
+            if (missing > 0f){
+                float use = healAbs;
+                if (use > missing) use = missing; // clamp to what we can actually take
+                float pct = use / maxBody;
+                if (pct > 0f){
+                    if (pct > 1f) pct = 1f;
+                    try { ok = dbcRestoreHealthPercent(p, pct); } catch (Throwable ignored) {}
+                }
+            } else if (missing == 0f){
+                ok = true; // already full
+            } else {
+                // Cur unknown; fall back to a capped percent.
+                float pct = healAbs / maxBody;
+                if (pct > 0f){
+                    if (pct > 1f) pct = 1f;
+                    try { ok = dbcRestoreHealthPercent(p, pct); } catch (Throwable ignored) {}
+                }
+            }
+        }
+        // Fallback: directly add to Body (live keys + NBT copies)
+        if (!ok){
+            float cur = getBodyCurSafe(p);
+            if (cur >= 0f){
+                try { ok = setBodyCurSafe(p, cur + healAbs); } catch (Throwable ignored) {}
+            }
+        }
+
+        // Legacy fallback: raw NBT add (used by some older setups)
+        if (!ok){
+            try { ok = dbcAddBodyAbsViaNbt(p, healAbs); } catch (Throwable ignored) {}
+        }
+
+        // Vanilla fallback (won't affect DBC Body, but keeps the effect visible on non-DBC targets/builds)
+        if (!ok){
+            try { p.heal(healAbs); } catch (Throwable ignored) {}
+        }
+    }
+
+
+    /** Returns held Darkfire pill (meta 24/25), or null. */
+
+// ------------------------------------------------------------------
+// Darkfire pill source (HELD or SOCKETED)
+//
+// If the Darkfire pill is socketed, we return the gem copy and tag it
+// with ephemeral socket source markers so we can write changes back
+// into the host socket after mutating NBT (charge, HUD timers, etc.).
+// ------------------------------------------------------------------
+
+    private static final String DF_SOCK_HOST_KEY = "__HexSockHost";   // -1 = direct held pill, -2 = socketed in held item, 0-3 = armor slot
+    private static final String DF_SOCK_IDX_KEY  = "__HexSockIndex";
+
+    /** Returns held Darkfire pill (meta 24/25) OR a socketed Darkfire pill (first found), or null. */
+    private static ItemStack getHeldDarkfirePill(EntityPlayer player) {
+        try {
+            if (player == null) return null;
+
+            // If directly held, always active
+            ItemStack held = player.getCurrentEquippedItem();
+            if (isDarkfirePillStack(held)) return held;
+
+            // If the player has explicitly selected a different orb family, do NOT let Darkfire
+            // procs/abilities run from socketed sources (prevents "Darkfire overrides everything").
+            String selFam = "";
+            try {
+                selFam = player.getEntityData().getString("HexSelFamily");
+            } catch (Throwable ignored) {}
+
+            if (selFam != null && selFam.length() > 0 && !"DARKFIRE".equals(selFam)) {
+                return null;
+            }
+
+// If Darkfire is selected, try to resolve exactly that selected socket/orb first.
+            if ("DARKFIRE".equals(selFam)) {
+                int hk = 0, hs = 0, si = -1;
+                try { hk = player.getEntityData().getInteger("HexSelHostKind"); } catch (Throwable ignored) {}
+                try { hs = player.getEntityData().getInteger("HexSelHostSlot"); } catch (Throwable ignored) {}
+                try { si = player.getEntityData().getInteger("HexSelSocketIdx"); } catch (Throwable ignored) {}
+
+                ItemStack chosen = resolveSelectedOrbStack(player, hk, hs, si);
+                if (isDarkfirePillStack(chosen)) {
+                    // If selected from a socket, tag source so charge/nbt mutations persist.
+                    if (si >= 0) {
+                        int hostMarker = (hk == 0 ? -2 : hs);
+                        tagDarkfireSocketSource(chosen, hostMarker, si);
+                    }
+                    return chosen;
+                }
+            }
+
+            // Legacy fallback (no selection yet, or resolution failed): find the first Darkfire pill in held sockets or armor sockets.
+            if (held != null) {
+                ItemStack gem = findSocketedDarkfireInHost(player, held, -2);
+                if (gem != null) return gem;
+            }
+
+            if (player.inventory != null && player.inventory.armorInventory != null) {
+                for (int a = 0; a < player.inventory.armorInventory.length; a++) {
+                    ItemStack armor = player.inventory.armorInventory[a];
+                    if (isDarkfirePillStack(armor)) return armor;
+
+                    ItemStack gem = findSocketedDarkfireInHost(player, armor, a);
+                    if (gem != null) return gem;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        return null;
+    }
+
+
+    /**
+     * Darkfire pill lookup for PASSIVE procs.
+     *
+     * Unlike {@link #getHeldDarkfirePill(EntityPlayer)}, this does NOT require the player to have
+     * the DARKFIRE family selected. This is used for passive-only effects (e.g., Ashen Lifesteal)
+     * so they can run while the player is actively using another orb family.
+     */
+    private static ItemStack getEquippedDarkfirePillForPassive(EntityPlayer player) {
+        try {
+            if (player == null) return null;
+
+            ItemStack held = player.getCurrentEquippedItem();
+            if (isDarkfirePillStack(held)) return held;
+
+            if (held != null) {
+                ItemStack gem = findSocketedDarkfireInHost(player, held, -2);
+                if (gem != null) return gem;
+            }
+
+            if (player.inventory != null && player.inventory.armorInventory != null) {
+                for (int a = 0; a < player.inventory.armorInventory.length; a++) {
+                    ItemStack armor = player.inventory.armorInventory[a];
+                    if (isDarkfirePillStack(armor)) return armor;
+                    ItemStack gem = findSocketedDarkfireInHost(player, armor, a);
+                    if (gem != null) return gem;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static ItemStack resolveSelectedOrbStack(EntityPlayer player, int hostKind, int hostSlot, int socketIdx) {
+        try {
+            if (player == null) return null;
+
+            ItemStack host = null;
+            if (hostKind == 0) { // held
+                host = player.getCurrentEquippedItem();
+            } else if (hostKind == 1) { // armor
+                if (player.inventory != null && player.inventory.armorInventory != null) {
+                    if (hostSlot >= 0 && hostSlot < player.inventory.armorInventory.length) {
+                        host = player.inventory.armorInventory[hostSlot];
+                    }
+                }
+            }
+
+            if (host == null) return null;
+
+            if (socketIdx >= 0) {
+                return HexSocketAPI.getGemAt(host, socketIdx);
+            }
+            return host;
+        } catch (Throwable ignored) {}
+
+        return null;
+    }
+
+
+    private static boolean isDarkfirePillStack(ItemStack stack){
+        if (stack == null) return false;
+        if (stack.getItem() != ExampleMod.GEM_ICONS) return false;
+        int meta = stack.getItemDamage();
+        return (meta == PILL_DARKFIRE_META_FLAT || meta == PILL_DARKFIRE_META_ANIM);
+    }
+
+    /** Scan a socket host for Darkfire pill; if found, tag socket source markers and return the gem copy. */
+    private static ItemStack findSocketedDarkfireInHost(EntityPlayer p, ItemStack host, int hostMarker){
+        if (p == null || host == null) return null;
+        try {
+            int filled = HexSocketAPI.getSocketsFilled(host);
+            for (int i = 0; i < filled; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(host, i);
+                if (isDarkfirePillStack(gem)) {
+                    tagDarkfireSocketSource(gem, hostMarker, i);
+                    return gem;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static void tagDarkfireSocketSource(ItemStack pill, int hostMarker, int socketIdx){
+        if (pill == null) return;
+        try {
+            NBTTagCompound tag = pill.getTagCompound();
+            if (tag == null) tag = new NBTTagCompound();
+            tag.setInteger(DF_SOCK_HOST_KEY, hostMarker);
+            tag.setInteger(DF_SOCK_IDX_KEY, socketIdx);
+            pill.setTagCompound(tag);
+        } catch (Throwable ignored) {}
+    }
+
+    /** If this Darkfire pill came from a socket, write it back into that socket after NBT mutations. */
+    private static void commitDarkfireIfSocketed(EntityPlayer p, ItemStack pill){
+        if (p == null || pill == null) return;
+        try {
+            NBTTagCompound tag = pill.getTagCompound();
+            if (tag == null) return;
+            if (!tag.hasKey(DF_SOCK_HOST_KEY) || !tag.hasKey(DF_SOCK_IDX_KEY)) return;
+
+            int hostMarker = tag.getInteger(DF_SOCK_HOST_KEY);
+            int idx = tag.getInteger(DF_SOCK_IDX_KEY);
+
+            // strip ephemeral markers before persisting
+            tag.removeTag(DF_SOCK_HOST_KEY);
+            tag.removeTag(DF_SOCK_IDX_KEY);
+            pill.setTagCompound(tag);
+
+            ItemStack host = null;
+            if (hostMarker == -2) {
+                host = p.getHeldItem();
+            } else if (hostMarker >= 0 && hostMarker < 4) {
+                host = p.getCurrentArmor(hostMarker);
+            } else {
+                // -1 (direct held pill) or unknown marker
+                return;
+            }
+
+            if (host == null) return;
+
+            // Write back to socket and sync
+            HexSocketAPI.setGemAt(host, idx, pill);
+            try { p.inventory.markDirty(); } catch (Throwable ignored) {}
+            try { p.inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+            if (p instanceof EntityPlayerMP) {
+                try { ((EntityPlayerMP) p).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+    }
+
+
+    /** True if the held Darkfire pill is the animated/meta variant (meta 25). */
+    private static boolean isDarkfireAnim(ItemStack held){
+        if (held == null) return false;
+        try {
+            return held.getItem() == ExampleMod.GEM_ICONS && held.getItemDamage() == PILL_DARKFIRE_META_ANIM;
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+
+    private static boolean isHeldDarkfireShadowSpread(ItemStack held){
+        // NOTE: We kept the method name to avoid touching call sites.
+        // Charging should apply to ALL Darkfire types (same behavior as Shadow Spread),
+        // so this now returns true for any non-empty Darkfire type string on the held pill.
+        if (held == null) return false;
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null) return false;
+        String type = tag.getString(DARKFIRE_TAG_TYPE);
+        if (type == null) return false;
+        return type.trim().length() > 0;
+    }
+    private static boolean isHeldDarkfireShadowflameTrail(ItemStack held) {
+        if (held == null) return false;
+        try {
+            NBTTagCompound tag = held.getTagCompound();
+            if (tag == null) return false;
+            String type = "";
+            try { type = tag.getString(DARKFIRE_TAG_TYPE); } catch (Throwable ignored) {}
+            if (type == null) type = "";
+            return DARKFIRE_TYPE_SHADOWFLAME_TRAIL.equalsIgnoreCase(type.trim());
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+
+
+    private static boolean isHeldDarkfireBlackflameBurn(ItemStack held) {
+        if (held == null) return false;
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null) return false;
+        String type = "";
+        try { type = tag.getString(DARKFIRE_TAG_TYPE); } catch (Throwable ignored) {}
+        if (type == null) type = "";
+        return DARKFIRE_TYPE_BLACKFLAME_BURN.equalsIgnoreCase(type.trim());
+    }
+
+
+    /** Adds charge to the held stack NBT and syncs to client if it changed. */
+    private static void addDarkfireChargeAndSync(EntityPlayer p, ItemStack held, int add, int max){
+        if (held == null || p == null) return;
+
+        if (max <= 0) max = 1000;
+
+        NBTTagCompound tag = held.getTagCompound();
+        if (tag == null){
+            tag = new NBTTagCompound();
+            held.setTagCompound(tag);
+        }
+
+        int cur = tag.hasKey(DARKFIRE_TAG_CHARGE) ? tag.getInteger(DARKFIRE_TAG_CHARGE) : 0;
+        if (cur < 0) cur = 0;
+
+        int before = cur;
+
+        if (add > 0){
+            cur += add;
+            if (cur > max) cur = max;
+        }
+
+        boolean changed = (cur != before);
+
+        // Always keep max present for HUD
+        if (!tag.hasKey(DARKFIRE_TAG_CHARGE_MAX) || tag.getInteger(DARKFIRE_TAG_CHARGE_MAX) != max){
+            tag.setInteger(DARKFIRE_TAG_CHARGE_MAX, max);
+            changed = true;
+        }
+
+        if (changed){
+            tag.setInteger(DARKFIRE_TAG_CHARGE, cur);
+            commitDarkfireIfSocketed(p, held);
+
+            // Force sync to client so HUD updates immediately (match other orb patterns)
+            try { p.inventory.markDirty(); } catch (Throwable ignored) {}
+            try { p.inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+            if (p instanceof net.minecraft.entity.player.EntityPlayerMP){
+                try {
+                    ((net.minecraft.entity.player.EntityPlayerMP) p).inventoryContainer.detectAndSendChanges();
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
 
 }

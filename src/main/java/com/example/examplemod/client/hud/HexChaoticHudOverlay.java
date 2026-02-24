@@ -1,5 +1,6 @@
 package com.example.examplemod.client.hud;
 
+import com.example.examplemod.api.HexSocketAPI;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Gui;
@@ -28,7 +29,7 @@ public class HexChaoticHudOverlay {
     private static final RenderItem ITEM_RENDER = new RenderItem();
 
     private static final String TAG_PROFILE       = "HexOrbProfile";
-    private static final String TAG_CHAOS_NEXT_AT = "HexChaosNextAt"; // long world time
+    private static final String TAG_CHAOS_NEXT_AT = "HexChaosNextAt"; // long epoch ms
     private static final String TAG_CHAOS_HOLD    = "HexChaosHold";   // int ticks (duration of this cycle)
 
     @SubscribeEvent
@@ -39,8 +40,6 @@ public class HexChaoticHudOverlay {
 
         Minecraft mc = Minecraft.getMinecraft();
         if (mc == null || mc.thePlayer == null) return;
-        if (mc.currentScreen != null) return; // avoid affecting GUI screens
-
         EntityPlayer p = mc.thePlayer;
         if (p.worldObj == null) return;
 
@@ -54,11 +53,18 @@ public class HexChaoticHudOverlay {
         int hold = tag.getInteger(TAG_CHAOS_HOLD);
         if (hold <= 0) hold = 1;
 
-        long now = p.worldObj.getTotalWorldTime();
-        long remaining = nextAt - now;
-        if (remaining < 0L) remaining = 0L;
+        long now = System.currentTimeMillis();
+        // Server stores NEXT_AT as epoch milliseconds; HOLD is stored as ticks (20 tps).
+        long remainingMs = nextAt - now;
+        if (remainingMs < 0L) remainingMs = 0L;
 
-        float frac = 1.0f - (remaining / (float) hold);
+        long totalMs = (long) hold * 50L;
+        if (totalMs <= 0L) totalMs = 1L;
+
+        // If we ever read an old world-time value, clamp so the bar doesn't get stuck empty/negative.
+        if (remainingMs > totalMs) remainingMs = totalMs;
+
+        float frac = 1.0f - (remainingMs / (float) totalMs);
         if (frac < 0.0f) frac = 0.0f;
         if (frac > 1.0f) frac = 1.0f;
 
@@ -68,7 +74,7 @@ public class HexChaoticHudOverlay {
 
         // Position: above hearts, far left
         int x = 2;
-        int y = sh - 61; // hearts are ~sh-39; this sits above them
+        int y = sh - 81; // hearts are ~sh-39; this sits above them
 
         // Slightly smaller overall (icon + bar)
         final float S = 0.85f;
@@ -119,15 +125,32 @@ public class HexChaoticHudOverlay {
 
         // Held (mainhand / selected hotbar)
         ItemStack held = p.getCurrentEquippedItem();
-        if (isChaotic(held)) return held;
+        ItemStack found = findChaoticOnStackOrSockets(held);
+        if (found != null) return found;
 
         // Worn armor
         if (p.inventory != null && p.inventory.armorInventory != null) {
             for (int i = 0; i < p.inventory.armorInventory.length; i++) {
                 ItemStack a = p.inventory.armorInventory[i];
-                if (isChaotic(a)) return a;
+                found = findChaoticOnStackOrSockets(a);
+                if (found != null) return found;
             }
         }
+        return null;
+    }
+
+    private ItemStack findChaoticOnStackOrSockets(ItemStack host) {
+        if (isChaotic(host)) return host;
+        if (host == null) return null;
+
+        try {
+            int filled = HexSocketAPI.getSocketsFilled(host);
+            for (int i = 0; i < filled; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(host, i);
+                if (isChaotic(gem)) return gem;
+            }
+        } catch (Throwable ignored) {}
+
         return null;
     }
 
@@ -137,6 +160,9 @@ public class HexChaoticHudOverlay {
         NBTTagCompound tag = stack.getTagCompound();
         if (tag == null) return false;
         String prof = tag.getString(TAG_PROFILE);
-        return prof != null && prof.startsWith("CHAOTIC_");
+        if (prof != null && prof.startsWith("CHAOTIC_")) return true;
+
+        // Fallback: chaotic stacks always carry these tags.
+        return tag.hasKey(TAG_CHAOS_NEXT_AT) || tag.hasKey(TAG_CHAOS_HOLD);
     }
 }

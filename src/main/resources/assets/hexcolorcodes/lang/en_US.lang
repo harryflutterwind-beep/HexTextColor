@@ -29,8 +29,8 @@ item.hex_gem.orb_gem_green_nature_64.name=<shadow><grad #2CFF6B #9CFFB9 #3DFF84 
 item.hex_gem.orb_gem_green_nature_64_anim_8f.name=<shadow><grad #21F962 #7CFFAA #D6FFE4 scroll=0.36>Nature Gem Orb (Enhanced)</grad></shadow>
 
 # Light (white/blue glow)
-item.hex_gem.orb_gem_light_64.name=<shadow><grad #FFFFFF #C7F3FF #8FE7FF scroll=0.22>Light Gem Orb</grad></shadow>
-item.hex_gem.orb_gem_light_anim_8f_64x516.name=<shadow><grad #FFFFFF #B9EEFF #73DDFF scroll=0.34>Light Gem Orb (Enhanced)</grad></shadow>
+item.hex_gem.orb_gem_light_64.name=<shadow><grad #6ad6ff #fff1a8 #ffffff #ffb84d scroll=0.22>Light Gem Orb</grad></shadow>
+item.hex_gem.orb_gem_light_anim_8f_64x516.name=<shadow><grad #6ad6ff #fff1a8 #ffffff #ffb84d scroll=0.22>Light Gem Orb (Enhanced)</grad></shadow>
 
 # Negative (dark / voidy)
 item.hex_gem.orb_gem_negative_64.name=<shadow><grad #1B0A2A #5C2CFF #1B0A2A scroll=0.34>Negative Gem Orb</grad></shadow>
@@ -67,3 +67,10 @@ item.hex_gem.pill_dark_fire_face_64_anim.name=<shadow><grad #0B0412 #4A24FF #FF3
 # Fire (classic flame)
 item.hex_gem.pill_fire_textured_64.name=<shadow><grad #FF3B1A #FFB14D #FFD36A scroll=0.34>Fire Pill</grad></shadow>
 item.hex_gem.pill_fire_animated_64_anim.name=<shadow><grad #FF1F0F #FF8A2E #FFE88A scroll=0.48>Fire Pill (Enhanced)</grad></shadow>
+
+# ------------------------------------------------------------
+# Shadow Fire (special fire block + igniter)
+# ------------------------------------------------------------
+
+tile.shadow_fire.name=<shadow><grad #0B0B0B #3A3A3A #5C2CFF #FF4FD8 scroll=0.28>Shadow Fire</grad></shadow>
+item.shadow_igniter.name=<shadow><grad #0B0B0B #3A3A3A #5C2CFF #FF4FD8 scroll=0.28>Shadow Igniter</grad></shadow>

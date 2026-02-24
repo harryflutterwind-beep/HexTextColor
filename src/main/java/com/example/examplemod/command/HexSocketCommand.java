@@ -120,7 +120,11 @@ public class HexSocketCommand extends CommandBase {
     }
 
     // Keep OP-only for now while you're testing
-    @Override public int getRequiredPermissionLevel() { return 2; }
+    @Override public int getRequiredPermissionLevel() { return 0; }
+    @Override
+    public boolean canCommandSenderUseCommand(ICommandSender sender) {
+        return true; // allow everyone (even deopped)
+    }
 
     @Override
     public void processCommand(ICommandSender sender, String[] args) {
@@ -718,19 +722,30 @@ public class HexSocketCommand extends CommandBase {
     private static boolean looksLikeSocketsPage(String page) {
         if (page == null) return false;
 
-        // Normalize (strip leading colors, lower-case)
-        String norm = stripLeadingColorCodes(page).trim().toLowerCase();
+        String low = page.toLowerCase();
 
-        // Our new page always starts with "Sockets:"
-        if (norm.startsWith("sockets:")) return true;
+        // New generated pages embed an invisible marker so we never overwrite help/guide pages.
+        if (low.contains("<hex:sockpage>")) return true;
 
-        // Also catch older / accidental versions we previously generated
-        // (so we can overwrite them into the minimal page).
-        if (norm.contains("socketable") || norm.contains("hexsocket")) return true;
-        if (norm.contains("slots") && norm.contains("sockets")) return true;
+        // Safety: only treat pages that actually contain icon tokens as sockets pages.
+        if (!low.contains("<ico:")) return false;
 
-        // Icon tokens are a strong hint
-        if (page.contains("<ico:gems/socket_empty_")) return true;
+        // Check first non-empty line
+        String[] lines = page.split("\n");
+        for (int i = 0; i < lines.length; i++) {
+            String l = lines[i];
+            if (l == null) continue;
+            String t = stripLeadingColorCodes(l).trim();
+            if (t.length() == 0) continue;
+
+            String norm = t.toLowerCase();
+            if (norm.startsWith("sockets:")) return true;
+
+            // Legacy generated pages occasionally used "Socketable:" but still had socket icons.
+            if (norm.startsWith("socketable:") && low.contains("socket_empty")) return true;
+
+            break;
+        }
 
         return false;
     }

@@ -1,6 +1,9 @@
 package com.example.examplemod.client.hud;
 
+
+import com.example.examplemod.client.fractured.FracturedKeyHandler;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
+import com.example.examplemod.api.HexSocketAPI;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.ScaledResolution;
@@ -68,7 +71,7 @@ public class HexLightHudOverlay extends Gui {
         EntityPlayer p = mc.thePlayer;
         if (p.worldObj == null) return;
 
-        ItemStack light = findActiveLight(p);
+        ItemStack light = FracturedKeyHandler.getSelectedHudStackOfKind(p, FracturedKeyHandler.HUD_KIND_LIGHT);
         if (light == null) return;
 
         NBTTagCompound tag = light.getTagCompound();
@@ -241,20 +244,41 @@ public class HexLightHudOverlay extends Gui {
         }
     }
 
-    private ItemStack findActiveLight(EntityPlayer p) {
-        if (p == null) return null;
-
-        ItemStack held = p.getCurrentEquippedItem();
-        if (isLight(held)) return held;
-
-        if (p.inventory != null && p.inventory.armorInventory != null) {
-            for (int i = 0; i < p.inventory.armorInventory.length; i++) {
-                ItemStack a = p.inventory.armorInventory[i];
-                if (isLight(a)) return a;
+    private ItemStack findLightInSockets(ItemStack host) {
+        if (host == null) return null;
+        try {
+            int filled = HexSocketAPI.getSocketsFilled(host);
+            for (int i = 0; i < filled; i++) {
+                ItemStack g = HexSocketAPI.getGemAt(host, i);
+                if (isLight(g)) return g;
             }
+        } catch (Throwable ignored) {
         }
         return null;
     }
+
+    private ItemStack findActiveLight(EntityPlayer p) {
+        if (p == null || p.inventory == null) return null;
+
+        // Held: direct or socketed
+        ItemStack held = p.getCurrentEquippedItem();
+        if (isLight(held)) return held;
+
+        ItemStack g = findLightInSockets(held);
+        if (g != null) return g;
+
+        // Armor: direct or socketed
+        for (int i = 0; i < p.inventory.armorInventory.length; i++) {
+            ItemStack a = p.inventory.armorInventory[i];
+            if (isLight(a)) return a;
+
+            g = findLightInSockets(a);
+            if (g != null) return g;
+        }
+
+        return null;
+    }
+
 
     private boolean isLight(ItemStack stack) {
         if (stack == null) return false;
@@ -263,6 +287,9 @@ public class HexLightHudOverlay extends Gui {
         if (tag == null) return false;
 
         String prof = tag.getString(TAG_PROFILE);
-        return prof != null && prof.startsWith("LIGHT_");
+        if (prof != null && prof.startsWith("LIGHT_")) return true;
+
+        // Socketed/stripped fallback: keep showing HUD if Light keys are present.
+        return tag.hasKey(TAG_LIGHT_TYPE) || tag.hasKey(TAG_LIGHT_RAD);
     }
 }

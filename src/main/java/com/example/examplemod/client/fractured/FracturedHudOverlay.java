@@ -30,7 +30,7 @@ public class FracturedHudOverlay extends Gui {
         Minecraft mc = Minecraft.getMinecraft();
         if (mc == null || mc.thePlayer == null || mc.gameSettings.showDebugInfo) return;
 
-        ItemStack s = FracturedUtil.findEquippedFractured(mc.thePlayer);
+        ItemStack s = FracturedKeyHandler.getSelectedHudStackOfKind(mc.thePlayer, FracturedKeyHandler.HUD_KIND_FRACTURED);
         if (s == null) return;
 
         ScaledResolution res = new ScaledResolution(mc, mc.displayWidth, mc.displayHeight);
