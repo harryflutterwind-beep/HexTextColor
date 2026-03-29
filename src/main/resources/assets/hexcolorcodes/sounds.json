@@ -1,0 +1,11 @@
+{
+  "hub_music": {
+    "category": "music",
+    "sounds": [
+      {
+        "name": "hexcolorcodes:hub/everybody_votes",
+        "stream": true
+      }
+    ]
+  }
+}

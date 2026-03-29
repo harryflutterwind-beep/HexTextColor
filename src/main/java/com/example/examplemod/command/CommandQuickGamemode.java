@@ -9,12 +9,22 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.world.WorldSettings;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * Forge 1.7.10 quick game mode command.
- * Register two instances:
+ *
+ * Supports aliases like:
+ *   Creative: /c, /cre, /creative, /gmc
+ *   Survival: /s, /sur, /survival, /gms
+ *   Adventure: /a, /adv, /adventure, /gma
+ *
+ * Register two instances (existing code still works):
  * - new CommandQuickGamemode("c", WorldSettings.GameType.CREATIVE, "§bCreative")
  * - new CommandQuickGamemode("s", WorldSettings.GameType.SURVIVAL, "§eSurvival")
  */
@@ -44,15 +54,61 @@ public class CommandQuickGamemode extends CommandBase {
     private final WorldSettings.GameType mode;
     private final String coloredModeName;
 
+    // Raw List to match 1.7.10 ICommand signature
+    private final List aliases;
+
     public CommandQuickGamemode(String cmdName, WorldSettings.GameType mode, String coloredModeName) {
+        this(cmdName, mode, coloredModeName, buildDefaultAliases(cmdName, mode));
+    }
+
+    public CommandQuickGamemode(String cmdName, WorldSettings.GameType mode, String coloredModeName, String... extraAliases) {
         this.cmdName = cmdName;
         this.mode = mode;
         this.coloredModeName = coloredModeName;
+
+        Set set = new HashSet();
+        if (extraAliases != null) {
+            for (int i = 0; i < extraAliases.length; i++) {
+                String a = extraAliases[i];
+                if (a == null) continue;
+                a = a.trim();
+                if (a.length() == 0) continue;
+                a = a.toLowerCase();
+                if (cmdName != null && a.equalsIgnoreCase(cmdName)) continue;
+                set.add(a);
+            }
+        }
+        this.aliases = Collections.unmodifiableList(new ArrayList(set));
+    }
+
+    private static String[] buildDefaultAliases(String cmdName, WorldSettings.GameType mode) {
+        // Keep defaults small + predictable; you can pass custom aliases via the 4-arg constructor.
+        String c = (cmdName == null) ? "" : cmdName.trim().toLowerCase();
+
+        if (mode == WorldSettings.GameType.CREATIVE) {
+            if ("cre".equals(c) || "creative".equals(c) || "gmc".equals(c)) return new String[] {"c"};
+            return new String[] {"cre", "creative", "gmc"};
+        }
+        if (mode == WorldSettings.GameType.SURVIVAL) {
+            if ("sur".equals(c) || "survival".equals(c) || "gms".equals(c)) return new String[] {"s"};
+            return new String[] {"sur", "survival", "gms"};
+        }
+        if (mode == WorldSettings.GameType.ADVENTURE) {
+            if ("adv".equals(c) || "adventure".equals(c) || "gma".equals(c)) return new String[] {"a"};
+            return new String[] {"adv", "adventure", "gma"};
+        }
+
+        return new String[0];
     }
 
     @Override
     public String getCommandName() {
         return cmdName;
+    }
+
+    @Override
+    public List getCommandAliases() {
+        return aliases;
     }
 
     @Override

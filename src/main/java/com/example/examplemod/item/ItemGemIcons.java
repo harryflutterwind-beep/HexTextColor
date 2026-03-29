@@ -32,6 +32,50 @@ public class ItemGemIcons extends Item {
     private static final int META_PILL_FIRE_ANIM = 26;
     private static final int META_PILL_FIRE_FLAT = 27;
 
+    // Evolved animated gem metas
+    private static final int META_EVOLVED_AETHER  = 28;
+    private static final int META_EVOLVED_FROST   = 29;
+    private static final int META_EVOLVED_NATURE  = 30;
+    private static final int META_EVOLVED_RAINBOW = 31;
+    private static final int META_EVOLVED_SOLAR   = 32;
+    private static final int META_EVOLVED_INFERNO = 33;
+
+    // NBT subtype tags (rolled by HexOrbRoller; used by HUDs and tooltips)
+    private static final String TAG_VOID_TYPE     = "HexVoidType";
+    private static final String TAG_DARKFIRE_TYPE = "HexDarkFireType";
+    private static final String TAG_LIGHT_TYPE    = "HexLightType";
+
+    // NBT subtype showcase lists (keep strings in sync with HexOrbRoller)
+    private static final String[] VOID_TYPES = new String[] {
+            "Null Shell",
+            "Entropy",
+            "Gravity Well",
+            "Abyss Mark"
+    };
+
+    private static final String[] DARKFIRE_TYPES = new String[] {
+            "Blackflame Burn",
+            "Cinder Weakness",
+            "Armor Scorch",
+            "Ashen Lifesteal",
+            "Ember Detonation",
+            "Shadowflame Trail"
+    };
+
+    private static final String[] LIGHT_TYPES = new String[] {
+            "Radiant",
+            "Beacon",
+            "Solar",
+            "Halo",
+            "Angelic"
+    };
+
+
+
+    // Creative menu only: set true if you ever want to expose per-type NBT variants for debugging.
+    // Keep FALSE for normal play so the tab isn't flooded with duplicate Void/Light/Darkfire entries.
+    private static final boolean SHOW_NBT_SUBTYPE_SHOWCASE = false;
+
     // Stat-orb metas (keep in sync with HexOrbRoller profiles)
     private static final int META_CHAOTIC_FLAT = 2;
     private static final int META_CHAOTIC_MULTI = 3;
@@ -88,6 +132,8 @@ public class ItemGemIcons extends Item {
     private static final String EFFECT_NA = "\u00a77Effect: \u00a78N/A";
     private static final String BONUS_NA  = "\u00a77Bonus: \u00a78N/A";
     private static final String EFFECT_SWIRLY = "\u00a77Effect: \u00a7dUnique Attacks";
+    private static final String EFFECT_OVERWRITE = "\u00a77Effect: " + G_ENERGIZED_OPEN + "Overwrite" + G_CLOSE;
+    private static final String EFFECT_ALL_PASSIVES = "\u00a77Effect: <pulse amp=0.45 speed=0.92>" + G_ENERGIZED_OPEN + "All Passives" + G_CLOSE + "</pulse>";
     private static final String EFFECT_CHAOTIC = "\u00a77Effect: " + G_CHAOS_OPEN + "Chaotic Shifts" + G_CLOSE;
     private static final String EFFECT_FRACTURED= "\u00a77Effect: " + G_FRACTURE_OPEN + "Fractured" + G_CLOSE;
     private static final String EFFECT_VOID_RANDOM= "\u00a77Effect: <pulse amp=0.55 speed=0.85>" + G_VOID_OPEN + "Randomized Void Type" + G_CLOSE + "</pulse>";
@@ -124,7 +170,13 @@ public class ItemGemIcons extends Item {
             "pill_dark_fire_face_64",
             "pill_dark_fire_face_64_anim",
             "pill_fire_animated_64_anim",
-            "pill_fire_textured_64"
+            "pill_fire_textured_64",
+            "evolved_aether_gem_64_anim_8f",
+            "evolved_frost_gem_64_anim_8f",
+            "evolved_nature_gem_64_anim_8f",
+            "evolved_rainbow_gem_64_anim_8f",
+            "evolved_solar_gem_64_anim_8f",
+            "evolved_inferno_gem_anim"
     };
 
     @SideOnly(Side.CLIENT)
@@ -180,10 +232,57 @@ public class ItemGemIcons extends Item {
         // NEI / Creative "Search" tab (tabAllSearch) calls getSubItems with the Search tab.
         // If we only accept our exact creative tab, some variants won't appear in NEI/search.
         // 1.7.10 does NOT have Item#isInCreativeTab, so we explicitly allow Search + our tab.
-        if (tab != CreativeTabs.tabAllSearch && tab != this.getCreativeTab()) return;
+        // NEI will sometimes call getSubItems with tab == null when building its item panel.
+        // If we reject null, NEI falls back to only showing damage 0..15, hiding our higher metas (rainbow/swirly/aether/void/pills).
+        if (tab != null && tab != CreativeTabs.tabAllSearch && tab != this.getCreativeTab()) return;
         for (int i = 0; i < VARIANTS.length; i++) {
             list.add(new ItemStack(item, 1, i));
         }
+        if (SHOW_NBT_SUBTYPE_SHOWCASE) addNbtSubtypeShowcase(item, list);
+    }
+
+
+    /**
+     * Creative/NEI showcase for NBT-based subtypes (Void/Light/Darkfire).
+     * 1.7.10 creative tabs cannot "discover" NBT variants automatically, so we add pre-tagged stacks.
+     * This only affects menus (creative/search/NEI) and does not change drops/rolling behavior.
+     */
+    @SideOnly(Side.CLIENT)
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void addNbtSubtypeShowcase(Item item, List list) {
+        if (item == null || list == null) return;
+
+        // VOID: show each rolled type for both flat + enhanced metas
+        for (int i = 0; i < VOID_TYPES.length; i++) {
+            String t = VOID_TYPES[i];
+            list.add(makeTypedStack(item, META_VOID_FLAT,   TAG_VOID_TYPE, t));
+            list.add(makeTypedStack(item, META_VOID_MULTI,  TAG_VOID_TYPE, t));
+        }
+
+        // DARKFIRE pill: show each rolled effect type for both flat + anim metas
+        for (int i = 0; i < DARKFIRE_TYPES.length; i++) {
+            String t = DARKFIRE_TYPES[i];
+            list.add(makeTypedStack(item, META_PILL_DARKFIRE_FLAT, TAG_DARKFIRE_TYPE, t));
+            list.add(makeTypedStack(item, META_PILL_DARKFIRE_ANIM, TAG_DARKFIRE_TYPE, t));
+        }
+
+        // LIGHT: show each rolled Light type for both flat + enhanced metas
+        for (int i = 0; i < LIGHT_TYPES.length; i++) {
+            String t = LIGHT_TYPES[i];
+            list.add(makeTypedStack(item, META_LIGHT_FLAT,  TAG_LIGHT_TYPE, t));
+            list.add(makeTypedStack(item, META_LIGHT_MULTI, TAG_LIGHT_TYPE, t));
+        }
+    }
+
+    /** Create a 1x stack with a single string tag, safe for creative listing. */
+    private static ItemStack makeTypedStack(Item item, int meta, String tagKey, String value) {
+        ItemStack s = new ItemStack(item, 1, meta);
+        try {
+            NBTTagCompound tag = new NBTTagCompound();
+            tag.setString(tagKey, value);
+            s.setTagCompound(tag);
+        } catch (Throwable ignored) {}
+        return s;
     }
 
     // Hover tooltip fallback:
@@ -207,12 +306,16 @@ public class ItemGemIcons extends Item {
         // Effect line
         if (meta == META_SWIRLY_FLAT || meta == META_SWIRLY_ANIM) {
             tooltip.add(EFFECT_SWIRLY);
+        } else if (meta == META_RAINBOW_FLAT || meta == META_RAINBOW_MULTI) {
+            tooltip.add(EFFECT_OVERWRITE);
+        } else if (meta == META_EVOLVED_RAINBOW) {
+            tooltip.add(EFFECT_ALL_PASSIVES);
         } else if (meta == META_PILL_DARKFIRE_ANIM || meta == META_PILL_DARKFIRE_FLAT) {
             // Darkfire pill: show rolled type name only (no extra summary text).
             String dfType = null;
             try {
                 NBTTagCompound t = (stack != null ? stack.getTagCompound() : null);
-                if (t != null && t.hasKey("HexDarkFireType")) dfType = t.getString("HexDarkFireType");
+                if (t != null && t.hasKey(TAG_DARKFIRE_TYPE)) dfType = t.getString(TAG_DARKFIRE_TYPE);
             } catch (Throwable ignored) {}
             if (dfType == null || dfType.length() == 0) dfType = "Darkflame";
             tooltip.add("§7Effect: <pulse amp=0.55 speed=0.85>" + G_DARKFIRE_OPEN + dfType + G_CLOSE + "</pulse>");
@@ -223,14 +326,25 @@ public class ItemGemIcons extends Item {
         } else if (meta == META_FRACTURED_FLAT || meta == META_FRACTURED_MULTI) {
             tooltip.add(EFFECT_FRACTURED);
         } else if (meta == META_VOID_FLAT || meta == META_VOID_MULTI) {
-            tooltip.add(EFFECT_VOID_RANDOM);
+            // Preview-only Void tooltip for unrolled/creative stacks.
+            // If the server already rolled a type but lore hasn't synced yet, show it here too.
+            String vt = null;
+            try {
+                NBTTagCompound t = (stack != null ? stack.getTagCompound() : null);
+                if (t != null && t.hasKey(TAG_VOID_TYPE)) vt = t.getString(TAG_VOID_TYPE);
+            } catch (Throwable ignored) {}
+            if (vt != null && vt.length() > 0) {
+                tooltip.add("§7Effect: <pulse amp=0.55 speed=0.85>" + G_VOID_OPEN + vt + G_CLOSE + "</pulse>");
+            } else {
+                tooltip.add(EFFECT_VOID_RANDOM);
+            }
         } else if (meta == META_LIGHT_FLAT || meta == META_LIGHT_MULTI) {
             // Preview-only Light tooltip for unrolled/creative stacks.
             // If the server already rolled a type but lore hasn't synced yet, show it here too.
             String lt = null;
             try {
                 NBTTagCompound t = (stack != null ? stack.getTagCompound() : null);
-                if (t != null && t.hasKey("HexLightType")) lt = t.getString("HexLightType");
+                if (t != null && t.hasKey(TAG_LIGHT_TYPE)) lt = t.getString(TAG_LIGHT_TYPE);
             } catch (Throwable ignored) {}
             if (lt != null && lt.length() > 0) {
                 tooltip.add("§7Effect: <pulse amp=0.35 speed=0.95>" + G_LIGHT_OPEN + "Light" + G_CLOSE + "</pulse> §7+ "
@@ -269,25 +383,38 @@ public class ItemGemIcons extends Item {
             case META_INFERNO_FLAT:
             case META_INFERNO_MULTI:
                 return "\u00a77Bonus: " + G_FIERY_OPEN + "Strength Is a Randomized Value" + G_CLOSE;
+            case META_EVOLVED_INFERNO:
+                return "\u00a77Bonus: " + G_FIERY_OPEN + "Strength + 1 Random Stat (% Rolls)" + G_CLOSE;
 
             case META_FROST_FLAT:
             case META_FROST_MULTI:
                 return "\u00a77Bonus: " + G_ICY_OPEN + "Dexterity Is a Randomized Value" + G_CLOSE;
+            case META_EVOLVED_FROST:
+                return "\u00a77Bonus: " + G_ICY_OPEN + "Dexterity + 1 Random Stat (% Rolls)" + G_CLOSE;
 
             case META_SOLAR_FLAT:
             case META_SOLAR_MULTI:
                 return "\u00a77Bonus: " + G_GOLDEN_OPEN + "Constitution Is a Randomized Value" + G_CLOSE;
+            case META_EVOLVED_SOLAR:
+                return "\u00a77Bonus: " + G_GOLDEN_OPEN + "Constitution + 1 Random Stat (% Rolls)" + G_CLOSE;
 
             case META_NATURE_FLAT:
             case META_NATURE_MULTI:
                 return "\u00a77Bonus: " + G_NATURE_OPEN + "WillPower Is a Randomized Value" + G_CLOSE;
+            case META_EVOLVED_NATURE:
+                return "\u00a77Bonus: " + G_NATURE_OPEN + "WillPower + 1 Random Stat (% Rolls)" + G_CLOSE;
 
             case META_AETHER_FLAT:
             case META_AETHER_MULTI:
                 return "\u00a77Bonus: " + G_AETHER_OPEN + "Spirit Is a Randomized Value" + G_CLOSE;
+            case META_EVOLVED_AETHER:
+                return "\u00a77Bonus: " + G_AETHER_OPEN + "Spirit + 1 Random Stat (% Rolls)" + G_CLOSE;
 
+            case META_SWIRLY_FLAT:
+            case META_SWIRLY_ANIM:
             case META_RAINBOW_FLAT:
             case META_RAINBOW_MULTI:
+            case META_EVOLVED_RAINBOW:
                 return "\u00a77Bonus: " + G_ENERGIZED_OPEN + "All Attributes Are Randomized Values" + G_CLOSE;
 
             case META_VOID_FLAT:

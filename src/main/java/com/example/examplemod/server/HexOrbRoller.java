@@ -154,6 +154,13 @@ public class HexOrbRoller {
     private static final int META_NEGATIVE_FLAT = 12;
     private static final int META_NEGATIVE_MULTI = 13;
 
+    // Evolved gem metas (flat rolls; elemental evolved orbs roll intended stat + 1 random stat)
+    private static final int META_EVOLVED_AETHER  = 28;
+    private static final int META_EVOLVED_FROST   = 29;
+    private static final int META_EVOLVED_NATURE  = 30;
+    private static final int META_EVOLVED_RAINBOW = 31;
+    private static final int META_EVOLVED_SOLAR   = 32;
+    private static final int META_EVOLVED_INFERNO = 33;
 
     // Void metas: 22 = flat, 23 = animated (% variant)
     private static final int META_VOID_FLAT = 22;
@@ -317,12 +324,20 @@ public class HexOrbRoller {
         metaProfiles.put(20, RollProfiles.AETHER_FLAT);
         metaProfiles.put(21, RollProfiles.AETHER_MULTI);
 
+        // Evolved elemental gems (intended stat + 1 random stat)
+        metaProfiles.put(META_EVOLVED_AETHER, RollProfiles.EVOLVED_AETHER);
+        metaProfiles.put(META_EVOLVED_FROST, RollProfiles.EVOLVED_FROST);
+        metaProfiles.put(META_EVOLVED_NATURE, RollProfiles.EVOLVED_NATURE);
+        metaProfiles.put(META_EVOLVED_SOLAR, RollProfiles.EVOLVED_SOLAR);
+        metaProfiles.put(META_EVOLVED_INFERNO, RollProfiles.EVOLVED_INFERNO);
+
         // Void (type-driven; bonus roll is assigned at roll time)
         metaProfiles.put(META_VOID_FLAT, RollProfiles.VOID_FLAT);
         metaProfiles.put(META_VOID_MULTI, RollProfiles.VOID_MULTI);
 
         metaProfiles.put(16, RollProfiles.RAINBOW_ALL5_FLAT);
         metaProfiles.put(17, RollProfiles.RAINBOW_ALL5_MULTI);
+        metaProfiles.put(META_EVOLVED_RAINBOW, RollProfiles.EVOLVED_RAINBOW);
 
         // Effect items (ONLY ones that have a real effect type right now)
         metaProfiles.put(META_SWIRLY_FLAT, RollProfiles.SWIRLY_ALL5_FLAT);
@@ -497,6 +512,7 @@ public class HexOrbRoller {
         // Dynamic fractured behavior (thresholds + shards)
         try {
             if (updateFracturedDynamics(p)) changed = true;
+            if (updatePerfectCoreThresholdDynamics(p)) changed = true;
         } catch (Throwable t) {
             // Never let a malformed socket/gem NBT crash the whole server tick.
         }
@@ -633,6 +649,33 @@ public class HexOrbRoller {
             return true;
         }
 
+        // Special case: evolved elemental gems roll their intended stat + 1 distinct random stat.
+        if (meta == META_EVOLVED_INFERNO) {
+            if (tag.getBoolean(TAG_ROLLED)) return false;
+            rollEvolvedElementBase(stack, tag, RollProfiles.EVOLVED_INFERNO, "dbc.Strength", "Strength");
+            return true;
+        }
+        if (meta == META_EVOLVED_FROST) {
+            if (tag.getBoolean(TAG_ROLLED)) return false;
+            rollEvolvedElementBase(stack, tag, RollProfiles.EVOLVED_FROST, "dbc.Dexterity", "Dexterity");
+            return true;
+        }
+        if (meta == META_EVOLVED_SOLAR) {
+            if (tag.getBoolean(TAG_ROLLED)) return false;
+            rollEvolvedElementBase(stack, tag, RollProfiles.EVOLVED_SOLAR, "dbc.Constitution", "Constitution");
+            return true;
+        }
+        if (meta == META_EVOLVED_NATURE) {
+            if (tag.getBoolean(TAG_ROLLED)) return false;
+            rollEvolvedElementBase(stack, tag, RollProfiles.EVOLVED_NATURE, "dbc.WillPower", "WillPower");
+            return true;
+        }
+        if (meta == META_EVOLVED_AETHER) {
+            if (tag.getBoolean(TAG_ROLLED)) return false;
+            rollEvolvedElementBase(stack, tag, RollProfiles.EVOLVED_AETHER, "dbc.Spirit", "Spirit");
+            return true;
+        }
+
         // If this meta isn't configured yet, still give it hover lore once (Effect/Bonus N/A).
         if (profile == null) {
             if (tag.getBoolean(TAG_LORE_DONE)) return false;
@@ -663,6 +706,22 @@ public class HexOrbRoller {
         tag.setBoolean(TAG_LORE_DONE, true);
         tag.setString(TAG_PROFILE, profile.id);
         tag.setTag(TAG_ROLLS, rolls);
+
+        // Perfect Core is threshold-dynamic like Fractured, so keep a stable base snapshot
+        // and key order for later HP-tier rewrites.
+        if (meta == META_EVOLVED_RAINBOW) {
+            NBTTagCompound baseRolls = new NBTTagCompound();
+            NBTTagList keyOrder = new NBTTagList();
+            for (RollEntry e : profile.entries) {
+                if (e == null || e.attrKey == null || e.attrKey.length() == 0) continue;
+                int v = rolls.getInteger(e.attrKey);
+                baseRolls.setInteger(e.attrKey, v);
+                keyOrder.appendTag(new NBTTagString(e.attrKey));
+            }
+            tag.setTag(TAG_BASE_ROLLS, baseRolls);
+            tag.setTag(TAG_KEYS, keyOrder);
+            tag.setInteger(TAG_PC_TIER, 100);
+        }
 
         // apply stats (only if profile has entries)
         applyRpgCoreAttributes(tag, profile, rolls);
@@ -923,60 +982,182 @@ public class HexOrbRoller {
     // ---------------------------------------------------------------------
     // DBC stores Body as NBT numbers. We read them directly so Fractured gates
     // react to DBC Body instead of vanilla hearts.
+    //
+    // Important: some installs only expose CURRENT body and never expose MAX body.
+    // For those, keep an observed max that updates upward and mark it dirty when
+    // Constitution changes so stale old maxima do not linger forever.
     private static final String TAG_PLAYER_PERSISTED = "PlayerPersisted";
     private static final String TAG_DBC_BODY         = "jrmcBdy";
-    // Some installs expose a max key; many do not. When absent, we learn max from observed Body.
-    private static final String TAG_DBC_BODY_MAX     = "jrmcBdyMax";
+    private static final String[] TAG_DBC_BODY_KEYS     = {"jrmcBdy", "jrmcBdyCur", "jrmcBdyc"};
+    private static final String[] TAG_DBC_BODY_MAX_KEYS = {"jrmcBdyF", "jrmcBdyMax", "jrmcBdyM"};
+    private static final String[] TAG_DBC_CON_KEYS      = {"jrmcCon", "jrmcCON", "jrmcConstitution", "jrmcCns", "jrmcCNS"};
+    private static final String TAG_FR_BODY_MAX_OBSERVED = "HexFracBodyMaxObserved";
+    private static final String TAG_FR_LAST_CON_OBSERVED = "HexFracLastConObserved";
+    private static final String TAG_FR_BODY_MAX_DIRTY    = "HexFracBodyMaxDirty";
+    // Legacy cache key kept in sync for backward compatibility with older stacks/tools.
     private static final String TAG_FR_BODY_MAX_LEARNED = "HexFracBodyMax";
+
+    private static NBTTagCompound getDbcBodyRoot(EntityPlayer p) {
+        return (p != null) ? p.getEntityData() : null;
+    }
+
+    private static NBTTagCompound getDbcBodyPersisted(NBTTagCompound root) {
+        if (root == null) return null;
+        try {
+            if (root.hasKey(TAG_PLAYER_PERSISTED, 10)) return root.getCompoundTag(TAG_PLAYER_PERSISTED);
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static NBTTagCompound getOrCreateDbcBodyPersisted(EntityPlayer p) {
+        if (p == null) return null;
+        NBTTagCompound root = p.getEntityData();
+        if (root == null) return null;
+        try {
+            if (!root.hasKey(TAG_PLAYER_PERSISTED, 10)) {
+                root.setTag(TAG_PLAYER_PERSISTED, new NBTTagCompound());
+            }
+            return root.getCompoundTag(TAG_PLAYER_PERSISTED);
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static float readBestNumeric(NBTTagCompound tag, String[] keys) {
+        if (tag == null || keys == null) return Float.NaN;
+        for (String key : keys) {
+            if (key == null) continue;
+            try {
+                if (tag.hasKey(key, 99)) {
+                    return (float) tag.getDouble(key);
+                }
+            } catch (Throwable ignored) {}
+        }
+        return Float.NaN;
+    }
+
+    private static void writeLegacyObservedMax(NBTTagCompound persisted, int max) {
+        if (persisted == null) return;
+        try {
+            persisted.setInteger(TAG_FR_BODY_MAX_OBSERVED, max);
+            persisted.setFloat(TAG_FR_BODY_MAX_LEARNED, (float) max);
+        } catch (Throwable ignored) {}
+    }
+
+    private static double getConstitutionEffectiveApprox(EntityPlayer p) {
+        if (p == null) return 0.0D;
+
+        double v = 0.0D;
+        try {
+            net.minecraft.entity.ai.attributes.IAttributeInstance inst = p.getAttributeMap().getAttributeInstanceByName("dbc.Constitution");
+            if (inst != null) v = inst.getAttributeValue();
+        } catch (Throwable ignored) {}
+
+        if (v <= 0.0D) {
+            try {
+                net.minecraft.entity.ai.attributes.IAttributeInstance inst = p.getAttributeMap().getAttributeInstanceByName("Constitution");
+                if (inst != null) v = inst.getAttributeValue();
+            } catch (Throwable ignored) {}
+        }
+
+        if (v <= 0.0D) {
+            NBTTagCompound root = getDbcBodyRoot(p);
+            NBTTagCompound persisted = getDbcBodyPersisted(root);
+            float n = readBestNumeric(root, TAG_DBC_CON_KEYS);
+            if (!(n > 0.0F) && persisted != null) n = readBestNumeric(persisted, TAG_DBC_CON_KEYS);
+            if (n > 0.0F) v = n;
+        }
+
+        return (v > 0.0D) ? v : 0.0D;
+    }
+
+    private static float updateObservedDbcBodyMax(EntityPlayer p, float curBody) {
+        if (p == null || !(curBody >= 0.0F)) return Float.NaN;
+
+        NBTTagCompound persisted = getOrCreateDbcBodyPersisted(p);
+        if (persisted == null) return Float.NaN;
+
+        int curInt = Math.max(0, Math.round(curBody));
+        int cachedMax = 0;
+        try {
+            if (persisted.hasKey(TAG_FR_BODY_MAX_OBSERVED, 99)) {
+                cachedMax = persisted.getInteger(TAG_FR_BODY_MAX_OBSERVED);
+            } else if (persisted.hasKey(TAG_FR_BODY_MAX_LEARNED, 99)) {
+                cachedMax = Math.round((float) persisted.getDouble(TAG_FR_BODY_MAX_LEARNED));
+            }
+        } catch (Throwable ignored) {}
+
+        int effCon = 0;
+        try { effCon = Math.max(0, (int) Math.round(getConstitutionEffectiveApprox(p))); } catch (Throwable ignored) {}
+
+        boolean hasLastCon = false;
+        int lastCon = effCon;
+        try {
+            hasLastCon = persisted.hasKey(TAG_FR_LAST_CON_OBSERVED, 99);
+            if (hasLastCon) lastCon = persisted.getInteger(TAG_FR_LAST_CON_OBSERVED);
+        } catch (Throwable ignored) {}
+
+        if (!hasLastCon) {
+            persisted.setInteger(TAG_FR_LAST_CON_OBSERVED, effCon);
+        } else if (effCon != lastCon) {
+            persisted.setInteger(TAG_FR_LAST_CON_OBSERVED, effCon);
+            persisted.setBoolean(TAG_FR_BODY_MAX_DIRTY, true);
+            if (effCon < lastCon) {
+                cachedMax = 0;
+                writeLegacyObservedMax(persisted, 0);
+            }
+        }
+
+        if (curInt > cachedMax) {
+            cachedMax = curInt;
+            writeLegacyObservedMax(persisted, cachedMax);
+            persisted.setBoolean(TAG_FR_BODY_MAX_DIRTY, false);
+        }
+
+        return (cachedMax > 0) ? (float) cachedMax : Float.NaN;
+    }
+
+    private static void syncObservedDbcBodyMaxFromReal(EntityPlayer p, float realMax) {
+        if (p == null || !(realMax > 0.0F)) return;
+
+        NBTTagCompound persisted = getOrCreateDbcBodyPersisted(p);
+        if (persisted == null) return;
+
+        int maxInt = Math.max(0, Math.round(realMax));
+        writeLegacyObservedMax(persisted, maxInt);
+        persisted.setBoolean(TAG_FR_BODY_MAX_DIRTY, false);
+
+        try {
+            int effCon = Math.max(0, (int) Math.round(getConstitutionEffectiveApprox(p)));
+            persisted.setInteger(TAG_FR_LAST_CON_OBSERVED, effCon);
+        } catch (Throwable ignored) {}
+    }
+
     /**
      * @return float[]{body, bodyMax} if present, otherwise null.
      */
     private static float[] getDbcBodyPair(EntityPlayer p) {
         if (p == null) return null;
-        NBTTagCompound ed = p.getEntityData();
-        if (ed == null) return null;
 
-        // Prefer PlayerPersisted, but fall back to root if needed.
-        boolean hasPersisted = ed.hasKey(TAG_PLAYER_PERSISTED, 10);
-        NBTTagCompound persisted = hasPersisted ? ed.getCompoundTag(TAG_PLAYER_PERSISTED) : null;
+        NBTTagCompound root = getDbcBodyRoot(p);
+        if (root == null) return null;
+        NBTTagCompound persisted = getDbcBodyPersisted(root);
 
-        NBTTagCompound src = null;
-        boolean srcIsPersisted = false;
+        float body = readBestNumeric(root, TAG_DBC_BODY_KEYS);
+        if (!(body >= 0.0F) && persisted != null) body = readBestNumeric(persisted, TAG_DBC_BODY_KEYS);
+        if (!(body >= 0.0F)) return null;
 
-        if (persisted != null && persisted.hasKey(TAG_DBC_BODY)) {
-            src = persisted;
-            srcIsPersisted = true;
-        } else if (ed.hasKey(TAG_DBC_BODY)) {
-            src = ed;
+        float max = readBestNumeric(root, TAG_DBC_BODY_MAX_KEYS);
+        if (!(max > 0.0F) && persisted != null) max = readBestNumeric(persisted, TAG_DBC_BODY_MAX_KEYS);
+
+        if (max > 0.0F) {
+            syncObservedDbcBodyMaxFromReal(p, max);
         } else {
-            return null;
+            max = updateObservedDbcBodyMax(p, body);
         }
 
-        float body = (float) src.getInteger(TAG_DBC_BODY);
-        if (body < 0.0f) body = 0.0f;
-
-        float max = 0.0f;
-        if (src.hasKey(TAG_DBC_BODY_MAX)) {
-            max = (float) src.getInteger(TAG_DBC_BODY_MAX);
-        } else if (src.hasKey(TAG_FR_BODY_MAX_LEARNED)) {
-            max = src.getFloat(TAG_FR_BODY_MAX_LEARNED);
-        }
-
-        // Learn max if missing or too small. This makes Fractured gates work even
-        // when DBC doesn't expose a "max body" key.
-        if (max <= 0.0f || body > max) {
-            max = body;
-            src.setFloat(TAG_FR_BODY_MAX_LEARNED, max);
-
-            // If we modified PlayerPersisted, write it back (safe even if it already existed).
-            if (srcIsPersisted && hasPersisted) {
-                ed.setTag(TAG_PLAYER_PERSISTED, src);
-            }
-        }
-
-        if (max <= 0.0f) return null;
+        if (!(max > 0.0F)) return null;
+        if (body < 0.0F) body = 0.0F;
         if (body > max) body = max;
-
         return new float[]{body, max};
     }
 
@@ -1006,21 +1187,54 @@ public class HexOrbRoller {
             NBTTagCompound src = null;
             boolean srcIsPersisted = false;
 
-            if (persisted != null && persisted.hasKey(TAG_DBC_BODY)) {
-                src = persisted;
-                srcIsPersisted = true;
-            } else if (ed.hasKey(TAG_DBC_BODY)) {
-                src = ed;
-            } else {
-                return false;
+            if (persisted != null) {
+                for (String key : TAG_DBC_BODY_KEYS) {
+                    if (persisted.hasKey(key, 99)) {
+                        src = persisted;
+                        srcIsPersisted = true;
+                        break;
+                    }
+                }
             }
+            if (src == null) {
+                for (String key : TAG_DBC_BODY_KEYS) {
+                    if (ed.hasKey(key, 99)) {
+                        src = ed;
+                        break;
+                    }
+                }
+            }
+            if (src == null) return false;
 
-            int cur = src.getInteger(TAG_DBC_BODY);
+            String curKey = null;
+            for (String key : TAG_DBC_BODY_KEYS) {
+                if (src.hasKey(key, 99)) {
+                    curKey = key;
+                    break;
+                }
+            }
+            if (curKey == null) curKey = TAG_DBC_BODY_KEYS[0];
+
+            int cur = src.getInteger(curKey);
             if (cur < 0) cur = 0;
 
             int max = 0;
-            if (src.hasKey(TAG_DBC_BODY_MAX)) {
-                max = src.getInteger(TAG_DBC_BODY_MAX);
+            String maxKey = null;
+            for (String key : TAG_DBC_BODY_MAX_KEYS) {
+                if (src.hasKey(key, 99)) {
+                    maxKey = key;
+                    break;
+                }
+            }
+            if (maxKey != null) {
+                max = src.getInteger(maxKey);
+                if (max > 0) {
+                    src.setFloat(TAG_FR_BODY_MAX_LEARNED, (float) max);
+                    src.setInteger(TAG_FR_BODY_MAX_OBSERVED, max);
+                    src.setBoolean(TAG_FR_BODY_MAX_DIRTY, false);
+                }
+            } else if (src.hasKey(TAG_FR_BODY_MAX_OBSERVED, 99)) {
+                max = src.getInteger(TAG_FR_BODY_MAX_OBSERVED);
             } else if (src.hasKey(TAG_FR_BODY_MAX_LEARNED)) {
                 max = (int) src.getFloat(TAG_FR_BODY_MAX_LEARNED);
             }
@@ -1033,7 +1247,7 @@ public class HexOrbRoller {
             if (nb > (long) max) nb = (long) max;
             if (nb < 0L) nb = 0L;
 
-            src.setInteger(TAG_DBC_BODY, (int) nb);
+            src.setInteger(curKey, (int) nb);
 
             if (srcIsPersisted && hasPersisted) {
                 ed.setTag(TAG_PLAYER_PERSISTED, src);
@@ -1043,6 +1257,7 @@ public class HexOrbRoller {
             return false;
         }
     }
+
 
     private boolean isFracturedDebugEnabled(EntityPlayer p) {
         return DEBUG_FRACTURED;
@@ -2286,6 +2501,79 @@ public class HexOrbRoller {
     }
 
     // ---------------------------------------------------------------------
+    // Evolved elemental gems (intended stat + 1 random stat at similar value)
+    // ---------------------------------------------------------------------
+    private void rollEvolvedElementBase(ItemStack stack, NBTTagCompound tag, RollProfile base, String intendedKey, String intendedName) {
+        final String[] baseKeys = new String[]{
+                "dbc.Strength",
+                "dbc.Dexterity",
+                "dbc.Constitution",
+                "dbc.WillPower",
+                "dbc.Spirit"
+        };
+        final String[] names = new String[]{
+                "Strength",
+                "Dexterity",
+                "Constitution",
+                "WillPower",
+                "Spirit"
+        };
+
+        int intendedIndex = 0;
+        for (int i = 0; i < baseKeys.length; i++) {
+            if (baseKeys[i].equals(intendedKey)) {
+                intendedIndex = i;
+                break;
+            }
+        }
+
+        int randomIndex = rng.nextInt(baseKeys.length - 1);
+        if (randomIndex >= intendedIndex) randomIndex++;
+
+        // Evolved elemental gems are percent-based only.
+        String kA = intendedKey + ".Multi";
+        String kB = baseKeys[randomIndex] + ".Multi";
+
+        int min = 3;
+        int max = 12;
+        if (!base.entries.isEmpty()) {
+            RollEntry first = base.entries.get(0);
+            min = first.min;
+            max = first.max;
+        }
+
+        int va = rand(min, max);
+        int vb = rand(min, max);
+
+        RollProfile dyn = new RollProfile(
+                base.id,
+                base.displayName,
+                base.effectLine,
+                base.gradientOpen,
+                true,
+                false,
+                false,
+                0,
+                0
+        );
+        dyn.entries.add(new RollEntry(kA, intendedName, 0, 0));
+        dyn.entries.add(new RollEntry(kB, names[randomIndex], 0, 0));
+
+        NBTTagCompound rolls = new NBTTagCompound();
+        rolls.setInteger(kA, va);
+        rolls.setInteger(kB, vb);
+
+        tag.setBoolean(TAG_ROLLED, true);
+        tag.setBoolean(TAG_LORE_DONE, true);
+        tag.setString(TAG_PROFILE, base.id);
+        tag.setTag(TAG_ROLLS, rolls);
+
+        applyRpgCoreAttributes(tag, dyn, rolls);
+        applyLore(stack, dyn, rolls);
+        stack.setTagCompound(tag);
+    }
+
+    // ---------------------------------------------------------------------
     // Fire Pill (2 random positive stats)
     // ---------------------------------------------------------------------
     private void rollFirePillBase(ItemStack stack, NBTTagCompound tag, RollProfile base) {
@@ -2823,6 +3111,8 @@ public class HexOrbRoller {
     private static final String TAG_FR_SNAP   = "HexFracSnapTicks";     // int remaining
     private static final String TAG_FR_TIER   = "HexFracTier";          // int (100,80,60,30,10,5,0)
     private static final String TAG_FR_TYPE   = "HexFracType";          // string (Fractured Type)
+    private static final String TAG_PC_TIER   = "HexPerfectCoreTier";   // int last applied Perfect Core threshold tier
+    private static final String CHAT_PC_NAME = "<shadow><pulse amp=0.40 speed=0.90><grad #43f3ff #2f8dff #7a4dff #ff5ae0 #ffd6f5 scroll=0.55 styles=lo>Perfect Core</grad></pulse></shadow>";
 
 
     // ------------------------------------------------------------
@@ -2895,6 +3185,228 @@ public class HexOrbRoller {
         // Equal-weight by default (simple + fun).
         FracturedType[] all = FracturedType.values();
         return all[rng.nextInt(all.length)];
+    }
+
+    private boolean isPerfectCoreProfile(ItemStack stack) {
+        if (stack == null) return false;
+        NBTTagCompound tag = stack.getTagCompound();
+        if (tag == null) return false;
+        String prof = tag.getString(TAG_PROFILE);
+        return "EVOLVED_RAINBOW".equals(prof) || stack.getItemDamage() == META_EVOLVED_RAINBOW;
+    }
+
+    private void ensurePerfectCoreThresholdData(ItemStack stack, NBTTagCompound tag) {
+        if (stack == null || tag == null) return;
+
+        if (!tag.hasKey(TAG_BASE_ROLLS, 10)) {
+            NBTTagCompound base = new NBTTagCompound();
+            NBTTagCompound cur = tag.hasKey(TAG_ROLLS, 10) ? tag.getCompoundTag(TAG_ROLLS) : null;
+            if (cur != null) {
+                String[] ordered = new String[]{
+                        "dbc.Strength.Multi",
+                        "dbc.Dexterity.Multi",
+                        "dbc.Constitution.Multi",
+                        "dbc.WillPower.Multi",
+                        "dbc.Spirit.Multi"
+                };
+                for (String k : ordered) {
+                    if (cur.hasKey(k, 99)) base.setInteger(k, cur.getInteger(k));
+                }
+            }
+            tag.setTag(TAG_BASE_ROLLS, base);
+        }
+
+        if (!tag.hasKey(TAG_KEYS, 9)) {
+            NBTTagList keyOrder = new NBTTagList();
+            NBTTagCompound base = tag.getCompoundTag(TAG_BASE_ROLLS);
+            String[] ordered = new String[]{
+                    "dbc.Strength.Multi",
+                    "dbc.Dexterity.Multi",
+                    "dbc.Constitution.Multi",
+                    "dbc.WillPower.Multi",
+                    "dbc.Spirit.Multi"
+            };
+            for (String k : ordered) {
+                if (base.hasKey(k, 99)) keyOrder.appendTag(new NBTTagString(k));
+            }
+            tag.setTag(TAG_KEYS, keyOrder);
+        }
+    }
+
+    private boolean updatePerfectCoreThresholdStack(ItemStack stack, EntityPlayer p) {
+        return updatePerfectCoreThresholdStack(stack, p, false, false);
+    }
+
+    private boolean updatePerfectCoreThresholdStack(ItemStack stack, EntityPlayer p, boolean activeOverride) {
+        return updatePerfectCoreThresholdStack(stack, p, activeOverride, activeOverride);
+    }
+
+    private boolean updatePerfectCoreThresholdStack(ItemStack stack, EntityPlayer p, boolean activeOverride, boolean showDebugMessage) {
+        if (stack == null || p == null) return false;
+
+        NBTTagCompound tag = stack.getTagCompound();
+        if (tag == null) return false;
+        if (!tag.getBoolean(TAG_ROLLED)) return false;
+        if (!isPerfectCoreProfile(stack)) return false;
+
+        ensurePerfectCoreThresholdData(stack, tag);
+        if (!tag.hasKey(TAG_BASE_ROLLS, 10) || !tag.hasKey(TAG_KEYS, 9)) return false;
+
+        NBTTagCompound base = tag.getCompoundTag(TAG_BASE_ROLLS);
+        NBTTagList keys = tag.getTagList(TAG_KEYS, 8);
+        if (keys == null || keys.tagCount() == 0) return false;
+
+        boolean active = activeOverride || isFracturedActiveStack(p, stack);
+
+        float frac = 1.0f;
+        boolean isFull = true;
+        float hp = 0.0f;
+        float max = 0.0f;
+        if (active) {
+            hp = getEffectiveBody(p);
+            max = getEffectiveBodyMax(p);
+            frac = (max > 0.0f) ? (hp / max) : 1.0f;
+            isFull = (max > 0.0f) && (hp >= (max - 0.01f));
+        }
+
+        int lastTier = tag.hasKey(TAG_PC_TIER, 3) ? tag.getInteger(TAG_PC_TIER) : -999;
+        int tier;
+        float thrMult;
+
+        if (isFull) {
+            tier = 100;
+            thrMult = 1.00f;
+        } else if (frac >= 0.80f) {
+            tier = 80;
+            thrMult = 1.00f;
+        } else if (frac >= 0.60f) {
+            tier = 60;
+            thrMult = 1.15f;
+        } else if (frac >= 0.30f) {
+            tier = 30;
+            thrMult = 1.40f;
+        } else {
+            if (frac <= 0.05f) {
+                tier = 5;
+                thrMult = 2.40f;
+            } else if (frac <= 0.10f) {
+                tier = 10;
+                thrMult = 2.10f;
+            } else {
+                tier = 25;
+                thrMult = 1.60f;
+            }
+        }
+
+        if (tier != lastTier) {
+            tag.setInteger(TAG_PC_TIER, tier);
+            if (showDebugMessage && isFracturedDebugEnabled(p)) {
+                int pctInt = Math.max(0, Math.min(100, (int) Math.floor(frac * 100.0f + 0.5f)));
+                String tierLabel = (tier == 25) ? "<30" : String.valueOf(tier);
+                p.addChatMessage(new ChatComponentText(
+                        CHAT_PC_NAME + " §8» §7HP §f" + pctInt + "% §8» §dTier §b" + tierLabel + "% §8(§6x" + format2(thrMult) + "§8)"
+                ));
+            }
+        }
+
+        NBTTagCompound cur = tag.hasKey(TAG_ROLLS, 10) ? tag.getCompoundTag(TAG_ROLLS) : new NBTTagCompound();
+        NBTTagCompound rpg = tag.getCompoundTag(TAG_RPGCORE);
+        NBTTagCompound attrs = rpg.getCompoundTag(TAG_ATTRS);
+
+        boolean curChanged = false;
+        boolean attrsMismatch = false;
+
+        for (int i = 0; i < keys.tagCount(); i++) {
+            String k = keys.getStringTagAt(i);
+            int b = base.getInteger(k);
+            int v = Math.round(b * thrMult);
+
+            if (v == 0 && b != 0) v = (b > 0) ? 1 : -1;
+
+            if (!cur.hasKey(k) || cur.getInteger(k) != v) {
+                cur.setInteger(k, v);
+                curChanged = true;
+            }
+
+            float curAttr = attrs.hasKey(k) ? attrs.getFloat(k) : Float.NaN;
+            if (!(curAttr == (float) v)) attrsMismatch = true;
+        }
+
+        boolean tierChanged = (tier != lastTier);
+        boolean needsWrite = curChanged || attrsMismatch || tierChanged;
+
+        if (!needsWrite) {
+            stack.setTagCompound(tag);
+            return false;
+        }
+
+        tag.setTag(TAG_ROLLS, cur);
+        for (int i = 0; i < keys.tagCount(); i++) {
+            String k = keys.getStringTagAt(i);
+            attrs.setFloat(k, (float) cur.getInteger(k));
+        }
+        rpg.setTag(TAG_ATTRS, attrs);
+        tag.setTag(TAG_RPGCORE, rpg);
+
+        applyLore(stack, RollProfiles.EVOLVED_RAINBOW, cur);
+        stack.setTagCompound(tag);
+        return true;
+    }
+
+    private boolean updateSocketedPerfectCoreOnHost(EntityPlayer p, ItemStack host, boolean showDebugMessage) {
+        if (p == null || host == null) return false;
+        try {
+            if (!HexSocketAPI.hasSocketData(host)) return false;
+            int sockets = HexSocketAPI.getSocketsFilled(host);
+            if (sockets <= 0) return false;
+
+            boolean changed = false;
+            for (int i = 0; i < sockets; i++) {
+                ItemStack gem = HexSocketAPI.getGemAt(host, i);
+                if (gem == null) continue;
+                if (!isPerfectCoreProfile(gem)) continue;
+
+                if (updatePerfectCoreThresholdStack(gem, p, true, showDebugMessage)) {
+                    HexSocketAPI.setGemAt(host, i, gem);
+                    syncFracturedSocketBonuses(host, i, gem);
+                    changed = true;
+                }
+            }
+            return changed;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private boolean updatePerfectCoreThresholdDynamics(EntityPlayer p) {
+        boolean changed = false;
+        if (p == null) return false;
+
+        for (int i = 0; i < p.inventory.mainInventory.length; i++) {
+            if (updatePerfectCoreThresholdStack(p.inventory.mainInventory[i], p, false, i == p.inventory.currentItem)) changed = true;
+        }
+        for (int i = 0; i < p.inventory.armorInventory.length; i++) {
+            if (updatePerfectCoreThresholdStack(p.inventory.armorInventory[i], p, false, true)) changed = true;
+        }
+        if (updatePerfectCoreThresholdStack(p.getCurrentEquippedItem(), p, false, true)) changed = true;
+
+        ItemStack heldHost = p.getCurrentEquippedItem();
+        if (updateSocketedPerfectCoreOnHost(p, heldHost, true)) changed = true;
+
+        for (int a = 0; a < 4; a++) {
+            if (updateSocketedPerfectCoreOnHost(p, p.getCurrentArmor(a), true)) changed = true;
+        }
+
+        try {
+            ItemStack[] inv = p.inventory.mainInventory;
+            if (inv != null) {
+                for (int i = 0; i < inv.length; i++) {
+                    if (updateSocketedPerfectCoreOnHost(p, inv[i], i == p.inventory.currentItem)) changed = true;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        return changed;
     }
 
     /**
@@ -3842,10 +4354,14 @@ public class HexOrbRoller {
             }
         }
 
-        // swirly extra line (keeps your existing vibe)
+        // swirly / perfect core extra line (keeps your existing vibe)
         int meta = stack.getItemDamage();
         if (meta == META_SWIRLY_FLAT || meta == META_SWIRLY_ANIM) {
             newLines.add("§dUnlocks Unique attacks…");
+        } else if (meta == META_EVOLVED_RAINBOW) {
+            newLines.add("§dUses every passive…");
+            newLines.add("§8• Overwrite • Unique Attacks • Fractured • Void");
+            newLines.add("§dHP Threshold Surge");
         }
 
         // Merge: put our lines first, keep existing lore (avoid exact duplicates)
@@ -3856,12 +4372,34 @@ public class HexOrbRoller {
         for (int i = 0; i < lore.tagCount(); i++) {
             String s = lore.getStringTagAt(i);
 
-            // Remove any previous Effect/Bonus lines so we don't stack duplicates,
-            // especially when an item transitions from N/A -> real effect later.
+            // Remove any previous generated lines so dynamic orbs do not stack old values
+            // into the visible tooltip when the live roll changes.
             if (s != null) {
                 if (s.startsWith("§7Effect:")) continue;
                 if (s.startsWith("§7Bonus:")) continue;
                 if ("§dUnlocks Unique attacks…".equals(s)) continue;
+                if ("§dUses every passive…".equals(s)) continue;
+                if ("§8• Overwrite • Unique Attacks • Fractured • Void".equals(s)) continue;
+                if ("§dHP Threshold Surge".equals(s)) continue;
+
+                boolean skipGeneratedStat = false;
+                if (profile.isAll5Shared) {
+                    String dn = profile.displayName;
+                    if (dn != null && dn.length() > 0 && s.contains(dn + " ")) {
+                        skipGeneratedStat = true;
+                    }
+                } else if (profile.entries != null) {
+                    for (int eIdx = 0; eIdx < profile.entries.size(); eIdx++) {
+                        RollEntry e = profile.entries.get(eIdx);
+                        if (e == null) continue;
+                        String dn = (e.displayName != null && e.displayName.length() > 0) ? e.displayName : profile.displayName;
+                        if (dn != null && dn.length() > 0 && s.contains(dn + " ")) {
+                            skipGeneratedStat = true;
+                            break;
+                        }
+                    }
+                }
+                if (skipGeneratedStat) continue;
             }
 
             if (!containsExact(newLines, s)) {
@@ -4262,6 +4800,84 @@ public class HexOrbRoller {
                 0,
                 0
         ).add("dbc.Spirit.Multi", "Spirit", 1, 10);
+
+        // Evolved elemental gems: intended stat + 1 distinct random stat (percent values, slightly above enhanced)
+        static final RollProfile EVOLVED_INFERNO = new RollProfile(
+                "EVOLVED_INFERNO",
+                "Strength",
+                EFFECT_NA,
+                G_FIERY_OPEN,
+                true,
+                false,
+                false,
+                0,
+                0
+        ).add("dbc.Strength.Multi", "Strength", 3, 12);
+
+        static final RollProfile EVOLVED_FROST = new RollProfile(
+                "EVOLVED_FROST",
+                "Dexterity",
+                EFFECT_NA,
+                G_ICY_OPEN,
+                true,
+                false,
+                false,
+                0,
+                0
+        ).add("dbc.Dexterity.Multi", "Dexterity", 3, 12);
+
+        static final RollProfile EVOLVED_SOLAR = new RollProfile(
+                "EVOLVED_SOLAR",
+                "Constitution",
+                EFFECT_NA,
+                G_GOLDEN_OPEN,
+                true,
+                false,
+                false,
+                0,
+                0
+        ).add("dbc.Constitution.Multi", "Constitution", 3, 12);
+
+        static final RollProfile EVOLVED_NATURE = new RollProfile(
+                "EVOLVED_NATURE",
+                "WillPower",
+                EFFECT_NA,
+                G_NATURE_OPEN,
+                true,
+                false,
+                false,
+                0,
+                0
+        ).add("dbc.WillPower.Multi", "WillPower", 3, 12);
+
+        static final RollProfile EVOLVED_AETHER = new RollProfile(
+                "EVOLVED_AETHER",
+                "Spirit",
+                EFFECT_NA,
+                G_AETHER_OPEN,
+                true,
+                false,
+                false,
+                0,
+                0
+        ).add("dbc.Spirit.Multi", "Spirit", 3, 12);
+
+        static final RollProfile EVOLVED_RAINBOW = new RollProfile(
+                "EVOLVED_RAINBOW",
+                "All Attributes",
+                "§7Effect: " + G_ENERGIZED_OPEN + "All Passives" + G_CLOSE,
+                G_ENERGIZED_OPEN,
+                true,
+                true,
+                true,
+                3,
+                12
+        )
+                .add("dbc.Strength.Multi",     "All Attributes", 0, 0)
+                .add("dbc.Dexterity.Multi",    "All Attributes", 0, 0)
+                .add("dbc.Constitution.Multi", "All Attributes", 0, 0)
+                .add("dbc.WillPower.Multi",    "All Attributes", 0, 0)
+                .add("dbc.Spirit.Multi",       "All Attributes", 0, 0);
 
         // Void (type-driven; bonus roll is assigned at roll time)
         static final RollProfile VOID_FLAT = new RollProfile(

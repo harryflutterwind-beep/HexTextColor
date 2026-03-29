@@ -1,6 +1,7 @@
 // src/main/java/com/example/examplemod/command/LorePagesCommand.java
 package com.example.examplemod.command;
 
+import com.example.examplemod.api.LorePagesAPI;
 import net.minecraft.command.CommandBase;
 import net.minecraft.command.ICommandSender;
 import net.minecraft.command.WrongUsageException;
@@ -23,16 +24,18 @@ import java.util.List;
  * /lorepages testicon
  *
  * Stored in:
- *   stack.tag.HexLorePages.Pages (NBTTagList<String>)
+ *   stack.tag.HexLorePages.Pages (NBTTagList<Compound>)
+ *   each page compound stores its lines in key "L"
  *
  * Notes:
  *  - Use \n inside text to create multi-line pages
+ *  - Legacy string-page items are read and migrated on write
  *  - Slot indices: 0-35 (0-8 hotbar, 9-35 inventory)
  */
 public class LorePagesCommand extends CommandBase {
 
-    private static final String NBT_ROOT = "HexLorePages";
-    private static final String NBT_LIST = "Pages";
+    private static final String NBT_ROOT = LorePagesAPI.NBT_ROOT;
+    private static final String NBT_LIST = LorePagesAPI.NBT_PAGES;
 
     @Override
     public String getCommandName() {
@@ -46,7 +49,6 @@ public class LorePagesCommand extends CommandBase {
 
     @Override
     public int getRequiredPermissionLevel() {
-        // tweak as you want (2 = ops). If you want everyone to use it, return 0.
         return 2;
     }
 
@@ -69,18 +71,16 @@ public class LorePagesCommand extends CommandBase {
                 return;
             }
 
-            // NOTE: this only stores tokens in pages. Icons won't render until the client renderer
-            // supports parsing + drawing <ico:...> tokens.
             String text =
-                    "&7Icon test: <ico:gems/pill_dark_fire_face_64_anim> &fPurple\n" +
-                            "&7Bigger: <ico:gems/pill_dark_fire_face_64_anim> &fBigger one\n" +
+                    "&7Icon test: <ico:gems/pill_dark_fire_face_64_anim> &fPurple\\n" +
+                            "&7Bigger: <ico:gems/pill_dark_fire_face_64_anim> &fBigger one\\n" +
                             "&7Inline: &aAAA <ico:gems/pill_dark_fire_face_64_anim> &bBBB";
 
-            NBTTagList list = getOrCreatePagesList(held);
-            list.appendTag(new net.minecraft.nbt.NBTTagString(text));
-            savePagesList(held, list);
+            List<List<String>> pages = readPages(held);
+            pages.add(pageTextToLines(text));
+            writePages(held, pages);
 
-            msg(p, "§aAdded icon test page §f#" + list.tagCount() + "§a. Open lore pages and hover.");
+            msg(p, "§aAdded icon test page §f#" + pages.size() + "§a. Open lore pages and hover.");
             return;
         }
 
@@ -92,10 +92,10 @@ public class LorePagesCommand extends CommandBase {
                 return;
             }
             String text = joinFrom(args, 1);
-            NBTTagList list = getOrCreatePagesList(held);
-            list.appendTag(new net.minecraft.nbt.NBTTagString(text));
-            savePagesList(held, list);
-            msg(p, "§aAdded page §f#" + list.tagCount() + "§a.");
+            List<List<String>> pages = readPages(held);
+            pages.add(pageTextToLines(text));
+            writePages(held, pages);
+            msg(p, "§aAdded page §f#" + pages.size() + "§a.");
             return;
         }
 
@@ -106,19 +106,15 @@ public class LorePagesCommand extends CommandBase {
                 msg(p, "§cHold an item first.");
                 return;
             }
-            int idx = parseIntBounded(p, args[1], 1, 9999) - 1; // user uses 1-based
+            int idx = parseIntBounded(p, args[1], 1, 9999) - 1;
             String text = joinFrom(args, 2);
 
-            NBTTagList list = getOrCreatePagesList(held);
-            List<String> pages = toStringList(list);
-
+            List<List<String>> pages = readPages(held);
             if (idx < 0) idx = 0;
             if (idx > pages.size()) idx = pages.size();
-            pages.add(idx, text);
+            pages.add(idx, pageTextToLines(text));
 
-            NBTTagList rebuilt = fromStringList(pages);
-            savePagesList(held, rebuilt);
-
+            writePages(held, pages);
             msg(p, "§aInserted page at §f#" + (idx + 1) + "§a.");
             return;
         }
@@ -132,13 +128,12 @@ public class LorePagesCommand extends CommandBase {
             }
             int idx = parseIntBounded(p, args[1], 1, 9999) - 1;
 
-            NBTTagList list = getPagesList(held);
-            if (list == null || list.tagCount() == 0) {
+            List<List<String>> pages = readPages(held);
+            if (pages.isEmpty()) {
                 msg(p, "§7No pages to remove.");
                 return;
             }
 
-            List<String> pages = toStringList(list);
             if (idx < 0 || idx >= pages.size()) {
                 msg(p, "§cInvalid page index. Use /lorepages list");
                 return;
@@ -149,7 +144,7 @@ public class LorePagesCommand extends CommandBase {
                 clearPages(held);
                 msg(p, "§aRemoved last page; pages cleared.");
             } else {
-                savePagesList(held, fromStringList(pages));
+                writePages(held, pages);
                 msg(p, "§aRemoved page §f#" + (idx + 1) + "§a.");
             }
             return;
@@ -172,15 +167,14 @@ public class LorePagesCommand extends CommandBase {
                 msg(p, "§cHold an item first.");
                 return;
             }
-            NBTTagList list = getPagesList(held);
-            if (list == null || list.tagCount() == 0) {
+            List<List<String>> pages = readPages(held);
+            if (pages.isEmpty()) {
                 msg(p, "§7No pages stored on this item.");
                 return;
             }
-            msg(p, "§b§oPages: §f" + list.tagCount());
-            for (int i = 0; i < list.tagCount(); i++) {
-                String page = list.getStringTagAt(i);
-                String preview = preview(page, 42);
+            msg(p, "§b§oPages: §f" + pages.size());
+            for (int i = 0; i < pages.size(); i++) {
+                String preview = preview(joinPageLines(pages.get(i)), 42);
                 msg(p, "§7- §f#" + (i + 1) + "§7: §b§o" + preview);
             }
             return;
@@ -207,14 +201,13 @@ public class LorePagesCommand extends CommandBase {
                 return;
             }
 
-            NBTTagList fromPages = getPagesList(from);
-            if (fromPages == null || fromPages.tagCount() == 0) {
+            List<List<String>> fromPages = readPages(from);
+            if (fromPages.isEmpty()) {
                 msg(p, "§7No pages on fromSlot item.");
                 return;
             }
 
-            // Copy pages onto destination (overwrites destination pages)
-            savePagesList(to, (NBTTagList) fromPages.copy());
+            writePages(to, deepCopyPages(fromPages));
 
             if (move) {
                 clearPages(from);
@@ -228,67 +221,90 @@ public class LorePagesCommand extends CommandBase {
         throw new WrongUsageException(getCommandUsage(sender));
     }
 
-    // ─────────────────────────────────────────────
-    // NBT helpers
-    // ─────────────────────────────────────────────
-
-    private static NBTTagList getPagesList(ItemStack stack) {
-        if (stack == null || !stack.hasTagCompound()) return null;
-        NBTTagCompound tag = stack.getTagCompound();
-        if (tag == null || !tag.hasKey(NBT_ROOT, 10)) return null;
-        NBTTagCompound root = tag.getCompoundTag(NBT_ROOT);
-        if (root == null || !root.hasKey(NBT_LIST, 9)) return null;
-        return root.getTagList(NBT_LIST, 8);
-    }
-
-    private static NBTTagList getOrCreatePagesList(ItemStack stack) {
-        if (stack.getTagCompound() == null) stack.setTagCompound(new NBTTagCompound());
-        NBTTagCompound tag = stack.getTagCompound();
-
-        if (!tag.hasKey(NBT_ROOT, 10)) tag.setTag(NBT_ROOT, new NBTTagCompound());
-        NBTTagCompound root = tag.getCompoundTag(NBT_ROOT);
-
-        if (!root.hasKey(NBT_LIST, 9)) root.setTag(NBT_LIST, new NBTTagList());
-        return root.getTagList(NBT_LIST, 8);
-    }
-
-    private static void savePagesList(ItemStack stack, NBTTagList list) {
-        if (stack.getTagCompound() == null) stack.setTagCompound(new NBTTagCompound());
-        NBTTagCompound tag = stack.getTagCompound();
-
-        if (!tag.hasKey(NBT_ROOT, 10)) tag.setTag(NBT_ROOT, new NBTTagCompound());
-        NBTTagCompound root = tag.getCompoundTag(NBT_ROOT);
-
-        root.setTag(NBT_LIST, list);
-
-        // If empty, clean up to keep items tidy
-        if (list == null || list.tagCount() == 0) {
-            clearPages(stack);
+    private static List<List<String>> readPages(ItemStack stack) {
+        List<List<String>> pages = LorePagesAPI.readPagesFromNBT(stack);
+        if (pages != null && !pages.isEmpty()) {
+            return deepCopyPages(pages);
         }
+        return readLegacyStringPages(stack);
+    }
+
+    private static void writePages(ItemStack stack, List<List<String>> pages) {
+        if (pages == null || pages.isEmpty()) {
+            LorePagesAPI.clearPagesNBT(stack);
+            return;
+        }
+        LorePagesAPI.writePagesToNBT(stack, pages);
     }
 
     private static void clearPages(ItemStack stack) {
-        if (stack == null || !stack.hasTagCompound()) return;
-        NBTTagCompound tag = stack.getTagCompound();
-        if (tag == null || !tag.hasKey(NBT_ROOT, 10)) return;
-
-        NBTTagCompound root = tag.getCompoundTag(NBT_ROOT);
-        if (root != null) root.removeTag(NBT_LIST);
-
-        // If root is empty, remove root
-        if (root == null || root.hasNoTags()) {
-            tag.removeTag(NBT_ROOT);
-        }
-
-        // If tag is empty, remove compound
-        if (tag.hasNoTags()) {
-            stack.setTagCompound(null);
-        }
+        LorePagesAPI.clearPagesNBT(stack);
     }
 
-    // ─────────────────────────────────────────────
-    // Utility helpers
-    // ─────────────────────────────────────────────
+    private static List<List<String>> readLegacyStringPages(ItemStack stack) {
+        List<List<String>> out = new ArrayList<List<String>>();
+        if (stack == null || !stack.hasTagCompound()) return out;
+
+        NBTTagCompound tag = stack.getTagCompound();
+        if (tag == null || !tag.hasKey(NBT_ROOT, 10)) return out;
+
+        NBTTagCompound root = tag.getCompoundTag(NBT_ROOT);
+        if (root == null || !root.hasKey(NBT_LIST, 9)) return out;
+
+        NBTTagList list = root.getTagList(NBT_LIST, 8);
+        if (list == null || list.tagCount() <= 0) return out;
+
+        for (int i = 0; i < list.tagCount(); i++) {
+            out.add(pageTextToLines(list.getStringTagAt(i)));
+        }
+        return out;
+    }
+
+    private static List<String> pageTextToLines(String text) {
+        List<String> lines = new ArrayList<String>();
+        if (text == null) {
+            lines.add("");
+            return lines;
+        }
+
+        String normalized = text.replace("\r", "").replace("\\n", "\n");
+        String[] split = normalized.split("\n", -1);
+        if (split.length == 0) {
+            lines.add("");
+            return lines;
+        }
+
+        for (int i = 0; i < split.length; i++) {
+            lines.add(split[i] == null ? "" : split[i]);
+        }
+        return lines;
+    }
+
+    private static String joinPageLines(List<String> page) {
+        if (page == null || page.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < page.size(); i++) {
+            if (i > 0) sb.append(" ");
+            sb.append(page.get(i) == null ? "" : page.get(i));
+        }
+        return sb.toString();
+    }
+
+    private static List<List<String>> deepCopyPages(List<List<String>> pages) {
+        List<List<String>> out = new ArrayList<List<String>>();
+        if (pages == null) return out;
+        for (int i = 0; i < pages.size(); i++) {
+            List<String> src = pages.get(i);
+            List<String> dst = new ArrayList<String>();
+            if (src != null) {
+                for (int j = 0; j < src.size(); j++) {
+                    dst.add(src.get(j));
+                }
+            }
+            out.add(dst);
+        }
+        return out;
+    }
 
     private static void msg(EntityPlayer p, String s) {
         p.addChatMessage(new ChatComponentText(s));
@@ -318,24 +334,6 @@ public class LorePagesCommand extends CommandBase {
             msg(p, "§cInvalid number: §f" + s);
             return min;
         }
-    }
-
-    private static List<String> toStringList(NBTTagList list) {
-        List<String> out = new ArrayList<String>();
-        if (list == null) return out;
-        for (int i = 0; i < list.tagCount(); i++) out.add(list.getStringTagAt(i));
-        return out;
-    }
-
-    private static NBTTagList fromStringList(List<String> pages) {
-        NBTTagList list = new NBTTagList();
-        if (pages == null) return list;
-        for (int i = 0; i < pages.size(); i++) {
-            String s = pages.get(i);
-            if (s == null) s = "";
-            list.appendTag(new net.minecraft.nbt.NBTTagString(s));
-        }
-        return list;
     }
 
     private static String preview(String s, int max) {

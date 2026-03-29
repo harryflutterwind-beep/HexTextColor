@@ -13,6 +13,8 @@ public final class ModConfig {
     public static boolean enableBeams = true;
     public static int     scanRadius  = 72;
     public static int     maxDraw     = 96;
+    public static boolean enableNpcRarityGlint = true;
+    public static boolean enableModdedHeldRarityFallback = true;
 
     // ---------- VISUAL ----------
     public static double opacity        = 0.70; // 0..1
@@ -41,12 +43,18 @@ public final class ModConfig {
     public static String grad_uncommon_bot  = "#006600", grad_uncommon_top  = "#33FF33";
     public static String grad_rare_bot      = "#7A2CE0", grad_rare_top      = "#A64DFF";
     public static String grad_epic_bot      = "#3A7BFF", grad_epic_top      = "#1ED1FF";
-    public static String grad_legend_bot    = "#FFC52A", grad_legend_top    = "#FFF6A0";
+    public static String grad_legend_bot    = "#FF8400", grad_legend_top    = "#FFB224";
     public static String grad_pearl_bot     = "#40E0D0", grad_pearl_top     = "#7FFFD4";
     public static String grad_seraph_bot    = "#FF66C4", grad_seraph_top    = "#FFB3E6";
     public static String grad_black_bot     = "#000000", grad_black_top     = "#141414";
     public static String grad_etech_bot     = "#FF2BA6", grad_etech_top     = "#FF2BA6";
     public static String grad_glitch_bot    = "#FFB6DF", grad_glitch_top    = "#FFD6ED";
+
+    // ---------- PSEUDO BLACK ----------
+    public static double pseudoBlackOutlineScale = 1.10;
+    public static double pseudoBlackOutlineAlpha = 0.17;
+    public static String pseudoBlackOutlineBot   = "#040404";
+    public static String pseudoBlackOutlineTop   = "#141414";
 
     // ---------- OVERLAY (inventory/hotbar frames) ----------
     public static boolean overlayEnableInventory = true;
@@ -81,6 +89,8 @@ public final class ModConfig {
         enableBeams = cfg.getBoolean("enableBeams", "general", enableBeams, "Turn item beams on/off");
         scanRadius  = cfg.getInt("scanRadius", "general", scanRadius, 8, 256, "Radius to scan for dropped items");
         maxDraw     = cfg.getInt("maxDraw", "general", maxDraw, 8, 512, "Max beams to draw per frame");
+        enableNpcRarityGlint = cfg.getBoolean("enableNpcRarityGlint", "general", enableNpcRarityGlint, "Allow rarity glints on non-player entities (held items + worn armor).");
+        enableModdedHeldRarityFallback = cfg.getBoolean("enableModdedHeldRarityFallback", "general", enableModdedHeldRarityFallback, "Fallback rarity overlay for Forge/IItemRenderer equipped items that bypass the vanilla held-item glint path.");
 
         // visual
         opacity        = cfg.getFloat("opacity", "visual", (float)opacity, 0.05f, 1.0f, "Beam opacity (alpha 0..1)");
@@ -125,6 +135,12 @@ public final class ModConfig {
         grad_etech_top     = cfg.getString("etech_top",          "color", grad_etech_top,     "Hex #RRGGBB (E-Tech)");
         grad_glitch_bot    = cfg.getString("glitch_bottom",      "color", grad_glitch_bot,    "Hex #RRGGBB (Glitch)");
         grad_glitch_top    = cfg.getString("glitch_top",         "color", grad_glitch_top,    "Hex #RRGGBB (Glitch)");
+
+        // pseudo black
+        pseudoBlackOutlineScale = cfg.getFloat("pseudoBlackOutlineScale", "visual", (float)pseudoBlackOutlineScale, 1.00f, 1.50f, "Outer shell scale for pseudo-black beams");
+        pseudoBlackOutlineAlpha = cfg.getFloat("pseudoBlackOutlineAlpha", "visual", (float)pseudoBlackOutlineAlpha, 0.00f, 1.00f, "Base alpha for pseudo-black beam outline");
+        pseudoBlackOutlineBot   = cfg.getString("pseudoBlackOutlineBottom", "color", pseudoBlackOutlineBot, "Hex #RRGGBB");
+        pseudoBlackOutlineTop   = cfg.getString("pseudoBlackOutlineTop",    "color", pseudoBlackOutlineTop, "Hex #RRGGBB");
 
         // overlays
         overlayEnableInventory = cfg.getBoolean("enableInventoryOverlays", "overlay", overlayEnableInventory, "Draw colored frames in inventory");

@@ -29,15 +29,18 @@ import cpw.mods.fml.common.network.NetworkRegistry;
 import com.example.examplemod.gui.HexSocketStationGuiHandler;
 import net.minecraftforge.common.MinecraftForge;
 import com.example.examplemod.command.CommandQuickGamemode;
+import com.example.examplemod.command.CommandHexHub;
 import net.minecraft.world.WorldSettings;
 import cpw.mods.fml.common.event.FMLServerStartingEvent;
 import com.example.examplemod.command.CommandScanHealth;
+import com.example.examplemod.command.CommandDBCBody;
+import com.example.examplemod.recipe.HexOrbUpgradeRecipes;
 
 
 @Mod(
         modid = "hexcolorcodes",
         name = "HexColorCodes",
-        version = "1.5.5",
+        version = "1.5.6",
         guiFactory = "com.example.examplemod.client.ModGuiFactory"
 )
 public class ExampleMod {
@@ -100,6 +103,9 @@ public class ExampleMod {
         // Let the proxy handle side-specific stuff
         proxy.init();
 
+        // Dynamic orb upgrade crafting recipes
+        HexOrbUpgradeRecipes.register();
+
         // These handlers should be *common* (no client imports)
     }
 
@@ -120,8 +126,11 @@ public class ExampleMod {
         e.registerServerCommand(new CommandQuickGamemode("c", WorldSettings.GameType.CREATIVE, "§bCreative"));
         e.registerServerCommand(new CommandQuickGamemode("s", WorldSettings.GameType.SURVIVAL, "§eSurvival"));
         e.registerServerCommand(new com.example.examplemod.command.CommandHexBlast());
+        e.registerServerCommand(new CommandHexHub());
         e.registerServerCommand(new CommandScanHealth());
+        e.registerServerCommand(new CommandDBCBody());
+        e.registerServerCommand(new com.example.examplemod.command.CommandHeldGlint());
 
-        System.out.println("[HexColorCodes] Commands registered: /rarity, /setdamage, /dragon, /dragonloot, /hexhelp, /lorepages, /hexsocket, /hexstats, /hexscale, /c, /s");
+        System.out.println("[HexColorCodes] Commands registered: /rarity, /setdamage, /dragon, /dragonloot, /hexhelp, /lorepages, /hexsocket, /hexhub, /hexstats, /hexscale, /heldglint, /c, /s");
     }
 }

@@ -1,10 +1,12 @@
 package com.example.examplemod;
 
+import com.example.examplemod.achievement.ModAchievements;
 import com.example.examplemod.item.ItemGemIcons;
+import com.example.examplemod.network.HexHubNet;
 import cpw.mods.fml.common.registry.GameRegistry;
 import net.minecraft.item.Item;
 import net.minecraftforge.common.MinecraftForge;
-
+import com.example.examplemod.achievement.AchievementLoginHandler;
 import com.example.examplemod.server.DropTagHandler;
 import com.example.examplemod.server.WearableRightClickEquip;
 import com.example.examplemod.server.HexOrbEffectsController;
@@ -12,7 +14,7 @@ import com.example.examplemod.server.ShadowBurnHandler;
 import com.example.examplemod.server.HexDBCBridgeDamageApplier;
 import com.example.examplemod.server.HexDBCProcDamageProvider;
 import com.example.examplemod.network.HexFracNet;
-
+import cpw.mods.fml.common.FMLCommonHandler;
 import cpw.mods.fml.common.registry.EntityRegistry;
 import com.example.examplemod.entity.EntityHexBlast;
 
@@ -46,9 +48,12 @@ public class CommonProxy {
 
         // Fractured-only packet channel (client->server actions)
         HexFracNet.init();
+        HexHubNet.init();
+        ModAchievements.init();
+        FMLCommonHandler.instance().bus().register(new AchievementLoginHandler());
 
         // Runs on both physical server and integrated server (logic side)
-        MinecraftForge.EVENT_BUS.register(new DropTagHandler());
+       MinecraftForge.EVENT_BUS.register(new DropTagHandler());
         MinecraftForge.EVENT_BUS.register(new WearableRightClickEquip());
         MinecraftForge.EVENT_BUS.register(new HexOrbEffectsController());
         MinecraftForge.EVENT_BUS.register(new ShadowBurnHandler());

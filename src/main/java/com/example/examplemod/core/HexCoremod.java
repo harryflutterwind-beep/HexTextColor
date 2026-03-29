@@ -20,7 +20,9 @@ public class HexCoremod implements IFMLLoadingPlugin {
                 "com.example.examplemod.core.chat.GuiNewChatTransformer",
                 "com.example.examplemod.core.gui.GuiModListSparkleTransformer",
                 "com.example.examplemod.core.SlotArmorWearableTransformer",
-
+                "com.example.examplemod.core.HeldRarityGlintTransformer",
+                "com.example.examplemod.core.ForgeHooksClientRarityGlintTransformer",
+                "com.example.examplemod.core.ArmorRarityGlintTransformer",
 
         };
     }

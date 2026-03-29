@@ -259,6 +259,9 @@ public final class HexOrbEffectsController {
     // Overwrite (Energized Rainbow) gem keys (meta 16/17)
     public static volatile String GEM_OVERWRITE_FLAT = "gems/orb_gem_rainbow_energized_64";
     public static volatile String GEM_OVERWRITE_ANIM = "gems/orb_gem_rainbow_energized_anim_8f_64x516";
+    // Perfect Core (Evolved) should count as EVERY passive family we support here:
+    // energized unique attacks + overwrite + fractured + all void passives.
+    public static volatile String GEM_PERFECT_CORE_EVOLVED = "gems/evolved_rainbow_gem_64_anim_8f";
 
 
     // Fire Pills
@@ -446,52 +449,295 @@ public final class HexOrbEffectsController {
         try { return e.getHealth(); } catch (Throwable t){ return -1f; }
     }
 
+    private static EntityLivingBase livingAttacker(DamageSource src){
+        if (src == null) return null;
+        try {
+            Entity a0 = src.getEntity();
+            if (a0 instanceof EntityLivingBase) return (EntityLivingBase) a0;
+        } catch (Throwable ignored) {}
+        try {
+            Entity a1 = src.getSourceOfDamage();
+            if (a1 instanceof EntityLivingBase) return (EntityLivingBase) a1;
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static float estimatePerfectCoreBarrierBlockedDamage(DamageSource src, float rawAmount){
+        float best = rawAmount > 0f ? rawAmount : 0f;
+        EntityLivingBase atk = livingAttacker(src);
+
+        if (atk instanceof EntityPlayer){
+            try { best = Math.max(best, estimateAshenDamageForHeal((EntityPlayer) atk)); } catch (Throwable ignored) {}
+        } else if (atk != null){
+            try {
+                net.minecraft.entity.ai.attributes.IAttributeInstance ad =
+                        atk.getEntityAttribute(net.minecraft.entity.SharedMonsterAttributes.attackDamage);
+                if (ad != null) best = Math.max(best, (float)ad.getAttributeValue());
+            } catch (Throwable ignored) {}
+        }
+
+        if (best < 1.0f) best = 1.0f;
+        if (best > 2500000.0f) best = 2500000.0f;
+        return best;
+    }
+
     // -------------------------------------------------------------
     // DBC BODY% (health) helper
     // DBC stores BODY in player NBT (commonly jrmcBdy / jrmcBdyF).
-    // We try a few keys and fall back to vanilla health%.
+    // Some setups only expose CURRENT body and never expose MAX body.
+    // For those, keep an observed max cache that prefers live JRM values,
+    // rescales on Constitution changes, and self-recovers when the cache
+    // is dirty/stale instead of requiring manual NBT cleanup.
     // -------------------------------------------------------------
     private static final String[] DBC_BODY_CUR_KEYS = {"jrmcBdy", "jrmcBdyCur", "jrmcBdyc"};
     private static final String[] DBC_BODY_MAX_KEYS = {"jrmcBdyF", "jrmcBdyMax", "jrmcBdyM"};
+    private static final String   DBC_BODY_PERSISTED_KEY = "PlayerPersisted";
+    private static final String   TAG_OBS_BODY_MAX   = "HexFracBodyMaxObserved";
+    private static final String   TAG_LAST_CON       = "HexFracLastConObserved";
+    private static final String   TAG_BODY_DIRTY     = "HexFracBodyMaxDirty";
+    private static final String   TAG_OBS_BODY_STAMP = "HexFracBodyMaxStamp";
+    private static final long     OBS_BODY_STALE_TICKS = 20L * 60L * 15L; // 15 minutes
+    private static final float    OBS_BODY_CLEAR_DIRTY_NEAR_PCT = 0.90f;
 
     /** @return 0..1 (or -1 if unknown) */
     private static float getBodyPercent01(EntityPlayer p){
         if (p == null) return -1f;
 
-        NBTTagCompound root = p.getEntityData();
-        float cur = readFirstNumber(root, DBC_BODY_CUR_KEYS);
-        float max = readFirstNumber(root, DBC_BODY_MAX_KEYS);
+        // Prefer live DBC/JRM values first. These are usually more reliable than raw NBT.
+        float cur = getBodyCurSafe(p);
+        float max = getBodyMaxSafe(p);
 
-        // Some setups store these under PlayerPersisted
-        if (!(max > 0f && cur >= 0f) && root != null && root.hasKey("PlayerPersisted", 10)){
-            NBTTagCompound pp = root.getCompoundTag("PlayerPersisted");
-            float cur2 = readFirstNumber(pp, DBC_BODY_CUR_KEYS);
-            float max2 = readFirstNumber(pp, DBC_BODY_MAX_KEYS);
-            if (max2 > 0f && cur2 >= 0f){
-                cur = cur2;
-                max = max2;
-            }
+        if (cur >= 0f && max > 0f){
+            syncObservedBodyMaxFromReal(p, max);
+            return clamp01(cur / max);
         }
 
-        if (max > 0f && cur >= 0f){
-            float pct = cur / max;
-            if (pct < 0f) pct = 0f;
-            if (pct > 1f) pct = 1f;
-            return pct;
+        if (cur >= 0f){
+            float observedMax = updateObservedBodyMax(p, cur);
+            if (observedMax > 0f){
+                return clamp01(cur / observedMax);
+            }
         }
 
         // Fallback: vanilla health
         try {
             float mh = p.getMaxHealth();
             if (mh > 0f){
-                float pct = p.getHealth() / mh;
-                if (pct < 0f) pct = 0f;
-                if (pct > 1f) pct = 1f;
-                return pct;
+                return clamp01(p.getHealth() / mh);
             }
         } catch (Throwable ignored) {}
 
         return -1f;
+    }
+
+    private static NBTTagCompound getPersistedTag(NBTTagCompound root){
+        if (root == null) return null;
+        try {
+            if (root.hasKey(DBC_BODY_PERSISTED_KEY, 10)) return root.getCompoundTag(DBC_BODY_PERSISTED_KEY);
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static NBTTagCompound getOrCreatePersistedTag(EntityPlayer p){
+        if (p == null) return null;
+        NBTTagCompound root = p.getEntityData();
+        if (root == null) return null;
+        try {
+            if (!root.hasKey(DBC_BODY_PERSISTED_KEY, 10)) {
+                root.setTag(DBC_BODY_PERSISTED_KEY, new NBTTagCompound());
+            }
+            return root.getCompoundTag(DBC_BODY_PERSISTED_KEY);
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static float clamp01(float v){
+        if (v < 0f) return 0f;
+        if (v > 1f) return 1f;
+        return v;
+    }
+
+    private static long observedBodyNow(EntityPlayer p){
+        try {
+            if (p != null && p.worldObj != null) return serverNow(p.worldObj);
+        } catch (Throwable ignored) {}
+        return 0L;
+    }
+
+    private static void refreshObservedBodyStateAfterWrite(EntityPlayer p, float preferredCur){
+        if (p == null) return;
+
+        float realMax = getBodyMaxSafe(p);
+        if (realMax > 0f){
+            syncObservedBodyMaxFromReal(p, realMax);
+            return;
+        }
+
+        float cur = preferredCur;
+        if (!(cur >= 0f)) cur = getBodyCurSafe(p);
+        if (cur >= 0f){
+            updateObservedBodyMax(p, cur);
+        }
+    }
+
+    private static float updateObservedBodyMax(EntityPlayer p, float curBody){
+        if (p == null || !(curBody >= 0f)) return Float.NaN;
+
+        NBTTagCompound persisted = getOrCreatePersistedTag(p);
+        if (persisted == null) return Float.NaN;
+
+        long now = observedBodyNow(p);
+        int curInt = Math.max(0, Math.round(curBody));
+        int cachedMax = 0;
+        boolean dirty = false;
+        long stamp = 0L;
+
+        try {
+            if (persisted.hasKey(TAG_OBS_BODY_MAX, 99)) cachedMax = persisted.getInteger(TAG_OBS_BODY_MAX);
+            dirty = persisted.getBoolean(TAG_BODY_DIRTY);
+            if (persisted.hasKey(TAG_OBS_BODY_STAMP, 99)) stamp = persisted.getLong(TAG_OBS_BODY_STAMP);
+        } catch (Throwable ignored) {}
+
+        if (cachedMax < 0) cachedMax = 0;
+        if (cachedMax > 0 && stamp <= 0L) stamp = now;
+
+        int effCon = 0;
+        try {
+            effCon = Math.max(0, (int)Math.round(getConstitutionEffective(p)));
+        } catch (Throwable ignored) {}
+
+        boolean hasLastCon = false;
+        int lastCon = effCon;
+        try {
+            hasLastCon = persisted.hasKey(TAG_LAST_CON, 99);
+            if (hasLastCon) lastCon = persisted.getInteger(TAG_LAST_CON);
+        } catch (Throwable ignored) {}
+
+        if (!hasLastCon){
+            persisted.setInteger(TAG_LAST_CON, effCon);
+        } else if (effCon != lastCon){
+            float ratio = -1f;
+            if (lastCon > 0 && effCon > 0){
+                ratio = ((float)effCon) / ((float)lastCon);
+            }
+
+            int rebuilt = curInt;
+            if (cachedMax > 0){
+                if (ratio > 0.05f && ratio < 20.0f){
+                    rebuilt = Math.round(cachedMax * ratio);
+                    if (rebuilt < curInt) rebuilt = curInt;
+                } else {
+                    rebuilt = Math.max(curInt, cachedMax);
+                }
+            }
+
+            cachedMax = rebuilt;
+            dirty = true;
+            stamp = now;
+
+            persisted.setInteger(TAG_LAST_CON, effCon);
+            persisted.setInteger(TAG_OBS_BODY_MAX, cachedMax);
+            persisted.setBoolean(TAG_BODY_DIRTY, true);
+            persisted.setLong(TAG_OBS_BODY_STAMP, stamp);
+        }
+
+        if (curInt > cachedMax){
+            cachedMax = curInt;
+            dirty = false;
+            stamp = now;
+            persisted.setInteger(TAG_OBS_BODY_MAX, cachedMax);
+            persisted.setBoolean(TAG_BODY_DIRTY, false);
+            persisted.setLong(TAG_OBS_BODY_STAMP, stamp);
+        } else if (dirty){
+            if (cachedMax > 0 && ((float)curInt) >= ((float)cachedMax * OBS_BODY_CLEAR_DIRTY_NEAR_PCT)){
+                dirty = false;
+                stamp = now;
+                persisted.setBoolean(TAG_BODY_DIRTY, false);
+                persisted.setLong(TAG_OBS_BODY_STAMP, stamp);
+            } else if (stamp > 0L && now > stamp && (now - stamp) >= OBS_BODY_STALE_TICKS){
+                // Dirty cache went stale without ever being refreshed near full.
+                // Collapse to current so the tracker can relearn naturally from gameplay.
+                cachedMax = Math.max(curInt, 1);
+                dirty = false;
+                stamp = now;
+                persisted.setInteger(TAG_OBS_BODY_MAX, cachedMax);
+                persisted.setBoolean(TAG_BODY_DIRTY, false);
+                persisted.setLong(TAG_OBS_BODY_STAMP, stamp);
+            }
+        } else if (cachedMax > 0 && stamp <= 0L){
+            persisted.setLong(TAG_OBS_BODY_STAMP, now);
+        }
+
+        return cachedMax > 0 ? (float)cachedMax : Float.NaN;
+    }
+
+    private static void syncObservedBodyMaxFromReal(EntityPlayer p, float realMax){
+        if (p == null || !(realMax > 0f)) return;
+
+        NBTTagCompound persisted = getOrCreatePersistedTag(p);
+        if (persisted == null) return;
+
+        int maxInt = Math.max(0, Math.round(realMax));
+        persisted.setInteger(TAG_OBS_BODY_MAX, maxInt);
+        persisted.setBoolean(TAG_BODY_DIRTY, false);
+        persisted.setLong(TAG_OBS_BODY_STAMP, observedBodyNow(p));
+
+        try {
+            int effCon = Math.max(0, (int)Math.round(getConstitutionEffective(p)));
+            persisted.setInteger(TAG_LAST_CON, effCon);
+        } catch (Throwable ignored) {}
+    }
+
+    private static float getFracturedLowHealthBoostMult(EntityPlayer p){
+        if (p == null) return 1.0f;
+
+        float thresh = FRACTURED_TRIGGER_BODY_PCT;
+        if (thresh < 0.05f) thresh = 0.05f;
+        if (thresh > 0.99f) thresh = 0.99f;
+
+        float bodyPct = getBodyPercent01(p);
+        if (bodyPct < 0f || bodyPct > thresh) return 1.0f;
+
+        float missing = (thresh - bodyPct) / thresh; // 0..1
+        if (missing < 0f) missing = 0f;
+        if (missing > 1f) missing = 1f;
+
+        return 1.0f + (missing * FRACTURED_MISSING_RAMP);
+    }
+
+    private static boolean isUsingRealDbcBody(EntityPlayer p){
+        if (p == null) return false;
+        NBTTagCompound root = p.getEntityData();
+        NBTTagCompound pp = getPersistedTag(root);
+
+        float cur = readFirstNumber(root, DBC_BODY_CUR_KEYS);
+        if (!(cur >= 0f) && pp != null) cur = readFirstNumber(pp, DBC_BODY_CUR_KEYS);
+        if (!(cur >= 0f)) return false;
+
+        float max = readFirstNumber(root, DBC_BODY_MAX_KEYS);
+        if (!(max > 0f) && pp != null) max = readFirstNumber(pp, DBC_BODY_MAX_KEYS);
+        return (max > 0f);
+    }
+
+    private static String format2(float v){
+        return String.format(java.util.Locale.US, "%.2f", v);
+    }
+
+    private static void notifyPerfectCoreFracturedDebug(EntityPlayer p){
+        if (p == null) return;
+
+        float thresh = FRACTURED_TRIGGER_BODY_PCT;
+        if (thresh < 0.05f) thresh = 0.05f;
+        if (thresh > 0.99f) thresh = 0.99f;
+
+        float bodyPct = getBodyPercent01(p);
+        if (bodyPct < 0f || bodyPct > thresh) return;
+
+        float mult = getFracturedLowHealthBoostMult(p);
+        String source = isUsingRealDbcBody(p) ? "DBC Body" : "Observed Body";
+        notifyOncePerSecond(p, "HexOrbPCFracDbg_Next",
+                "§7[Perfect Core] §dFractured Passive§7 BODY " + (int)(bodyPct * 100f) +
+                        "% §7/ thresh " + (int)(thresh * 100f) + "% §7(x" + format2(mult) + ") §8(" + source + ")");
     }
 
     private static float readFirstNumber(NBTTagCompound nbt, String[] keys){
@@ -649,6 +895,46 @@ public final class HexOrbEffectsController {
     /** Final bonus-hit damage = base * MULT. */
     public static volatile float  OVERWRITE_MULT_FLAT = 15.0f;
     public static volatile float  OVERWRITE_MULT_ANIM = 25.0f;
+
+    // -------------------------------------------------------------
+    // PERFECT CORE (Evolved): Prismatic Barrage + Prismatic Drive
+    // - Barrage: proc arms a short primed window; the next punch triggers a
+    //   rainbow finisher (impact pulse -> launch explosion -> final burst).
+    // - Drive: short self-buff that boosts melee-ish damage
+    // -------------------------------------------------------------
+    public static volatile boolean PERFECT_CORE_ENABLED = true;
+    public static volatile boolean PERFECT_CORE_AFFECT_PLAYERS = true;
+
+    public static volatile double PERFECT_CORE_BURST_PROC_CHANCE = 0.0060;
+    public static volatile int    PERFECT_CORE_BURST_COOLDOWN_TICKS = 180;
+    public static volatile int    PERFECT_CORE_BURST_ARM_TIMEOUT_TICKS = 60;
+    public static volatile float  PERFECT_CORE_BURST_BASE_DAMAGE = 55.0f;
+    public static volatile float  PERFECT_CORE_BURST_WILL_EXPONENT = 0.33f;
+    public static volatile float  PERFECT_CORE_BURST_WILL_MULT = 18.0f;
+    public static volatile float  PERFECT_CORE_BURST_DAMAGE_CAP = 325.0f;
+    public static volatile float  PERFECT_CORE_BURST_FIRST_HIT_SCALE = 0.30f;
+    public static volatile float  PERFECT_CORE_BURST_LAUNCH_HIT_SCALE = 0.30f;
+    public static volatile float  PERFECT_CORE_BURST_FINAL_HIT_SCALE = 0.40f;
+    public static volatile int    PERFECT_CORE_BURST_LAUNCH_DELAY_TICKS = 8;
+    public static volatile int    PERFECT_CORE_BURST_FINAL_DELAY_TICKS = 16;
+    public static volatile float  PERFECT_CORE_BURST_LAUNCH_Y = 0.82f;
+    public static volatile float  PERFECT_CORE_BURST_FINAL_SLAM_Y = -0.22f;
+    public static volatile float  PERFECT_CORE_BURST_SECOND_EXPLOSION_SCALE = 0.20f;
+    public static volatile int    PERFECT_CORE_BURST_SECOND_EXPLOSION_DELAY_TICKS = 12;
+
+    public static volatile double PERFECT_CORE_DRIVE_PROC_CHANCE = 0.0280;
+    public static volatile int    PERFECT_CORE_DRIVE_DURATION_TICKS = 360;
+    public static volatile int    PERFECT_CORE_DRIVE_COOLDOWN_TICKS = 420;
+    public static volatile float  PERFECT_CORE_DRIVE_DAMAGE_MULT = 3.0f;
+
+    public static volatile double PERFECT_CORE_BARRIER_PROC_CHANCE = 0.0140;
+    public static volatile int    PERFECT_CORE_BARRIER_DURATION_TICKS = 70;
+    public static volatile int    PERFECT_CORE_BARRIER_COOLDOWN_TICKS = 520;
+    public static volatile float  PERFECT_CORE_BARRIER_RELEASE_MULT = 1.00f;
+    public static volatile float  PERFECT_CORE_BARRIER_RELEASE_RADIUS = 8.0f;
+    public static volatile int    PERFECT_CORE_BARRIER_RELEASE_MAX_TARGETS = 5;
+
+    public static volatile double PERFECT_CORE_DARK_FLAME_MODE_CHANCE = 0.50d;
 
     // -------------------------------------------------------------
     // Fire Pill: Fire Punch buff
@@ -1240,6 +1526,39 @@ public final class HexOrbEffectsController {
     private static final String FP_KEY_ANIM    = "HexFirePunch_Anim";
     private static final String FP_KEY_LASTTGT = "HexFirePunch_LastTgt";
     private static final String FP_KEY_FIN     = "HexFirePunch_Fin";
+    private static final String FP_KEY_PC_DARK = "HexFirePunch_PerfectCoreDark";
+    private static final String FP_KEY_PC_SRC  = "HexFirePunch_PerfectCoreSource";
+
+    // -------------------------------------------------------------
+    // Perfect Core keys
+    // - Burst/prime keys live on the PLAYER while the finisher is armed.
+    // - Finisher keys live on the TARGET while the sequence is running.
+    // -------------------------------------------------------------
+    private static final String PC_BURST_KEY_PRIMED    = "HexPCBurst_Primed";
+    private static final String PC_BURST_KEY_EXPIRE    = "HexPCBurst_Expire";
+    private static final String PC_BURST_KEY_DMG       = "HexPCBurst_Dmg";
+    private static final String PC_BURST_KEY_TARGET    = "HexPCBurst_Target";
+
+    private static final String PC_DRIVE_KEY_END       = "HexPCDrive_End";
+    private static final String PC_DRIVE_KEY_CD        = "HexPCDrive_CD";
+    private static final String PC_DRIVE_KEY_LOCK      = "HexOrbCD_PerfectCoreDrive";
+
+    private static final String PC_BARRIER_KEY_END        = "HexPCBarrier_End";
+    private static final String PC_BARRIER_KEY_CD         = "HexPCBarrier_CD";
+    private static final String PC_BARRIER_KEY_LOCK       = "HexOrbCD_PerfectCoreBarrier";
+    private static final String PC_BARRIER_KEY_STORED     = "HexPCBarrier_Stored";
+    private static final String PC_BARRIER_KEY_TARGET     = "HexPCBarrier_Target";
+    private static final String PC_BARRIER_KEY_NEXT_FX    = "HexPCBarrier_NextFX";
+    private static final String PC_BARRIER_KEY_SKIP_HURT  = "HexPCBarrier_SkipHurtTick";
+
+    private static final String PC_FIN_KEY_OWNER       = "HexPCFin_Owner";
+    private static final String PC_FIN_KEY_LAUNCH_TICK = "HexPCFin_LaunchTick";
+    private static final String PC_FIN_KEY_SECOND_TICK = "HexPCFin_SecondTick";
+    private static final String PC_FIN_KEY_FINAL_TICK  = "HexPCFin_FinalTick";
+    private static final String PC_FIN_KEY_MID_DMG     = "HexPCFin_MidDmg";
+    private static final String PC_FIN_KEY_SECOND_DMG  = "HexPCFin_SecondDmg";
+    private static final String PC_FIN_KEY_FINAL_DMG   = "HexPCFin_FinalDmg";
+    private static final String PC_FIN_KEY_PHASE       = "HexPCFin_Phase";
 
     // -------------------------------------------------------------
     // Fire DoT keys (stored on the TARGET for the finisher)
@@ -1375,6 +1694,20 @@ public final class HexOrbEffectsController {
             }
         }
 
+        // Perfect Core: Perfect Barrier can fully negate incoming damage and store it for a delayed release.
+        if (PERFECT_CORE_ENABLED && e.entityLiving instanceof EntityPlayer){
+            EntityPlayer victim = (EntityPlayer)e.entityLiving;
+            long now = serverNow(victim.worldObj);
+            ItemStack pcHost = findPerfectCoreHost(victim);
+            if (pcHost != null){
+                if (isPerfectCoreBarrierActive(victim, now) || tryProcPerfectCoreBarrier(victim, e.source, e.ammount, pcHost)){
+                    addPerfectCoreBarrierBlocked(victim, e.source, e.ammount, now);
+                    if (e.isCancelable()) e.setCanceled(true);
+                    return;
+                }
+            }
+        }
+
         handleHit(e.source, e.entityLiving, e.ammount, "Attack");
     }
 
@@ -1392,6 +1725,32 @@ public final class HexOrbEffectsController {
             }
         }
 
+        // Perfect Core: barrier fallback for sources that skip Attack and go straight to Hurt.
+        if (PERFECT_CORE_ENABLED && e.entityLiving instanceof EntityPlayer){
+            EntityPlayer victim = (EntityPlayer)e.entityLiving;
+            long now = serverNow(victim.worldObj);
+            ItemStack pcHost = findPerfectCoreHost(victim);
+            if (pcHost != null){
+                NBTTagCompound vd = victim.getEntityData();
+                long skipTick = 0L;
+                try { skipTick = vd.getLong(PC_BARRIER_KEY_SKIP_HURT); } catch (Throwable ignored) {}
+
+                if (isPerfectCoreBarrierActive(victim, now)){
+                    if (skipTick != now){
+                        addPerfectCoreBarrierBlocked(victim, e.source, e.ammount, now);
+                    }
+                    e.ammount = 0f;
+                    return;
+                }
+
+                if (tryProcPerfectCoreBarrier(victim, e.source, e.ammount, pcHost)){
+                    addPerfectCoreBarrierBlocked(victim, e.source, e.ammount, now);
+                    e.ammount = 0f;
+                    return;
+                }
+            }
+        }
+
         // Null Shell: Void Protection reduces incoming damage while active.
         if (VOID_ENABLED && VOID_NULL_SHELL_ENABLED && e.entityLiving instanceof EntityPlayer){
             EntityPlayer victim = (EntityPlayer) e.entityLiving;
@@ -1403,6 +1762,24 @@ public final class HexOrbEffectsController {
             }
         }
 
+
+        // Perfect Core: short offensive buff (melee-ish outgoing only, non-proc).
+        try {
+            Entity atk0 = e.source.getEntity();
+            Entity atk1 = e.source.getSourceOfDamage();
+            EntityPlayer pcAttacker = null;
+            if (atk0 instanceof EntityPlayer) pcAttacker = (EntityPlayer) atk0;
+            else if (atk1 instanceof EntityPlayer) pcAttacker = (EntityPlayer) atk1;
+
+            if (pcAttacker != null && isPlayerMeleeDamage(e.source, pcAttacker)) {
+                long nowPc = serverNow(pcAttacker.worldObj);
+                if (isPerfectCoreDriveActive(pcAttacker, nowPc)) {
+                    float driveMult = Math.max(1.0f, PERFECT_CORE_DRIVE_DAMAGE_MULT);
+                    driveMult *= getFracturedLowHealthBoostMult(pcAttacker);
+                    e.ammount *= driveMult;
+                }
+            }
+        } catch (Throwable ignored) {}
 
         // DARKFIRE (Cinder Weakness): we use setFire(1) as a *visual-only* black-flame overlay.
         // Cancel the vanilla fire tick damage while our visual tag is active.
@@ -1534,6 +1911,7 @@ public final class HexOrbEffectsController {
         OverwriteMatch owMatch = findOverwriteMatch(player);
         FirePillMatch fireMatch = findFirePillMatch(player);
         FracturedMatch fracturedMatch = findFracturedMatch(player);
+        ItemStack perfectCoreHost = findPerfectCoreHost(player);
 
         // VOID: offensive procs when the PLAYER hits something (e.g. Gravity Well)
         if (VOID_ENABLED){
@@ -1544,13 +1922,14 @@ public final class HexOrbEffectsController {
         boolean hasOverwrite = owMatch.hasFlat || owMatch.hasAnim;
         boolean hasFirePill  = fireMatch.hasFlat || fireMatch.hasAnim;
         boolean hasFractured = fracturedMatch.hasAnim || fracturedMatch.hasFlat;
+        boolean hasPerfectCore = perfectCoreHost != null;
         // FRACTURED: shard gain when YOU land a hit (works for socketed gems too)
         if (hasFractured && FRACTURED_ENABLED){
             tryGainFracturedShard(player, true);
         }
         boolean fireActive   = isFirePunchActive(player);
 
-        if (!hasEnergized && !hasOverwrite && !hasFirePill && !fireActive && !hasFractured){
+        if (!hasEnergized && !hasOverwrite && !hasFirePill && !fireActive && !hasFractured && !hasPerfectCore){
             if (DEBUG_PROC) debugOncePerSecond(player, "[HexOrb] no supported gem/pill on held/armor");
             return;
         }
@@ -1578,12 +1957,17 @@ public final class HexOrbEffectsController {
         }
 
         // Fire Pill: Fire Punch buff (independent of energized procs)
+        // Perfect Core can roll either normal Fire Punch or its dark-flame variant.
         if (FIRE_PUNCH_ENABLED){
             if (!(target instanceof EntityPlayer) || FIRE_PUNCH_AFFECT_PLAYERS){
-                if (hasFirePill){
+                if (hasPerfectCore){
+                    // Perfect Core gets the evolved/anim path and can roll either normal Fire Punch or Dark Flame.
+                    boolean pcDark = Math.random() < PERFECT_CORE_DARK_FLAME_MODE_CHANCE;
+                    tryStartFirePunch(player, true, perfectCoreHost, true, pcDark);
+                } else if (hasFirePill){
                     // Prefer ANIM if present, else FLAT
                     boolean fireAnim = fireMatch.hasAnim;
-                    tryStartFirePunch(player, fireAnim, fireMatch.debugStack);
+                    tryStartFirePunch(player, fireAnim, fireMatch.debugStack, false, false);
                 }
                 // If active, apply bonus hit damage + track finisher DoT/explosion
                 applyFirePunchHit(player, target, amount);
@@ -1614,9 +1998,24 @@ public final class HexOrbEffectsController {
 
 
         // Fractured: low-body chaos surge
-        if (hasFractured && FRACTURED_ENABLED){
-            boolean fracAnim = fracturedMatch.hasAnim;
-            tryProcFracturedLowBody(player, target, amount, fracAnim);
+        if (FRACTURED_ENABLED){
+            if (hasFractured){
+                boolean fracAnim = fracturedMatch.hasAnim;
+                tryProcFracturedLowBody(player, target, amount, fracAnim, false);
+            } else if (hasPerfectCore){
+                // Perfect Core borrows ONLY Fractured's low-health passive surge.
+                // It should not count as a real Fractured gem for shards / snap / active logic.
+                notifyPerfectCoreFracturedDebug(player);
+                tryProcFracturedLowBody(player, target, amount, true, true);
+            }
+        }
+
+        // Perfect Core: special passives layered on top of its wildcard behavior
+        if (hasPerfectCore && PERFECT_CORE_ENABLED){
+            if (!(target instanceof EntityPlayer) || PERFECT_CORE_AFFECT_PLAYERS){
+                tryProcPerfectCoreBurst(player, target, perfectCoreHost);
+                tryProcPerfectCoreDrive(player, perfectCoreHost);
+            }
         }
 
     }
@@ -1736,6 +2135,16 @@ public final class HexOrbEffectsController {
 
         int filled = getFilled(host);
         if (filled <= 0) return;
+
+        // Perfect Core (Evolved): synthetic wildcard source for every Void passive.
+        // We model it as an animated source for each type so the existing per-type proc code
+        // can stay unchanged and simply "see" all supported Void passives at once.
+        if (hasGemSocketed(host, GEM_PERFECT_CORE_EVOLVED)){
+            out.add(new VoidSource(host, "Gravity Well", true));
+            out.add(new VoidSource(host, "Entropy", true));
+            out.add(new VoidSource(host, "Abyss Mark", true));
+            out.add(new VoidSource(host, "Null Shell", true));
+        }
 
         for (int i = 0; i < filled; i++){
             String gemKey = getGemKeyAt(host, i);
@@ -2850,7 +3259,7 @@ public final class HexOrbEffectsController {
 
         ItemStack held = p.getHeldItem();
         if (held != null){
-            if (hasGemSocketed(held, GEM_ENERGIZED_ANIM)){
+            if (hasGemSocketed(held, GEM_ENERGIZED_ANIM) || hasGemSocketed(held, GEM_PERFECT_CORE_EVOLVED)){
                 m.hasAnim = true;
                 m.debugStack = held;
                 return m;
@@ -2867,7 +3276,7 @@ public final class HexOrbEffectsController {
             for (int i = 0; i < armor.length; i++){
                 ItemStack a = armor[i];
                 if (a == null) continue;
-                if (hasGemSocketed(a, GEM_ENERGIZED_ANIM)){
+                if (hasGemSocketed(a, GEM_ENERGIZED_ANIM) || hasGemSocketed(a, GEM_PERFECT_CORE_EVOLVED)){
                     m.hasAnim = true;
                     m.debugStack = a;
                     return m;
@@ -2898,7 +3307,7 @@ public final class HexOrbEffectsController {
 
         ItemStack held = p.getHeldItem();
         if (held != null){
-            if (hasGemSocketed(held, GEM_OVERWRITE_ANIM)){
+            if (hasGemSocketed(held, GEM_OVERWRITE_ANIM) || hasGemSocketed(held, GEM_PERFECT_CORE_EVOLVED)){
                 m.hasAnim = true;
                 m.debugStack = held;
                 return m;
@@ -2915,7 +3324,7 @@ public final class HexOrbEffectsController {
             for (int i = 0; i < armor.length; i++){
                 ItemStack a = armor[i];
                 if (a == null) continue;
-                if (hasGemSocketed(a, GEM_OVERWRITE_ANIM)){
+                if (hasGemSocketed(a, GEM_OVERWRITE_ANIM) || hasGemSocketed(a, GEM_PERFECT_CORE_EVOLVED)){
                     m.hasAnim = true;
                     m.debugStack = a;
                     return m;
@@ -3194,6 +3603,10 @@ public final class HexOrbEffectsController {
     // Fractured: Low-Body Chaos Surge
     // -------------------------------------------------------------
     private static void tryProcFracturedLowBody(EntityPlayer p, EntityLivingBase primary, float baseDamage, boolean isAnim){
+        tryProcFracturedLowBody(p, primary, baseDamage, isAnim, false);
+    }
+
+    private static void tryProcFracturedLowBody(EntityPlayer p, EntityLivingBase primary, float baseDamage, boolean isAnim, boolean fromPerfectCore){
         if (p == null || primary == null) return;
         if (!FRACTURED_ENABLED) return;
 
@@ -3254,7 +3667,11 @@ public final class HexOrbEffectsController {
             w.playSoundAtEntity(p, "random.fizz", 0.55f, extreme ? 0.55f : 0.75f);
         }
 
-        if (DEBUG_PROC){
+        if (fromPerfectCore){
+            notifyOncePerSecond(p, "HexOrbPCFracMsg_Next",
+                    "§7[Perfect Core] §dFractured Surge§7 (body=" + (int)(bodyPct * 100f) + "%, " +
+                            (backlash ? "backlash" : "surge") + (extreme ? ", EXTREME" : "") + ")");
+        } else if (DEBUG_PROC){
             debugOncePerSecond(p, "§7[HexOrb] §dFractured§7 proc (body=" + (int)(bodyPct * 100f) + "%, " + (backlash ? "backlash" : "surge") + (extreme ? ", EXTREME" : "") + ")");
         }
     }
@@ -3471,6 +3888,7 @@ public final class HexOrbEffectsController {
             DBC_RESTORE_HP_PCT.invoke(stats, pct);
             // Some builds can overshoot max slightly; clamp just in case.
             clampBodyToMax(p);
+            refreshObservedBodyStateAfterWrite(p, getBodyCurSafe(p));
             return true;
         } catch (Throwable ignored) {
             return false;
@@ -3500,9 +3918,11 @@ public final class HexOrbEffectsController {
         d.removeTag(FP_KEY_ANIM);
         d.removeTag(FP_KEY_LASTTGT);
         d.removeTag(FP_KEY_FIN);
+        d.removeTag(FP_KEY_PC_DARK);
+        d.removeTag(FP_KEY_PC_SRC);
     }
 
-    private static void tryStartFirePunch(EntityPlayer p, boolean isAnim, ItemStack hudHost){
+    private static void tryStartFirePunch(EntityPlayer p, boolean isAnim, ItemStack hudHost, boolean perfectCoreSource, boolean perfectCoreDark){
         if (!FIRE_PUNCH_ENABLED || p == null) return;
 
         World w = p.worldObj;
@@ -3530,10 +3950,12 @@ public final class HexOrbEffectsController {
         d.setBoolean(FP_KEY_ANIM, isAnim);
         d.setInteger(FP_KEY_LASTTGT, 0);
         d.setBoolean(FP_KEY_FIN, false);
+        d.setBoolean(FP_KEY_PC_DARK, perfectCoreDark);
+        d.setBoolean(FP_KEY_PC_SRC,  perfectCoreSource);
 
         // HUD stamp (Fire Punch buff + cooldown)
         if (hudHost != null){
-            try { stampFirePunchHud(p, hudHost, isAnim, now + (long) dur, dur, now + (long) cdTicks, cdTicks); } catch (Throwable ignored) {}
+            try { stampFirePunchHud(p, hudHost, isAnim, now + (long) dur, dur, now + (long) cdTicks, cdTicks, perfectCoreSource, perfectCoreDark); } catch (Throwable ignored) {}
         }
 
         // activation VFX
@@ -3556,6 +3978,7 @@ public final class HexOrbEffectsController {
         if (now >= end) return;
 
         boolean isAnim = ad.getBoolean(FP_KEY_ANIM);
+        boolean perfectCoreDark = ad.getBoolean(FP_KEY_PC_DARK);
 
         // Track the last thing we hit (used for finisher if the timer expires before you hit again)
         ad.setInteger(FP_KEY_LASTTGT, target.getEntityId());
@@ -3573,14 +3996,20 @@ public final class HexOrbEffectsController {
         }
 
         // Ignite
-        int secs = isAnim ? FIRE_PUNCH_ANIM_SET_FIRE_SECONDS : FIRE_PUNCH_SET_FIRE_SECONDS;
-        if (secs > 0){
-            try { target.setFire(secs); } catch (Throwable ignored) {}
+        if (!perfectCoreDark){
+            int secs = isAnim ? FIRE_PUNCH_ANIM_SET_FIRE_SECONDS : FIRE_PUNCH_SET_FIRE_SECONDS;
+            if (secs > 0){
+                try { target.setFire(secs); } catch (Throwable ignored) {}
+            }
         }
 
         // Small hit VFX
         if (w != null){
-            spawnFireImpact(w, target, isAnim);
+            if (perfectCoreDark){
+                try { spawnDarkfireEmberDetonationParticles(w, target.posX, target.posY + target.height * 0.5, target.posZ, isAnim ? 1.15f : 0.90f, true); } catch (Throwable ignored) {}
+            } else {
+                spawnFireImpact(w, target, isAnim);
+            }
         }
 
         // If we're in the final window, start the finisher immediately
@@ -3589,7 +4018,11 @@ public final class HexOrbEffectsController {
             long remain = end - now;
             if (remain <= Math.max(0, FIRE_PUNCH_FINISH_WINDOW_TICKS)){
                 ad.setBoolean(FP_KEY_FIN, true);
-                startFireDot(attacker, target, eventDamage, isAnim);
+                if (perfectCoreDark){
+                    startPerfectCoreDarkFlame(attacker, target, isAnim);
+                } else {
+                    startFireDot(attacker, target, eventDamage, isAnim);
+                }
                 clearFirePunch(attacker);
             }
         }
@@ -3603,6 +4036,7 @@ public final class HexOrbEffectsController {
         if (end <= 0L) return;
 
         boolean isAnim = data.getBoolean(FP_KEY_ANIM);
+        boolean perfectCoreDark = data.getBoolean(FP_KEY_PC_DARK);
 
         if (now >= end){
             boolean fin = data.getBoolean(FP_KEY_FIN);
@@ -3615,7 +4049,11 @@ public final class HexOrbEffectsController {
                     if (e instanceof EntityLivingBase){
                         EntityLivingBase tgt = (EntityLivingBase) e;
                         if (!tgt.isDead && (!(tgt instanceof EntityPlayer) || FIRE_PUNCH_AFFECT_PLAYERS)){
-                            startFireDot(p, tgt, 0.0f, isAnim);
+                            if (perfectCoreDark){
+                                startPerfectCoreDarkFlame(p, tgt, isAnim);
+                            } else {
+                                startFireDot(p, tgt, 0.0f, isAnim);
+                            }
                         }
                     }
                 }
@@ -3639,6 +4077,46 @@ public final class HexOrbEffectsController {
             spawnFireHands(w, p, isAnim, Math.max(1, count));
             data.setLong(FP_KEY_NEXT, now + interval);
         }
+    }
+
+    private static void startPerfectCoreDarkFlame(EntityPlayer owner, EntityLivingBase target, boolean isAnim){
+        if (owner == null || target == null) return;
+        if ((target instanceof EntityPlayer) && !FIRE_PUNCH_AFFECT_PLAYERS) return;
+
+        World w = target.worldObj;
+        if (w == null || w.isRemote) return;
+        if (target.isDead) return;
+
+        double strOnly = 0D;
+        try { strOnly = Math.max(0D, getStrengthEffective(owner)); } catch (Throwable ignored) {}
+
+        float dot = DARKFIRE_BURN_BASE_DMG_PER_TICK + (float)(Math.sqrt(strOnly) * (double) DARKFIRE_BURN_SQRT_SCALE);
+        if (Float.isNaN(dot) || Float.isInfinite(dot)) dot = DARKFIRE_BURN_BASE_DMG_PER_TICK;
+        if (isAnim) dot *= 1.10f;
+        if (dot < 1f) dot = 1f;
+
+        float cap = isAnim ? DARKFIRE_BURN_BIG_DMG_CAP_PER_TICK : DARKFIRE_BURN_DMG_CAP_PER_TICK;
+        if (cap < 1f) cap = 1f;
+        if (dot > cap) dot = cap;
+
+        float impact = dot * 26.0f;
+        if (impact < 1f) impact = 1f;
+        float impactCap = cap * 6.0f;
+        if (impact > impactCap) impact = impactCap;
+
+        try { dealProcDamage(owner, target, impact, "perfectCore.darkflame"); } catch (Throwable ignored) {}
+        try { ShadowBurnHandler.applyShadowBurn(target, owner.worldObj, DARKFIRE_BURN_DURATION_TICKS, dot, true); } catch (Throwable ignored) {}
+
+        double exX = target.posX;
+        double exY = target.posY + target.height * 0.5D;
+        double exZ = target.posZ;
+        float radius = isAnim ? FIRE_EXPLOSION_ANIM_RADIUS : FIRE_EXPLOSION_RADIUS;
+        if (radius <= 0f) radius = isAnim ? 2.8f : 2.2f;
+
+        try { spawnDarkfireEmberDetonationParticles(w, exX, exY, exZ, radius, true); } catch (Throwable ignored) {}
+        try { spawnFireExplosion(w, exX, exY, exZ, true); } catch (Throwable ignored) {}
+        try { w.playSoundAtEntity(target, "random.explode", 0.55f, isAnim ? 0.72f : 0.66f); } catch (Throwable ignored) {}
+        try { w.playSoundAtEntity(target, "fire.ignite", 0.45f, isAnim ? 0.82f : 0.76f); } catch (Throwable ignored) {}
     }
 
     private static void startFireDot(EntityPlayer owner, EntityLivingBase target, float eventDamage, boolean isAnim){
@@ -5340,6 +5818,10 @@ public final class HexOrbEffectsController {
                 ed.setTag("PlayerPersisted", store);
             }
 
+            if (ent instanceof EntityPlayer){
+                refreshObservedBodyStateAfterWrite((EntityPlayer) ent, (float) nb);
+            }
+
             return true;
         } catch (Throwable ignored){
             return false;
@@ -5716,6 +6198,7 @@ public final class HexOrbEffectsController {
 
     private static boolean gemKeyMatchesFractured(String key){
         if (key == null) return false;
+
         String k = normalizeGemKey(key);
         String flat = normalizeGemKey(GEM_FRACTURED_FLAT);
         String anim = normalizeGemKey(GEM_FRACTURED_ANIM);
@@ -5726,6 +6209,7 @@ public final class HexOrbEffectsController {
             String sub = k.substring(5);
             if (sub.equals(flat) || sub.equals(anim)) return true;
         }
+
         if (flat.startsWith("gems/") && k.equals(flat.substring(5))) return true;
         if (anim.startsWith("gems/") && k.equals(anim.substring(5))) return true;
 
@@ -6236,6 +6720,7 @@ public final class HexOrbEffectsController {
         if (data == null) return;
 
         long now = serverNow(w);
+        tickPerfectCoreBurstFinisher(ent, data, w, now);
 
         // DARKFIRE: process outgoing-nerf refunds (runs once per server tick)
         tickCinderRefundQueue(now);
@@ -6247,9 +6732,18 @@ public final class HexOrbEffectsController {
         if (ent instanceof EntityPlayer){
             tickHealBuff((EntityPlayer) ent, data, w, now);
             syncAshenHudTimers((EntityPlayer) ent, data, now);
+            syncVoidHudTimers((EntityPlayer) ent, data, now);
+            syncPerfectCoreHudTimers((EntityPlayer) ent, data, now);
+            syncOverwriteHudTimers((EntityPlayer) ent, data, now);
+            syncFireHudTimers((EntityPlayer) ent, data, now);
+            syncEnergizedHudTimers((EntityPlayer) ent, data, now);
             tickDarkfireAshenLifesteal((EntityPlayer) ent, data, w, now);
             tickFirePunchBuff((EntityPlayer) ent, data, w, now);
             tickVoidGravityWell((EntityPlayer) ent, data, w, now);
+            tickPerfectCoreBurst((EntityPlayer) ent, data, w, now);
+            tickPerfectCoreBurstSwing((EntityPlayer) ent, data, w, now);
+            tickPerfectCoreDrive((EntityPlayer) ent, data, w, now);
+            tickPerfectCoreBarrier((EntityPlayer) ent, data, w, now);
         }
 
         // Rainbow Rush update (independent of swirl)
@@ -7479,6 +7973,11 @@ public final class HexOrbEffectsController {
             tag.setInteger("HexVoidHudLocalRem", (int) remNow);
         }catch(Throwable ignored){}
 
+        try {
+            boolean usePerfectCore = owner != null && findPerfectCoreHost(owner) != null;
+            setVoidHudPerfectCoreFlags(tag, null, usePerfectCore);
+        } catch (Throwable ignored) {}
+
         host.setTagCompound(tag);
 
         // push changes to client ASAP in MP
@@ -7569,6 +8068,11 @@ public final class HexOrbEffectsController {
             tag.setInteger("HexVoidHudLocalRem_" + suf, (int) remNow);
         }catch(Throwable ignored){}
 
+        try {
+            boolean usePerfectCore = owner != null && findPerfectCoreHost(owner) != null;
+            setVoidHudPerfectCoreFlags(tag, suf, usePerfectCore);
+        } catch (Throwable ignored) {}
+
         host.setTagCompound(tag);
 
         // push changes to client ASAP in MP
@@ -7579,6 +8083,711 @@ public final class HexOrbEffectsController {
         }
     }
 
+
+    private static ItemStack findPerfectCoreHost(EntityPlayer p){
+        if (p == null) return null;
+
+        ItemStack held = p.getHeldItem();
+        if (held != null && hasGemSocketed(held, GEM_PERFECT_CORE_EVOLVED)) return held;
+
+        try{
+            if (p.inventory != null && p.inventory.armorInventory != null){
+                for (int i = 0; i < p.inventory.armorInventory.length; i++){
+                    ItemStack a = p.inventory.armorInventory[i];
+                    if (a != null && hasGemSocketed(a, GEM_PERFECT_CORE_EVOLVED)) return a;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private static boolean isPerfectCoreDriveActive(EntityPlayer p, long now){
+        if (p == null) return false;
+        try { return p.getEntityData().getLong(PC_DRIVE_KEY_END) > now; } catch (Throwable ignored) { return false; }
+    }
+
+    private static void tryProcPerfectCoreDrive(EntityPlayer p, ItemStack host){
+        if (p == null || host == null || p.worldObj == null || p.worldObj.isRemote) return;
+
+        NBTTagCompound d = p.getEntityData();
+        long now = serverNow(p.worldObj);
+        long activeEnd = d.getLong(PC_DRIVE_KEY_END);
+        long cdEnd = d.getLong(PC_DRIVE_KEY_CD);
+
+        // Hard block any re-proc while the buff is still active or while its cooldown window is running.
+        if ((activeEnd != 0L && now < activeEnd) || (cdEnd != 0L && now < cdEnd)) return;
+        if (!cooldownReadyNoStamp(d, PC_DRIVE_KEY_LOCK, now)) return;
+
+        if (Math.random() > PERFECT_CORE_DRIVE_PROC_CHANCE) return;
+
+        long buffTicks = (long)Math.max(1, PERFECT_CORE_DRIVE_DURATION_TICKS);
+        long cdTicks = (long)Math.max(0, PERFECT_CORE_DRIVE_COOLDOWN_TICKS);
+        long buffEnd = now + buffTicks;
+        long nextCd = buffEnd + cdTicks;
+
+        d.setLong(PC_DRIVE_KEY_END, buffEnd);
+        d.setLong(PC_DRIVE_KEY_CD, nextCd);
+        cooldownStamp(d, PC_DRIVE_KEY_LOCK, (int)Math.min(Integer.MAX_VALUE, buffTicks + cdTicks), now);
+
+        stampPerfectCoreHudBuffCd(p, host, "drive", "Perfect Core", "Prismatic Drive",
+                buffEnd, Math.max(1, PERFECT_CORE_DRIVE_DURATION_TICKS),
+                nextCd, Math.max(0, PERFECT_CORE_DRIVE_COOLDOWN_TICKS));
+    }
+
+    private static void tickPerfectCoreDrive(EntityPlayer p, NBTTagCompound data, World w, long now){
+        if (p == null || data == null || w == null) return;
+
+        long end = data.getLong(PC_DRIVE_KEY_END);
+        if (end != 0L && now >= end){
+            data.setLong(PC_DRIVE_KEY_END, 0L);
+        }
+
+        if (!(w instanceof WorldServer)) return;
+        if (end == 0L || now >= end) return;
+
+        if ((now % 4L) != 0L) return;
+        WorldServer ws = (WorldServer) w;
+        double x = p.posX;
+        double y = p.posY + 1.0;
+        double z = p.posZ;
+        spawnRainbowColors(ws, x, y, z, 10, 0.55, 0.30, 0.55);
+        ws.func_147487_a("fireworksSpark", x, y, z, 2, 0.18, 0.18, 0.18, 0.0);
+        ws.func_147487_a("portal", x, y, z, 2, 0.18, 0.18, 0.18, 0.0);
+    }
+
+    private static boolean isPerfectCoreBarrierActive(EntityPlayer p, long now){
+        if (p == null) return false;
+        try { return p.getEntityData().getLong(PC_BARRIER_KEY_END) > now; } catch (Throwable ignored) { return false; }
+    }
+
+    private static boolean tryProcPerfectCoreBarrier(EntityPlayer p, DamageSource src, float rawAmount, ItemStack host){
+        if (p == null || host == null || p.worldObj == null || p.worldObj.isRemote) return false;
+
+        NBTTagCompound d = p.getEntityData();
+        long now = serverNow(p.worldObj);
+        long activeEnd = d.getLong(PC_BARRIER_KEY_END);
+        long cdEnd = d.getLong(PC_BARRIER_KEY_CD);
+
+        if ((activeEnd != 0L && now < activeEnd) || (cdEnd != 0L && now < cdEnd)) return false;
+        if (!cooldownReadyNoStamp(d, PC_BARRIER_KEY_LOCK, now)) return false;
+        if (Math.random() > PERFECT_CORE_BARRIER_PROC_CHANCE) return false;
+
+        long buffTicks = (long)Math.max(1, PERFECT_CORE_BARRIER_DURATION_TICKS);
+        long cdTicks = (long)Math.max(0, PERFECT_CORE_BARRIER_COOLDOWN_TICKS);
+        long buffEnd = now + buffTicks;
+        long nextCd = buffEnd + cdTicks;
+
+        d.setLong(PC_BARRIER_KEY_END, buffEnd);
+        d.setLong(PC_BARRIER_KEY_CD, nextCd);
+        d.setFloat(PC_BARRIER_KEY_STORED, 0.0f);
+        d.setLong(PC_BARRIER_KEY_NEXT_FX, now);
+        cooldownStamp(d, PC_BARRIER_KEY_LOCK, (int)Math.min(Integer.MAX_VALUE, buffTicks + cdTicks), now);
+
+        EntityLivingBase atk = livingAttacker(src);
+        d.setInteger(PC_BARRIER_KEY_TARGET, atk != null ? atk.getEntityId() : 0);
+
+        stampPerfectCoreHudBuffCd(p, host, "barrier", "Perfect Core", "Perfect Barrier",
+                buffEnd, Math.max(1, PERFECT_CORE_BARRIER_DURATION_TICKS),
+                nextCd, Math.max(0, PERFECT_CORE_BARRIER_COOLDOWN_TICKS));
+        return true;
+    }
+
+    private static void addPerfectCoreBarrierBlocked(EntityPlayer p, DamageSource src, float rawAmount, long now){
+        if (p == null) return;
+        NBTTagCompound d = p.getEntityData();
+
+        float add = estimatePerfectCoreBarrierBlockedDamage(src, rawAmount);
+        float stored = d.getFloat(PC_BARRIER_KEY_STORED);
+        stored += add;
+        if (stored > 25000000.0f) stored = 25000000.0f;
+        d.setFloat(PC_BARRIER_KEY_STORED, stored);
+        d.setLong(PC_BARRIER_KEY_SKIP_HURT, now);
+
+        EntityLivingBase atk = livingAttacker(src);
+        if (atk != null && !atk.isDead){
+            d.setInteger(PC_BARRIER_KEY_TARGET, atk.getEntityId());
+        }
+    }
+
+    private static List getPerfectCoreBarrierVictims(EntityPlayer owner, float radius, int maxTargets, int priorityId){
+        java.util.ArrayList out = new java.util.ArrayList();
+        if (owner == null || owner.worldObj == null) return out;
+        World w = owner.worldObj;
+        double r = Math.max(1.5D, (double)radius);
+        double nearSq = r * r;
+        double farSq = nearSq * 4.0D;
+
+        EntityLivingBase priority = null;
+        if (priorityId != 0){
+            try {
+                Entity pe = w.getEntityByID(priorityId);
+                if (pe instanceof EntityLivingBase){
+                    EntityLivingBase t = (EntityLivingBase)pe;
+                    if (!t.isDead && t != owner && (!(t instanceof EntityPlayer) || PERFECT_CORE_AFFECT_PLAYERS)){
+                        double dsq = owner.getDistanceSqToEntity(t);
+                        if (dsq <= farSq) priority = t;
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        if (priority != null) out.add(priority);
+
+        List base = getPerfectCoreBurstVictims(owner, Math.max(radius, 2.0f));
+        if (base != null && !base.isEmpty()){
+            final EntityPlayer ownerRef = owner;
+            Collections.sort(base, new Comparator(){
+                public int compare(Object a, Object b){
+                    if (!(a instanceof EntityLivingBase) || !(b instanceof EntityLivingBase)) return 0;
+                    double da = ownerRef.getDistanceSqToEntity((EntityLivingBase)a);
+                    double db = ownerRef.getDistanceSqToEntity((EntityLivingBase)b);
+                    return da < db ? -1 : (da > db ? 1 : 0);
+                }
+            });
+
+            for (int i = 0; i < base.size() && out.size() < maxTargets; i++){
+                Object o = base.get(i);
+                if (!(o instanceof EntityLivingBase)) continue;
+                EntityLivingBase t = (EntityLivingBase)o;
+                if (t == priority) continue;
+                out.add(t);
+            }
+        }
+
+        return out;
+    }
+
+    private static void clearPerfectCoreBarrier(NBTTagCompound d){
+        if (d == null) return;
+        d.removeTag(PC_BARRIER_KEY_END);
+        d.removeTag(PC_BARRIER_KEY_STORED);
+        d.removeTag(PC_BARRIER_KEY_TARGET);
+        d.removeTag(PC_BARRIER_KEY_NEXT_FX);
+        d.removeTag(PC_BARRIER_KEY_SKIP_HURT);
+    }
+
+    private static void releasePerfectCoreBarrier(EntityPlayer p, NBTTagCompound d, World w){
+        if (p == null || d == null || w == null) return;
+
+        float stored = d.getFloat(PC_BARRIER_KEY_STORED);
+        if (stored < 1.0f){
+            clearPerfectCoreBarrier(d);
+            return;
+        }
+
+        int priorityId = d.getInteger(PC_BARRIER_KEY_TARGET);
+        int maxTargets = Math.max(1, PERFECT_CORE_BARRIER_RELEASE_MAX_TARGETS);
+        List victims = getPerfectCoreBarrierVictims(p, PERFECT_CORE_BARRIER_RELEASE_RADIUS, maxTargets, priorityId);
+        if (!(w instanceof WorldServer)){
+            clearPerfectCoreBarrier(d);
+            return;
+        }
+
+        WorldServer ws = (WorldServer)w;
+        double ox = p.posX;
+        double oy = p.posY + p.getEyeHeight() * 0.78D;
+        double oz = p.posZ;
+        playRainbowBlastBig(w, ox, p.posY + 1.0D, oz);
+        spawnRainbowColors(ws, ox, p.posY + 1.0D, oz, 12, 0.30, 0.20, 0.30);
+
+        if (victims == null || victims.isEmpty()){
+            clearPerfectCoreBarrier(d);
+            return;
+        }
+
+        float dealt = stored * Math.max(0.0f, PERFECT_CORE_BARRIER_RELEASE_MULT);
+        if (dealt < 1.0f){
+            clearPerfectCoreBarrier(d);
+            return;
+        }
+
+        float[] weights = new float[]{1.00f, 0.80f, 0.65f, 0.50f, 0.40f};
+        int count = Math.min(victims.size(), Math.min(maxTargets, weights.length));
+        float totalW = 0.0f;
+        for (int i = 0; i < count; i++) totalW += weights[i];
+        if (totalW <= 0f) totalW = (float)count;
+
+        for (int i = 0; i < count; i++){
+            Object o = victims.get(i);
+            if (!(o instanceof EntityLivingBase)) continue;
+            EntityLivingBase t = (EntityLivingBase)o;
+            if (t == null || t.isDead) continue;
+
+            float hit = dealt * (weights[i] / totalW);
+            if (hit < 1.0f) hit = 1.0f;
+            if (t instanceof EntityPlayer) hit *= DAMAGE_VS_PLAYERS_SCALE;
+
+            double tx = t.posX;
+            double ty = t.posY + t.height * 0.55D;
+            double tz = t.posZ;
+            spawnRainbowBeamLine(ws, ox, oy, oz, tx, ty, tz, 6, 0.016D);
+            spawnRainbowColors(ws, tx, ty, tz, 8, 0.18, 0.18, 0.18);
+            ws.func_147487_a("fireworksSpark", tx, ty, tz, 8, 0.18, 0.18, 0.18, 0.035D);
+            playRainbowBlastBig(w, tx, ty, tz);
+            try { dealProcDamage(p, t, hit, "PerfectCoreBarrier"); } catch (Throwable ignored) {}
+        }
+
+        clearPerfectCoreBarrier(d);
+    }
+
+    private static void tickPerfectCoreBarrier(EntityPlayer p, NBTTagCompound data, World w, long now){
+        if (p == null || data == null || w == null) return;
+
+        long end = data.getLong(PC_BARRIER_KEY_END);
+        if (end != 0L && now >= end){
+            data.setLong(PC_BARRIER_KEY_END, 0L);
+            releasePerfectCoreBarrier(p, data, w);
+            return;
+        }
+
+        if (!(w instanceof WorldServer)) return;
+        if (end == 0L || now >= end) return;
+
+        long nextFx = data.getLong(PC_BARRIER_KEY_NEXT_FX);
+        if (nextFx == 0L || now >= nextFx){
+            WorldServer ws = (WorldServer)w;
+            double x = p.posX;
+            double y = p.posY + 1.0D;
+            double z = p.posZ;
+            spawnRainbowColors(ws, x, y, z, 8, 0.28, 0.20, 0.28);
+            ws.func_147487_a("fireworksSpark", x, y, z, 2, 0.12, 0.12, 0.12, 0.01D);
+            data.setLong(PC_BARRIER_KEY_NEXT_FX, now + 4L);
+        }
+    }
+
+    private static void tryProcPerfectCoreBurst(EntityPlayer p, EntityLivingBase primary, ItemStack host){
+        if (p == null || primary == null || host == null || p.worldObj == null || p.worldObj.isRemote) return;
+        NBTTagCompound d = p.getEntityData();
+        long now = serverNow(p.worldObj);
+
+        clearExpiredPerfectCoreBurstPrime(d, now);
+        if (!cooldownReadyNoStamp(d, "HexOrbCD_PerfectCoreBurst", now)) return;
+        if (Math.random() > PERFECT_CORE_BURST_PROC_CHANCE) return;
+        if (!cooldownReady(p, "HexOrbCD_PerfectCoreBurst", PERFECT_CORE_BURST_COOLDOWN_TICKS)) return;
+
+        float dmg = computePerfectCoreBurstDamage(p);
+        clearPerfectCoreBurst(d);
+        startPerfectCoreBurst(p, primary, dmg);
+
+        stampPerfectCoreHudCooldown(p, host, "burst", "Perfect Core", "Prismatic Barrage",
+                now + (long)PERFECT_CORE_BURST_COOLDOWN_TICKS, PERFECT_CORE_BURST_COOLDOWN_TICKS);
+    }
+
+    private static float computePerfectCoreBurstDamage(EntityPlayer p){
+        float will = getVoidAbyssEffectiveWill(p);
+        if (will < 1f) will = 1f;
+
+        double scaled = Math.pow((double)will, (double)PERFECT_CORE_BURST_WILL_EXPONENT) * (double)PERFECT_CORE_BURST_WILL_MULT;
+        float dmg = PERFECT_CORE_BURST_BASE_DAMAGE + (float)scaled;
+        if (dmg > PERFECT_CORE_BURST_DAMAGE_CAP) dmg = PERFECT_CORE_BURST_DAMAGE_CAP;
+        if (dmg < 1f) dmg = 1f;
+
+        dmg *= getFracturedLowHealthBoostMult(p);
+        return dmg;
+    }
+
+    private static boolean isPerfectCoreBurstPrimed(NBTTagCompound d, long now){
+        if (d == null) return false;
+        if (!d.getBoolean(PC_BURST_KEY_PRIMED)) return false;
+        long expire = d.getLong(PC_BURST_KEY_EXPIRE);
+        return expire > now;
+    }
+
+    private static float getPrimedPerfectCoreBurstDamage(NBTTagCompound d){
+        if (d == null) return 0f;
+        float dmg = d.getFloat(PC_BURST_KEY_DMG);
+        return dmg > 0f ? dmg : 0f;
+    }
+
+    private static void clearExpiredPerfectCoreBurstPrime(NBTTagCompound d, long now){
+        if (d == null) return;
+        if (!d.getBoolean(PC_BURST_KEY_PRIMED)) return;
+        long expire = d.getLong(PC_BURST_KEY_EXPIRE);
+        if (expire > 0L && now < expire) return;
+        clearPerfectCoreBurst(d);
+    }
+
+    private static void armPerfectCoreBurstPrime(EntityPlayer owner, EntityLivingBase primary, float dmg, long now){
+        if (owner == null) return;
+        NBTTagCompound d = owner.getEntityData();
+        d.setBoolean(PC_BURST_KEY_PRIMED, true);
+        d.setLong(PC_BURST_KEY_EXPIRE, now + (long)Math.max(10, PERFECT_CORE_BURST_ARM_TIMEOUT_TICKS));
+        d.setFloat(PC_BURST_KEY_DMG, Math.max(1f, dmg));
+        d.setInteger(PC_BURST_KEY_TARGET, primary != null ? primary.getEntityId() : 0);
+
+        World w = owner.worldObj;
+        if (w instanceof WorldServer){
+            WorldServer ws = (WorldServer) w;
+            double x = owner.posX;
+            double y = owner.posY + owner.getEyeHeight() * 0.75D;
+            double z = owner.posZ;
+            spawnRainbowColors(ws, x, y, z, 12, 0.30, 0.18, 0.30);
+            ws.func_147487_a("fireworksSpark", x, y, z, 5, 0.16, 0.16, 0.16, 0.03D);
+            ws.func_147487_a("portal", x, y, z, 4, 0.16, 0.16, 0.16, 0.0D);
+        }
+        try { w.playSoundAtEntity(owner, "random.orb", 0.75f, 1.35f); } catch (Throwable ignored) {}
+    }
+
+    private static void startPerfectCoreBurst(EntityPlayer owner, EntityLivingBase target, float totalDmg){
+        if (owner == null || target == null || owner.worldObj == null) return;
+        NBTTagCompound d = owner.getEntityData();
+        clearPerfectCoreBurst(d);
+
+        float dmg = totalDmg > 0f ? totalDmg : computePerfectCoreBurstDamage(owner);
+        if (dmg < 1f) dmg = 1f;
+
+        float first = Math.max(1.0f, dmg * PERFECT_CORE_BURST_FIRST_HIT_SCALE);
+        float firstExplosion = Math.max(1.0f, dmg * PERFECT_CORE_BURST_LAUNCH_HIT_SCALE);
+        float secondExplosion = Math.max(1.0f, dmg * PERFECT_CORE_BURST_SECOND_EXPLOSION_SCALE);
+        float fin   = Math.max(1.0f, dmg * PERFECT_CORE_BURST_FINAL_HIT_SCALE);
+
+        double sx = owner.posX;
+        double sy = owner.posY + owner.getEyeHeight() * 0.80D;
+        double sz = owner.posZ;
+        double tx = target.posX;
+        double ty = target.posY + (target.height * 0.5D);
+        double tz = target.posZ;
+
+        playPerfectCoreBurstTravel(owner, sx, sy, sz, tx, ty, tz);
+        playPerfectCoreBurstImpact(owner.worldObj, owner, tx, ty, tz);
+        try { dealProcDamage(owner, target, first, "PerfectCoreBurstPrime"); } catch (Throwable ignored) {}
+        pulsePerfectCoreTarget(target);
+        armPerfectCoreBurstFinisher(target, owner, serverNow(owner.worldObj), firstExplosion, secondExplosion, fin);
+    }
+
+    private static void pulsePerfectCoreTarget(EntityLivingBase target){
+        if (target == null || target.worldObj == null || !(target.worldObj instanceof WorldServer)) return;
+        WorldServer ws = (WorldServer) target.worldObj;
+        double x = target.posX;
+        double y = target.posY + target.height * 0.55D;
+        double z = target.posZ;
+        spawnRainbowColors(ws, x, y, z, 12, 0.20, 0.24, 0.20);
+        ws.func_147487_a("fireworksSpark", x, y, z, 6, 0.16, 0.20, 0.16, 0.03D);
+        ws.func_147487_a("portal", x, y, z, 4, 0.10, 0.12, 0.10, 0.0D);
+    }
+
+    private static void armPerfectCoreBurstFinisher(EntityLivingBase target, EntityPlayer owner, long now, float midDmg, float secondDmg, float finalDmg){
+        if (target == null) return;
+        NBTTagCompound d = target.getEntityData();
+        if (d == null) return;
+        d.setInteger(PC_FIN_KEY_OWNER, owner != null ? owner.getEntityId() : 0);
+        d.setLong(PC_FIN_KEY_LAUNCH_TICK, now + (long)Math.max(2, PERFECT_CORE_BURST_LAUNCH_DELAY_TICKS));
+        d.setLong(PC_FIN_KEY_SECOND_TICK, now + (long)Math.max(Math.max(3, PERFECT_CORE_BURST_LAUNCH_DELAY_TICKS + 1), PERFECT_CORE_BURST_SECOND_EXPLOSION_DELAY_TICKS));
+        d.setLong(PC_FIN_KEY_FINAL_TICK, now + (long)Math.max(Math.max(4, PERFECT_CORE_BURST_SECOND_EXPLOSION_DELAY_TICKS + 2), PERFECT_CORE_BURST_FINAL_DELAY_TICKS));
+        d.setFloat(PC_FIN_KEY_MID_DMG, Math.max(0.0f, midDmg));
+        d.setFloat(PC_FIN_KEY_SECOND_DMG, Math.max(0.0f, secondDmg));
+        d.setFloat(PC_FIN_KEY_FINAL_DMG, Math.max(0.0f, finalDmg));
+        d.setInteger(PC_FIN_KEY_PHASE, 0);
+    }
+
+    private static void clearPerfectCoreBurst(NBTTagCompound d){
+        if (d == null) return;
+        d.removeTag(PC_BURST_KEY_PRIMED);
+        d.removeTag(PC_BURST_KEY_EXPIRE);
+        d.removeTag(PC_BURST_KEY_DMG);
+        d.removeTag(PC_BURST_KEY_TARGET);
+    }
+
+    private static void clearPerfectCoreBurstFinisher(NBTTagCompound d){
+        if (d == null) return;
+        d.removeTag(PC_FIN_KEY_OWNER);
+        d.removeTag(PC_FIN_KEY_LAUNCH_TICK);
+        d.removeTag(PC_FIN_KEY_SECOND_TICK);
+        d.removeTag(PC_FIN_KEY_FINAL_TICK);
+        d.removeTag(PC_FIN_KEY_MID_DMG);
+        d.removeTag(PC_FIN_KEY_SECOND_DMG);
+        d.removeTag(PC_FIN_KEY_FINAL_DMG);
+        d.removeTag(PC_FIN_KEY_PHASE);
+    }
+
+    private static void tickPerfectCoreBurst(EntityPlayer owner, NBTTagCompound d, World w, long now){
+        if (owner == null || d == null) return;
+        clearExpiredPerfectCoreBurstPrime(d, now);
+    }
+
+    private static void tickPerfectCoreBurstSwing(EntityPlayer owner, NBTTagCompound d, World w, long now){
+        // no-op: barrage now uses a primed next-hit finisher instead of repeated shots.
+    }
+
+    private static void tryFirePerfectCoreBurstOnAttack(EntityPlayer owner, EntityLivingBase struck){
+        // Compatibility no-op. Prismatic Barrage is triggered from tryProcPerfectCoreBurst().
+    }
+
+    private static void firePerfectCoreBurstShot(EntityPlayer owner, EntityLivingBase target, float radius, float dmg){
+        if (owner == null || target == null) return;
+        startPerfectCoreBurst(owner, target, dmg);
+    }
+
+    private static void playPerfectCoreBurstTravel(EntityPlayer owner, double sx, double sy, double sz, double tx, double ty, double tz){
+        if (owner == null || owner.worldObj == null) return;
+        World w = owner.worldObj;
+        if (!(w instanceof WorldServer)) return;
+
+        WorldServer ws = (WorldServer) w;
+        spawnRainbowBeamLine(ws, sx, sy, sz, tx, ty, tz, 10, 0.03);
+        ws.func_147487_a("fireworksSpark", tx, ty, tz, 5, 0.12, 0.12, 0.12, 0.02D);
+    }
+
+    private static void playPerfectCoreBurstImpact(World w, EntityPlayer owner, double x, double y, double z){
+        if (!(w instanceof WorldServer)) return;
+        WorldServer ws = (WorldServer) w;
+
+        spawnRainbowColors(ws, x, y, z, 16, 0.26D, 0.20D, 0.26D);
+        ws.func_147487_a("fireworksSpark", x, y, z, 10, 0.18D, 0.16D, 0.18D, 0.035D);
+        ws.func_147487_a("portal", x, y, z, 6, 0.12D, 0.10D, 0.12D, 0.0D);
+        ws.func_147487_a("explode", x, y, z, 2, 0.10D, 0.08D, 0.10D, 0.02D);
+
+        try {
+            if (owner != null) ws.playSoundAtEntity(owner, "random.orb", 0.60f, 1.55f);
+        } catch (Throwable ignored) {}
+    }
+
+    private static List getPerfectCoreBurstVictims(EntityPlayer owner, float radius){
+        if (owner == null || owner.worldObj == null) return null;
+        double r = Math.max(0.5D, (double)radius);
+        AxisAlignedBB box = owner.boundingBox.expand(r, r * 0.75D, r);
+        List list = owner.worldObj.getEntitiesWithinAABBExcludingEntity(owner, box);
+        if (list == null || list.isEmpty()) return list;
+
+        List out = new ArrayList();
+        for (int i = 0; i < list.size(); i++){
+            Object o = list.get(i);
+            if (!(o instanceof EntityLivingBase)) continue;
+            EntityLivingBase t = (EntityLivingBase)o;
+            if (t == owner || t.isDead) continue;
+            if ((t instanceof EntityPlayer) && !PERFECT_CORE_AFFECT_PLAYERS) continue;
+            if (owner.getDistanceSqToEntity(t) > r * r) continue;
+            out.add(t);
+        }
+        return out;
+    }
+
+    private static void playPerfectCoreBurstFieldPulse(EntityPlayer owner, List victims, float radius){
+        if (owner == null || owner.worldObj == null || victims == null || victims.isEmpty()) return;
+        World w = owner.worldObj;
+        if (!(w instanceof WorldServer)) return;
+        WorldServer ws = (WorldServer)w;
+
+        double ox = owner.posX;
+        double oy = owner.posY + owner.getEyeHeight() * 0.78D;
+        double oz = owner.posZ;
+        spawnRainbowColors(ws, ox, owner.posY + 1.0D, oz, 6, 0.18, 0.12, 0.18);
+
+        int shown = 0;
+        int maxShow = Math.min(4, victims.size());
+        for (int i = 0; i < victims.size() && shown < maxShow; i++){
+            Object o = victims.get(i);
+            if (!(o instanceof EntityLivingBase)) continue;
+            EntityLivingBase t = (EntityLivingBase)o;
+            double tx = t.posX;
+            double ty = t.posY + t.height * 0.55D;
+            double tz = t.posZ;
+            spawnRainbowBeamLine(ws, ox, oy, oz, tx, ty, tz, 4, 0.014D);
+            shown++;
+        }
+    }
+
+    private static void finishPerfectCoreBurst(EntityPlayer owner, NBTTagCompound d, World w, long now){
+        // Legacy field finisher retired.
+    }
+
+    private static void armPerfectCoreSlam(EntityLivingBase target, EntityPlayer owner, long now, float dmg){
+        // Legacy slam finisher retired.
+    }
+
+    private static void clearPerfectCoreSlam(NBTTagCompound d){
+        // Legacy slam finisher retired.
+    }
+
+    private static void tickPerfectCoreBurstFinisher(EntityLivingBase ent, NBTTagCompound data, World w, long now){
+        if (ent == null || data == null || w == null) return;
+        long finalTick = data.getLong(PC_FIN_KEY_FINAL_TICK);
+        if (finalTick <= 0L) return;
+
+        if (ent.isDead){
+            clearPerfectCoreBurstFinisher(data);
+            return;
+        }
+
+        long launchTick = data.getLong(PC_FIN_KEY_LAUNCH_TICK);
+        long secondTick = data.getLong(PC_FIN_KEY_SECOND_TICK);
+        int phase = data.getInteger(PC_FIN_KEY_PHASE);
+
+        if (!(w instanceof WorldServer)){
+            if (now >= finalTick) clearPerfectCoreBurstFinisher(data);
+            return;
+        }
+
+        WorldServer ws = (WorldServer)w;
+        double x = ent.posX;
+        double y = ent.posY + ent.height * 0.50D;
+        double z = ent.posZ;
+
+        EntityPlayer owner = null;
+        int ownerId = data.getInteger(PC_FIN_KEY_OWNER);
+        if (ownerId != 0){
+            try {
+                Entity e = w.getEntityByID(ownerId);
+                if (e instanceof EntityPlayer) owner = (EntityPlayer)e;
+            } catch (Throwable ignored) {}
+        }
+
+        if (phase <= 0){
+            if (now < launchTick){
+                if (((launchTick - now) % 2L) == 0L){
+                    spawnRainbowColors(ws, x, y, z, 6, 0.16, 0.20, 0.16);
+                    ws.func_147487_a("fireworksSpark", x, y, z, 2, 0.10, 0.10, 0.10, 0.02D);
+                }
+                try {
+                    ent.motionX *= 0.20D;
+                    ent.motionZ *= 0.20D;
+                    ent.fallDistance = 0.0f;
+                } catch (Throwable ignored) {}
+                return;
+            }
+
+            float midDmg = data.getFloat(PC_FIN_KEY_MID_DMG);
+            playRainbowBlastBig(w, x, y, z);
+            ws.func_147487_a("fireworksSpark", x, y, z, 10, 0.20, 0.20, 0.20, 0.04D);
+            if (midDmg > 0f && owner != null){
+                try { dealProcDamage(owner, ent, midDmg, "PerfectCoreBurstExplosion1"); } catch (Throwable ignored) {}
+            }
+            try {
+                ent.motionX *= 0.18D;
+                ent.motionZ *= 0.18D;
+                ent.motionY = Math.max(ent.motionY, PERFECT_CORE_BURST_LAUNCH_Y);
+                ent.velocityChanged = true;
+                ent.fallDistance = 0.0f;
+            } catch (Throwable ignored) {}
+            data.setInteger(PC_FIN_KEY_PHASE, 1);
+            return;
+        }
+
+        if (phase == 1){
+            if (now < secondTick){
+                if (((secondTick - now) % 2L) == 0L){
+                    spawnRainbowColors(ws, x, y + 0.20D, z, 5, 0.14, 0.18, 0.14);
+                    ws.func_147487_a("portal", x, y + 0.20D, z, 2, 0.08, 0.08, 0.08, 0.0D);
+                }
+                try { ent.fallDistance = 0.0f; } catch (Throwable ignored) {}
+                return;
+            }
+
+            float secondDmg = data.getFloat(PC_FIN_KEY_SECOND_DMG);
+            playRainbowBlastBig(w, x, y + 0.22D, z);
+            ws.func_147487_a("fireworksSpark", x, y + 0.22D, z, 8, 0.18, 0.18, 0.18, 0.035D);
+            if (secondDmg > 0f && owner != null){
+                try { dealProcDamage(owner, ent, secondDmg, "PerfectCoreBurstExplosion2"); } catch (Throwable ignored) {}
+            }
+            try {
+                ent.motionX *= 0.16D;
+                ent.motionZ *= 0.16D;
+                ent.motionY = Math.max(ent.motionY, PERFECT_CORE_BURST_LAUNCH_Y * 0.68f);
+                ent.velocityChanged = true;
+                ent.fallDistance = 0.0f;
+            } catch (Throwable ignored) {}
+            data.setInteger(PC_FIN_KEY_PHASE, 2);
+            return;
+        }
+
+        if (now < finalTick){
+            if (((finalTick - now) % 2L) == 0L){
+                spawnRainbowColors(ws, x, y + 0.25D, z, 5, 0.14, 0.18, 0.14);
+                ws.func_147487_a("portal", x, y + 0.25D, z, 2, 0.08, 0.08, 0.08, 0.0D);
+            }
+            try { ent.fallDistance = 0.0f; } catch (Throwable ignored) {}
+            return;
+        }
+
+        if (owner != null){
+            double sx = owner.posX;
+            double sy = owner.posY + owner.getEyeHeight() * 0.80D;
+            double sz = owner.posZ;
+            playPerfectCoreBurstTravel(owner, sx, sy, sz, x, y, z);
+        }
+        playRainbowBlastBig(w, x, y, z);
+        ws.func_147487_a("fireworksSpark", x, y, z, 12, 0.20, 0.20, 0.20, 0.04D);
+
+        float finalDmg = data.getFloat(PC_FIN_KEY_FINAL_DMG);
+        if (finalDmg > 0f && owner != null){
+            try { dealProcDamage(owner, ent, finalDmg, "PerfectCoreBurstFinal"); } catch (Throwable ignored) {}
+        }
+        try {
+            ent.motionX *= 0.12D;
+            ent.motionZ *= 0.12D;
+            ent.motionY = PERFECT_CORE_BURST_FINAL_SLAM_Y;
+            ent.velocityChanged = true;
+            ent.fallDistance = 0.0f;
+        } catch (Throwable ignored) {}
+
+        clearPerfectCoreBurstFinisher(data);
+    }
+
+    private static void tickPerfectCoreSlam(EntityLivingBase ent, NBTTagCompound data, World w, long now){
+        // Legacy slam finisher retired.
+    }
+
+    private static void stampPerfectCoreHudCooldown(EntityPlayer owner, ItemStack host, String suf, String typeLabel, String abilityLabel,
+                                                    long cdEndTick, int cdMaxTicks){
+        if (host == null || suf == null || suf.length() == 0) return;
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        tag.setString("HexPerfectCoreHudType_" + suf, safeStr(typeLabel));
+        tag.setString("HexPerfectCoreHudAbility_" + suf, safeStr(abilityLabel));
+        tag.setLong("HexPerfectCoreHudCDEnd_" + suf, cdEndTick);
+        tag.setInteger("HexPerfectCoreHudCDMax_" + suf, Math.max(0, cdMaxTicks));
+
+        try{
+            long localNow = (owner != null && owner.worldObj != null) ? owner.worldObj.getTotalWorldTime() : 0L;
+            long srvNow = serverNow((owner != null) ? owner.worldObj : null);
+            long remNow = cdEndTick - srvNow;
+            if (remNow < 0L) remNow = 0L;
+            if (remNow > (long)Integer.MAX_VALUE) remNow = (long)Integer.MAX_VALUE;
+            tag.setLong("HexPerfectCoreHudLocalStamp_" + suf, localNow);
+            tag.setInteger("HexPerfectCoreHudLocalRem_" + suf, (int)remNow);
+        } catch (Throwable ignored) {}
+
+        host.setTagCompound(tag);
+        if (owner instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void stampPerfectCoreHudBuffCd(EntityPlayer owner, ItemStack host, String suf, String typeLabel, String abilityLabel,
+                                                  long buffEndTick, int buffMaxTicks, long cdEndTick, int cdMaxTicks){
+        if (host == null || suf == null || suf.length() == 0) return;
+        NBTTagCompound tag = host.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        tag.setString("HexPerfectCoreHudType_" + suf, safeStr(typeLabel));
+        tag.setString("HexPerfectCoreHudAbility_" + suf, safeStr(abilityLabel));
+        tag.setLong("HexPerfectCoreHudBuffEnd_" + suf, buffEndTick);
+        tag.setInteger("HexPerfectCoreHudBuffMax_" + suf, Math.max(0, buffMaxTicks));
+        tag.setLong("HexPerfectCoreHudCDEnd_" + suf, cdEndTick);
+        tag.setInteger("HexPerfectCoreHudCDMax_" + suf, Math.max(0, cdMaxTicks));
+
+        try{
+            long localNow = (owner != null && owner.worldObj != null) ? owner.worldObj.getTotalWorldTime() : 0L;
+            long srvNow = serverNow((owner != null) ? owner.worldObj : null);
+
+            long buffRem = buffEndTick - srvNow;
+            if (buffRem < 0L) buffRem = 0L;
+            if (buffRem > (long)Integer.MAX_VALUE) buffRem = (long)Integer.MAX_VALUE;
+            long cdRem = cdEndTick - srvNow;
+            if (cdRem < 0L) cdRem = 0L;
+            if (cdRem > (long)Integer.MAX_VALUE) cdRem = (long)Integer.MAX_VALUE;
+
+            tag.setLong("HexPerfectCoreHudBuffLocalStamp_" + suf, localNow);
+            tag.setInteger("HexPerfectCoreHudBuffLocalRem_" + suf, (int)buffRem);
+            tag.setLong("HexPerfectCoreHudCDLocalStamp_" + suf, localNow);
+            tag.setInteger("HexPerfectCoreHudCDLocalRem_" + suf, (int)cdRem);
+        } catch (Throwable ignored) {}
+
+        host.setTagCompound(tag);
+        if (owner instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP) owner).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
 
     // -------------------------------------------------------------
     // OVERWRITE HUD: stamp cooldown on the host item so client HUD can render it
@@ -7621,7 +8830,8 @@ public final class HexOrbEffectsController {
     // -------------------------------------------------------------
     private static void stampFirePunchHud(EntityPlayer owner, ItemStack host, boolean isAnim,
                                           long buffEndTick, int buffMaxTicks,
-                                          long cdEndTick, int cdMaxTicks){
+                                          long cdEndTick, int cdMaxTicks,
+                                          boolean perfectCoreSource, boolean perfectCoreDark){
         if (host == null) return;
 
         String suf = isAnim ? "anim" : "flat";
@@ -7629,8 +8839,10 @@ public final class HexOrbEffectsController {
         NBTTagCompound tag = host.getTagCompound();
         if (tag == null) tag = new NBTTagCompound();
 
-        tag.setString("HexFireHudType_" + suf, "Fire Punch");
-        tag.setString("HexFireHudAbility_" + suf, "Fire Punch");
+        tag.setString("HexFireHudType_" + suf, perfectCoreSource ? "Perfect Core" : "Fire Punch");
+        tag.setString("HexFireHudAbility_" + suf, perfectCoreDark ? "Dark Flame" : "Fire Punch");
+        tag.setBoolean("HexFireHudUsePerfectCore_" + suf, perfectCoreSource);
+        tag.setBoolean("HexFireHudUsePerfectCore", perfectCoreSource);
 
         tag.setLong("HexFireHudBuffEnd_" + suf, buffEndTick);
         tag.setInteger("HexFireHudBuffMax_" + suf, Math.max(0, buffMaxTicks));
@@ -7725,6 +8937,300 @@ public final class HexOrbEffectsController {
 
 
 
+
+    private static final String VOID_HUD_SYNC_NEXT_T = "HexVoidHudSyncNext";
+    private static final String PC_HUD_SYNC_NEXT_T = "HexPCHudSyncNext";
+    private static final String OVERWRITE_HUD_SYNC_NEXT_T = "HexOverwriteHudSyncNext";
+    private static final String FIRE_HUD_SYNC_NEXT_T = "HexFireHudSyncNext";
+    private static final String ENERGIZED_HUD_SYNC_NEXT_T = "HexEnergizedHudSyncNext";
+
+    private static void collectEquippedStacks(EntityPlayer p, java.util.List<ItemStack> out){
+        if (p == null || out == null) return;
+        try {
+            ItemStack held = p.getHeldItem();
+            if (held != null) out.add(held);
+        } catch (Throwable ignored) {}
+        try {
+            if (p.inventory != null && p.inventory.armorInventory != null){
+                ItemStack[] armor = p.inventory.armorInventory;
+                for (int i = 0; i < armor.length; i++){
+                    ItemStack a = armor[i];
+                    if (a != null) out.add(a);
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static boolean tagHasAnyKeyStartingWith(NBTTagCompound tag, String prefix){
+        if (tag == null || prefix == null || prefix.length() == 0) return false;
+        try {
+            for (Object kObj : tag.func_150296_c()){
+                if (kObj == null) continue;
+                String k = String.valueOf(kObj);
+                if (k.startsWith(prefix)) return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static boolean hasVoidHudKeys(NBTTagCompound tag){
+        if (tag == null) return false;
+        return tag.hasKey("HexVoidHudCDEnd")
+                || tagHasAnyKeyStartingWith(tag, "HexVoidHudCDEnd_")
+                || tagHasAnyKeyStartingWith(tag, "HexVoidHudLocalRem_")
+                || tagHasAnyKeyStartingWith(tag, "HexVoidHudLocalStamp_")
+                || tag.hasKey("HexVoidHudType")
+                || tagHasAnyKeyStartingWith(tag, "HexVoidHudType_");
+    }
+
+    private static boolean hasPerfectCoreHudKeys(NBTTagCompound tag){
+        if (tag == null) return false;
+        return tagHasAnyKeyStartingWith(tag, "HexPerfectCoreHudCDEnd_")
+                || tagHasAnyKeyStartingWith(tag, "HexPerfectCoreHudBuffEnd_")
+                || tagHasAnyKeyStartingWith(tag, "HexPerfectCoreHudLocalRem_")
+                || tagHasAnyKeyStartingWith(tag, "HexPerfectCoreHudCDLocalRem_")
+                || tagHasAnyKeyStartingWith(tag, "HexPerfectCoreHudBuffLocalRem_");
+    }
+
+    private static boolean hasOverwriteHudKeys(NBTTagCompound tag){
+        if (tag == null) return false;
+        return tagHasAnyKeyStartingWith(tag, "HexOverwriteHudCDEnd_")
+                || tagHasAnyKeyStartingWith(tag, "HexOverwriteHudLocalRem_");
+    }
+
+    private static boolean hasFireHudKeys(NBTTagCompound tag){
+        if (tag == null) return false;
+        return tagHasAnyKeyStartingWith(tag, "HexFireHudCDEnd_")
+                || tagHasAnyKeyStartingWith(tag, "HexFireHudBuffEnd_")
+                || tagHasAnyKeyStartingWith(tag, "HexFireHudCDLocalRem_")
+                || tagHasAnyKeyStartingWith(tag, "HexFireHudBuffLocalRem_");
+    }
+
+    private static boolean hasEnergizedHudKeys(NBTTagCompound tag){
+        if (tag == null) return false;
+        return tagHasAnyKeyStartingWith(tag, "HexEnergizedHudCDEnd_")
+                || tagHasAnyKeyStartingWith(tag, "HexEnergizedHudLocalRem_");
+    }
+
+    private static void restampLocalCountdown(NBTTagCompound tag, String endKey, String stampKey, String remKey, long nowGlobal, long localNow){
+        if (tag == null || endKey == null || stampKey == null || remKey == null) return;
+        try {
+            long end = tag.getLong(endKey);
+            long rem = end - nowGlobal;
+            if (rem < 0L) rem = 0L;
+            if (rem > (long)Integer.MAX_VALUE) rem = (long)Integer.MAX_VALUE;
+            tag.setLong(stampKey, localNow);
+            tag.setInteger(remKey, (int)rem);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void setVoidHudPerfectCoreFlags(NBTTagCompound tag, String suf, boolean enabled){
+        if (tag == null) return;
+        try {
+            tag.setBoolean("HexVoidHudUsePerfectCore", enabled);
+            if (suf != null && suf.length() > 0){
+                tag.setBoolean("HexVoidHudUsePerfectCore_" + suf, enabled);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void syncVoidHudTimers(EntityPlayer p, NBTTagCompound pdata, long nowGlobal){
+        if (p == null || pdata == null) return;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return;
+
+        long next = 0L;
+        try { next = pdata.getLong(VOID_HUD_SYNC_NEXT_T); } catch (Throwable ignored) {}
+        if (next > 0L && nowGlobal < next) return;
+        try { pdata.setLong(VOID_HUD_SYNC_NEXT_T, nowGlobal + 10L); } catch (Throwable ignored) {}
+
+        long localNow = w.getTotalWorldTime();
+        boolean usePerfectCore = (findPerfectCoreHost(p) != null);
+
+        java.util.ArrayList<ItemStack> stacks = new java.util.ArrayList<ItemStack>(5);
+        collectEquippedStacks(p, stacks);
+        for (int i = 0; i < stacks.size(); i++){
+            ItemStack host = stacks.get(i);
+            if (host == null) continue;
+            NBTTagCompound tag = host.getTagCompound();
+            if (!hasVoidHudKeys(tag)) continue;
+
+            restampLocalCountdown(tag, "HexVoidHudCDEnd", "HexVoidHudLocalStamp", "HexVoidHudLocalRem", nowGlobal, localNow);
+            setVoidHudPerfectCoreFlags(tag, null, usePerfectCore);
+
+            String[] sufs = new String[]{"abyss", "entropy", "gw"};
+            for (int s = 0; s < sufs.length; s++){
+                String suf = sufs[s];
+                restampLocalCountdown(tag,
+                        "HexVoidHudCDEnd_" + suf,
+                        "HexVoidHudLocalStamp_" + suf,
+                        "HexVoidHudLocalRem_" + suf,
+                        nowGlobal, localNow);
+                setVoidHudPerfectCoreFlags(tag, suf, usePerfectCore);
+            }
+
+            host.setTagCompound(tag);
+        }
+
+        if (p instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP)p).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void syncPerfectCoreHudTimers(EntityPlayer p, NBTTagCompound pdata, long nowGlobal){
+        if (p == null || pdata == null) return;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return;
+
+        long next = 0L;
+        try { next = pdata.getLong(PC_HUD_SYNC_NEXT_T); } catch (Throwable ignored) {}
+        if (next > 0L && nowGlobal < next) return;
+        try { pdata.setLong(PC_HUD_SYNC_NEXT_T, nowGlobal + 10L); } catch (Throwable ignored) {}
+
+        long localNow = w.getTotalWorldTime();
+        java.util.ArrayList<ItemStack> stacks = new java.util.ArrayList<ItemStack>(5);
+        collectEquippedStacks(p, stacks);
+        for (int i = 0; i < stacks.size(); i++){
+            ItemStack host = stacks.get(i);
+            if (host == null) continue;
+            NBTTagCompound tag = host.getTagCompound();
+            if (!hasPerfectCoreHudKeys(tag)) continue;
+
+            restampLocalCountdown(tag, "HexPerfectCoreHudCDEnd_burst", "HexPerfectCoreHudLocalStamp_burst", "HexPerfectCoreHudLocalRem_burst", nowGlobal, localNow);
+            restampLocalCountdown(tag, "HexPerfectCoreHudBuffEnd_drive", "HexPerfectCoreHudBuffLocalStamp_drive", "HexPerfectCoreHudBuffLocalRem_drive", nowGlobal, localNow);
+            restampLocalCountdown(tag, "HexPerfectCoreHudCDEnd_drive", "HexPerfectCoreHudCDLocalStamp_drive", "HexPerfectCoreHudCDLocalRem_drive", nowGlobal, localNow);
+            restampLocalCountdown(tag, "HexPerfectCoreHudBuffEnd_barrier", "HexPerfectCoreHudBuffLocalStamp_barrier", "HexPerfectCoreHudBuffLocalRem_barrier", nowGlobal, localNow);
+            restampLocalCountdown(tag, "HexPerfectCoreHudCDEnd_barrier", "HexPerfectCoreHudCDLocalStamp_barrier", "HexPerfectCoreHudCDLocalRem_barrier", nowGlobal, localNow);
+            host.setTagCompound(tag);
+        }
+
+        if (p instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP)p).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void syncOverwriteHudTimers(EntityPlayer p, NBTTagCompound pdata, long nowGlobal){
+        if (p == null || pdata == null) return;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return;
+
+        long next = 0L;
+        try { next = pdata.getLong(OVERWRITE_HUD_SYNC_NEXT_T); } catch (Throwable ignored) {}
+        if (next > 0L && nowGlobal < next) return;
+        try { pdata.setLong(OVERWRITE_HUD_SYNC_NEXT_T, nowGlobal + 10L); } catch (Throwable ignored) {}
+
+        long localNow = w.getTotalWorldTime();
+        java.util.ArrayList<ItemStack> stacks = new java.util.ArrayList<ItemStack>(5);
+        collectEquippedStacks(p, stacks);
+        for (int i = 0; i < stacks.size(); i++){
+            ItemStack host = stacks.get(i);
+            if (host == null) continue;
+            NBTTagCompound tag = host.getTagCompound();
+            if (!hasOverwriteHudKeys(tag)) continue;
+
+            restampLocalCountdown(tag, "HexOverwriteHudCDEnd_flat", "HexOverwriteHudLocalStamp_flat", "HexOverwriteHudLocalRem_flat", nowGlobal, localNow);
+            restampLocalCountdown(tag, "HexOverwriteHudCDEnd_anim", "HexOverwriteHudLocalStamp_anim", "HexOverwriteHudLocalRem_anim", nowGlobal, localNow);
+            host.setTagCompound(tag);
+        }
+
+        if (p instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP)p).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void syncFireHudTimers(EntityPlayer p, NBTTagCompound pdata, long nowGlobal){
+        if (p == null || pdata == null) return;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return;
+
+        long next = 0L;
+        try { next = pdata.getLong(FIRE_HUD_SYNC_NEXT_T); } catch (Throwable ignored) {}
+        if (next > 0L && nowGlobal < next) return;
+        try { pdata.setLong(FIRE_HUD_SYNC_NEXT_T, nowGlobal + 10L); } catch (Throwable ignored) {}
+
+        long localNow = w.getTotalWorldTime();
+        java.util.ArrayList<ItemStack> stacks = new java.util.ArrayList<ItemStack>(5);
+        collectEquippedStacks(p, stacks);
+        for (int i = 0; i < stacks.size(); i++){
+            ItemStack host = stacks.get(i);
+            if (host == null) continue;
+            NBTTagCompound tag = host.getTagCompound();
+            if (!hasFireHudKeys(tag)) continue;
+
+            String[] sufs = new String[]{"flat", "anim"};
+            for (int s = 0; s < sufs.length; s++){
+                String suf = sufs[s];
+                restampLocalCountdown(tag, "HexFireHudBuffEnd_" + suf, "HexFireHudBuffLocalStamp_" + suf, "HexFireHudBuffLocalRem_" + suf, nowGlobal, localNow);
+                restampLocalCountdown(tag, "HexFireHudCDEnd_" + suf, "HexFireHudCDLocalStamp_" + suf, "HexFireHudCDLocalRem_" + suf, nowGlobal, localNow);
+            }
+            host.setTagCompound(tag);
+        }
+
+        if (p instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP)p).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private static long energizedHudRemainingForSuffix(NBTTagCompound pdata, String suf, long nowGlobal){
+        if (pdata == null || suf == null) return -1L;
+        String[] keys = null;
+        if ("shock".equals(suf)) keys = new String[]{"HexOrbCD_EnergizedFlat"};
+        else if ("arc".equals(suf)) keys = new String[]{"HexOrbCD_EnergizedAnim"};
+        else if ("heal".equals(suf)) keys = new String[]{"HexOrbCD_HealAnim", "HexOrbCD_HealFlat"};
+        else if ("fist".equals(suf)) keys = new String[]{"HexOrbCD_FistAnim", "HexOrbCD_FistFlat"};
+        else if ("rush".equals(suf)) keys = new String[]{"HexOrbCD_RushAnim", "HexOrbCD_RushFlat"};
+        else return -1L;
+
+        long best = -1L;
+        for (int i = 0; i < keys.length; i++){
+            try {
+                long end = pdata.getLong(keys[i]);
+                long rem = end - nowGlobal;
+                if (rem < 0L) rem = 0L;
+                if (rem > best) best = rem;
+            } catch (Throwable ignored) {}
+        }
+        return best;
+    }
+
+    private static void syncEnergizedHudTimers(EntityPlayer p, NBTTagCompound pdata, long nowGlobal){
+        if (p == null || pdata == null) return;
+        World w = p.worldObj;
+        if (w == null || w.isRemote) return;
+
+        long next = 0L;
+        try { next = pdata.getLong(ENERGIZED_HUD_SYNC_NEXT_T); } catch (Throwable ignored) {}
+        if (next > 0L && nowGlobal < next) return;
+        try { pdata.setLong(ENERGIZED_HUD_SYNC_NEXT_T, nowGlobal + 10L); } catch (Throwable ignored) {}
+
+        long localNow = w.getTotalWorldTime();
+        String[] sufs = new String[]{"shock", "arc", "heal", "fist", "rush"};
+        java.util.ArrayList<ItemStack> stacks = new java.util.ArrayList<ItemStack>(5);
+        collectEquippedStacks(p, stacks);
+        for (int i = 0; i < stacks.size(); i++){
+            ItemStack host = stacks.get(i);
+            if (host == null) continue;
+            NBTTagCompound tag = host.getTagCompound();
+            if (!hasEnergizedHudKeys(tag)) continue;
+
+            for (int s = 0; s < sufs.length; s++){
+                String suf = sufs[s];
+                long rem = energizedHudRemainingForSuffix(pdata, suf, nowGlobal);
+                if (rem < 0L) continue;
+                if (rem > (long)Integer.MAX_VALUE) rem = (long)Integer.MAX_VALUE;
+                try {
+                    tag.setLong("HexEnergizedHudLocalStamp_" + suf, localNow);
+                    tag.setInteger("HexEnergizedHudLocalRem_" + suf, (int)rem);
+                    tag.setLong("HexEnergizedHudCDEnd_" + suf, localNow + rem);
+                } catch (Throwable ignored) {}
+            }
+            host.setTagCompound(tag);
+        }
+
+        if (p instanceof EntityPlayerMP){
+            try { ((EntityPlayerMP)p).inventoryContainer.detectAndSendChanges(); } catch (Throwable ignored) {}
+        }
+    }
 
     // Fix: keep Ashen HUD timers consistent across dimensions.
 
@@ -7852,6 +9358,20 @@ public final class HexOrbEffectsController {
         long next = d.getLong("HexOrbDBG_Next");
         if (next != 0L && now < next) return;
         d.setLong("HexOrbDBG_Next", now + 20L);
+
+        try {
+            p.addChatMessage(new ChatComponentText(msg));
+        } catch (Throwable ignored) {}
+    }
+
+    private static void notifyOncePerSecond(EntityPlayer p, String key, String msg){
+        if (p == null || key == null || key.length() == 0) return;
+
+        NBTTagCompound d = p.getEntityData();
+        long now = serverNow(p.worldObj);
+        long next = d.getLong(key);
+        if (next != 0L && now < next) return;
+        d.setLong(key, now + 20L);
 
         try {
             p.addChatMessage(new ChatComponentText(msg));
@@ -10188,6 +11708,10 @@ public final class HexOrbEffectsController {
                 ok = true;
             }
         } catch (Throwable ignored) {}
+
+        if (ok){
+            refreshObservedBodyStateAfterWrite(p, val);
+        }
 
         return ok;
     }

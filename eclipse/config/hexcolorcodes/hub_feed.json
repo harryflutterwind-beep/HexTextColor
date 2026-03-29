@@ -1,0 +1,128 @@
+{
+  "remoteUrl": "https://harryflutterwind-beep.github.io/HexHubLive/feed.json",
+  "entries": [
+    {
+      "tab": "news",
+      "tag": "NEWS",
+      "tagColor": "#97D41C",
+      "title": "New Command: Rarity Evolve Test",
+      "date": "TODAY",
+      "bannerTitle": "NEWS",
+      "summary": "You can now test evolved rarity styling directly from the rarity command.",
+      "action": "news",
+      "actionTitle": "View Command",
+      "actionSubtitle": "Evolved testing",
+      "details": [
+        "Use /rarity evotest 1, /rarity evotest 2, or /rarity evotest 3 on the held item.",
+        "Aliases /rarity evo <tier> and /rarity evolved <tier> work the same way.",
+        "The test applies your evolved rarity color formatting and writes the evolved tier and boost lines for previewing.",
+        "<#ff007e>Commands work in a single player environment and not on server unless permissions have been granted.</#>"
+      ]
+    },
+    {
+      "tab": "news",
+      "tag": "NEWS",
+      "tagColor": "#97D41C",
+      "title": "New Feature: Tabbed News / Notes",
+      "date": "2026-03-22",
+      "bannerTitle": "NEWS",
+      "summary": "The hub feed now supports local JSON and optional remote feed loading.",
+      "action": "news",
+      "actionTitle": "Open News",
+      "actionSubtitle": "Full notes",
+      "details": [
+        "Edit config/hexcolorcodes/hub_feed.json to change these rows without rebuilding the mod.",
+        "If remoteUrl is set and reachable, the hub will try that feed first and fall back to the local entries."
+      ]
+    },
+    {
+      "tab": "notice",
+      "tag": "NOTICE",
+      "tagColor": "#F06A2A",
+      "title": "Maintenance: Hub shortcuts reorganized",
+      "date": "2026-03-18",
+      "bannerTitle": "NOTICE",
+      "summary": "Existing publish dates can stay fixed while new entries use TODAY.",
+      "action": "hub",
+      "actionTitle": "Refresh Hub",
+      "actionSubtitle": "Return here",
+      "details": [
+        "Use a fixed date when you want a real publish date preserved on the row.",
+        "Use TODAY, LIVE, CURRENT, or a blank date field when you want the current day shown automatically."
+      ]
+    },
+    {
+      "tab": "activity",
+      "tag": "ACTIVITY",
+      "tagColor": "#3F9BFF",
+      "title": "Activity: Join the Discord invite",
+      "date": "2026-03-16",
+      "bannerTitle": "ACTIVITY",
+      "summary": "Activities can still point at built-in actions like Discord.",
+      "action": "discord",
+      "actionTitle": "Open Invite",
+      "actionSubtitle": "Browser link",
+      "details": [
+        "This is a sample activity row using the built-in Discord action.",
+        "For a webhook-produced feed, point remoteUrl at a JSON endpoint rather than a Discord webhook URL directly."
+      ]
+    },
+    {
+      "tab": "news",
+      "tag": "NEWS",
+      "tagColor": "#97D41C",
+      "title": "New Feature: Hex Help guide page",
+      "date": "2026-03-17",
+      "action": "hexhelp"
+    },
+    {
+      "tab": "notice",
+      "tag": "NOTICE",
+      "tagColor": "#F06A2A",
+      "title": "Notice: Item Info opens held-item data",
+      "date": "2026-03-17",
+      "action": "iteminfo"
+    },
+    {
+      "tab": "notice",
+      "tag": "NOTICE",
+      "tagColor": "#F06A2A",
+      "title": "Notice: Server Info opens getting started",
+      "date": "2026-03-15",
+      "action": "serverinfo"
+    },
+    {
+      "tab": "notice",
+      "tag": "NOTICE",
+      "tagColor": "#F06A2A",
+      "title": "Planned: Useless backport",
+      "date": "2026-03-22",
+      "bannerTitle": "NOTICE",
+      "summary": "Planned backport of selected older mod features and blocks.",
+      "action": "news",
+      "actionTitle": "Planned Content",
+      "actionSubtitle": "Older mod ideas",
+      "details": [
+        "This is a planned backport of selected content from older mods.",
+        "The focus is on blocks, items, utility features, and older mechanics rather than bringing biomes over.",
+        "This notice is meant as a roadmap-style preview of older content that may return in a cleaned up 1.7.10-friendly form."
+      ]
+    },
+    {
+      "tab": "news",
+      "tag": "NEWS",
+      "tagColor": "#97D41C",
+      "title": "Local fallback entry",
+      "date": "TODAY",
+      "priority": 10,
+      "bannerTitle": "NEWS",
+      "summary": "This only shows if the remote feed fails.",
+      "action": "none",
+      "actionTitle": "Back",
+      "actionSubtitle": "No action",
+      "details": [
+        "Remote feed failed, so this local fallback is showing."
+      ]
+    }
+  ]
+}

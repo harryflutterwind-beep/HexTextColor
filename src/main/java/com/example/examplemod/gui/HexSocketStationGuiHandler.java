@@ -21,6 +21,7 @@ public class HexSocketStationGuiHandler implements IGuiHandler {
 
     public static final int GUI_ID_SOCKET_STATION = 5510;
     public static final int GUI_ID_SOCKET_OPENER  = 5511;
+    public static final int GUI_ID_HUB            = 5512;
 
     @Override
     public Object getServerGuiElement(int id, EntityPlayer player, World world, int x, int y, int z) {
@@ -31,6 +32,9 @@ public class HexSocketStationGuiHandler implements IGuiHandler {
         }
         if (id == GUI_ID_SOCKET_OPENER) {
             return new ContainerHexSocketOpener(player.inventory, player);
+        }
+        if (id == GUI_ID_HUB) {
+            return null;
         }
         return null;
     }
@@ -49,6 +53,13 @@ public class HexSocketStationGuiHandler implements IGuiHandler {
                 return newClientGui(
                         "com.example.examplemod.client.gui.GuiHexSocketOpener",
                         "com.example.examplemod.gui.ContainerHexSocketOpener",
+                        player
+                );
+            }
+            if (id == GUI_ID_HUB) {
+                return newClientGui(
+                        "com.example.examplemod.client.gui.GuiHubMenu",
+                        null,
                         player
                 );
             }
@@ -81,6 +92,9 @@ public class HexSocketStationGuiHandler implements IGuiHandler {
         // 2) Build a container instance (client mirrors server) and try container-based GUI ctors.
         Object containerObj = null;
         try {
+            if (containerClassName == null || containerClassName.length() == 0) {
+                throw new ClassNotFoundException("No container class requested");
+            }
             Class<?> contCls = Class.forName(containerClassName);
             try {
                 containerObj = contCls.getConstructor(EntityPlayer.class).newInstance(player);

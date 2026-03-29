@@ -246,67 +246,87 @@ public class ContainerHexSocketStation extends Container {
         List<SocketBonus> bonuses = extractSocketBonusesFromGem(gem, kCanon);
         SocketBonus firstBonus = (bonuses == null || bonuses.isEmpty()) ? null : bonuses.get(0);
 
-        // Always socket the gem first (this also appends an empty bonus compound so indices stay aligned).
-        boolean ok = HexSocketAPI.socketGem(preview, kCanon);
+        ItemStack gemCopy = prepareGemForSocketing(gem, kCanon);
 
-        // For display: force icon key to be base folder. (prevents "gems/" mismatches in <ico:...>)
-        sanitizeGemKeysInPlace(preview);
+        String[] bonusKeys = null;
+        double[] bonusAmts = null;
+        String[] bonusNames = null;
+        if (bonuses != null && !bonuses.isEmpty()) {
+            bonusKeys = new String[bonuses.size()];
+            bonusAmts = new double[bonuses.size()];
+            bonusNames = new String[bonuses.size()];
+            for (int bi = 0; bi < bonuses.size(); bi++) {
+                SocketBonus b = bonuses.get(bi);
+                bonusKeys[bi] = (b == null || b.attrKey == null) ? "" : b.attrKey;
+                bonusAmts[bi] = (b == null) ? 0.0 : b.storedAmount;
+                bonusNames[bi] = (b == null || b.displayName == null) ? "" : b.displayName;
+            }
+        }
 
-        // Store the full gem/orb ItemStack into the parallel GemStacks list so effects/NBT carry over
-        // when socketed (e.g., Fractured shards/cooldowns, action levels, etc.).
-        if (ok) {
-            try {
+        boolean ok = false;
+        boolean storedInApi = false;
+
+        // New path: let the API socket the *full* gem stack and bonus payload in one call.
+        // This keeps GemStacks + Gems aligned and preserves evolved/script identity tags.
+        try {
+            if (gemCopy != null) {
+                Method m = HexSocketAPI.class.getMethod(
+                        "socketGemStackWithBonuses",
+                        ItemStack.class, ItemStack.class, String[].class, double[].class, String[].class
+                );
+                Object ret = m.invoke(null, preview, gemCopy, bonusKeys, bonusAmts, bonusNames);
+                if (ret instanceof Boolean && ((Boolean) ret).booleanValue()) {
+                    ok = true;
+                    storedInApi = true;
+                }
+            }
+        } catch (Throwable ignored) {
+            // Older API/runtime - fall through to the legacy socketGem + setGemAt path below.
+        }
+
+        if (!ok) {
+            // Legacy path: socket the canonical key first so the filled index exists.
+            ok = HexSocketAPI.socketGem(preview, kCanon);
+
+            // Store the full gem/orb ItemStack into the parallel GemStacks list so effects/NBT carry over
+            // when socketed (e.g., Fractured shards/cooldowns, action levels, evolved identity, etc.).
+            if (ok && gemCopy != null) {
+                try {
+                    int filledNow = HexSocketAPI.getSocketsFilled(preview);
+                    int socketIdx = Math.max(0, filledNow - 1);
+                    HexSocketAPI.setGemAt(preview, socketIdx, gemCopy);
+                } catch (Throwable t) {
+                    // ignore - socketing will still work via gem keys
+                }
+            }
+
+            if (ok && bonusKeys != null && bonusKeys.length > 0) {
                 int filledNow = HexSocketAPI.getSocketsFilled(preview);
                 int socketIdx = Math.max(0, filledNow - 1);
 
-                ItemStack gemCopy = gem.copy();
-                gemCopy.stackSize = 1;
-
-                // Keep a canonical key hint for downstream systems (optional but helpful).
-                NBTTagCompound gtag = gemCopy.getTagCompound();
-                if (gtag == null) gtag = new NBTTagCompound();
-                gtag.setString("HexGemKey", kCanon);
-                gemCopy.setTagCompound(gtag);
-
-                HexSocketAPI.setGemAt(preview, socketIdx, gemCopy);
-            } catch (Throwable t) {
-                // ignore - socketing will still work via gem keys
-            }
-        }
-
-        boolean storedInApi = false;
-        if (ok && bonuses != null && !bonuses.isEmpty()) {
-            int filledNow = HexSocketAPI.getSocketsFilled(preview);
-            int socketIdx = Math.max(0, filledNow - 1);
-
-            // Write ALL stats for this gem into the socket-bonus list (multi-roll support).
-            try {
-                String[] keys = new String[bonuses.size()];
-                double[] amts = new double[bonuses.size()];
-                String[] names = new String[bonuses.size()];
-                for (int bi = 0; bi < bonuses.size(); bi++) {
-                    SocketBonus b = bonuses.get(bi);
-                    keys[bi] = (b == null || b.attrKey == null) ? "" : b.attrKey;
-                    amts[bi] = (b == null) ? 0.0 : b.amount;
-                    names[bi] = (b == null || b.displayName == null) ? "" : b.displayName;
-                }
-                storedInApi = HexSocketAPI.setBonusesAt(preview, socketIdx, keys, amts, names);
-            } catch (Throwable t) {
-                storedInApi = false;
-            }
-
-            // Legacy fallback: store only the first stat if setBonusesAt is unavailable.
-            if (!storedInApi && firstBonus != null && firstBonus.attrKey != null && firstBonus.attrKey.length() > 0) {
+                // Write ALL stats for this gem into the socket-bonus list (multi-roll support).
                 try {
-                    storedInApi = HexSocketAPI.setBonusAt(preview, socketIdx, firstBonus.attrKey, firstBonus.amount, firstBonus.displayName);
+                    storedInApi = HexSocketAPI.setBonusesAt(preview, socketIdx, bonusKeys, bonusAmts, bonusNames);
                 } catch (Throwable t) {
                     storedInApi = false;
                 }
+
+                // Legacy fallback: store only the first stat if setBonusesAt is unavailable.
+                if (!storedInApi && firstBonus != null && firstBonus.attrKey != null && firstBonus.attrKey.length() > 0) {
+                    try {
+                        storedInApi = HexSocketAPI.setBonusAt(preview, socketIdx, firstBonus.attrKey, firstBonus.storedAmount, firstBonus.displayName);
+                    } catch (Throwable t) {
+                        storedInApi = false;
+                    }
+                }
             }
         }
 
+        // For display: force icon keys to canonical folder form. (prevents "gems/" mismatches in <ico:...>)
+        sanitizeGemKeysInPlace(preview);
+
         // Some gems may not store rolls in NBT; patch RPGCore attributes as a fallback (uses the list).
-        applySocketBonusesToRpgCoreIfNeeded(preview, gem, bonuses);
+        applySocketBonusesToRpgCoreIfNeeded(preview, gemCopy != null ? gemCopy : gem, bonuses);
 
         // If API storage failed (old runtime), store minimal fallback data for hex lore patching.
         if (!storedInApi && firstBonus != null && firstBonus.attrKey != null && firstBonus.attrKey.length() > 0) {
@@ -421,6 +441,126 @@ public class ContainerHexSocketStation extends Container {
     // Back-compat alias (some IDEs/autocomplete ended up with this name).
     private static String deriveKeyFromUnlockId(String token) {
         return deriveKeyFromUnlocId(token);
+    }
+
+    private static ItemStack prepareGemForSocketing(ItemStack gem, String kCanon) {
+        if (gem == null) return null;
+        ItemStack copy = gem.copy();
+        copy.stackSize = 1;
+        stampSocketIdentityTags(copy, kCanon);
+        return copy;
+    }
+
+    private static void stampSocketIdentityTags(ItemStack gem, String kCanon) {
+        if (gem == null) return;
+
+        NBTTagCompound tag = gem.getTagCompound();
+        if (tag == null) tag = new NBTTagCompound();
+
+        if (kCanon != null && !kCanon.trim().isEmpty()) {
+            tag.setString("HexGemKey", kCanon.trim());
+        }
+
+        boolean evolved = isLikelyEvolvedGem(gem, kCanon);
+        if (evolved) {
+            tag.setBoolean("HexEvolved", true);
+
+            String fam = null;
+            try {
+                if (tag.hasKey("HexEvolvedFamily", 8)) {
+                    fam = tag.getString("HexEvolvedFamily");
+                }
+            } catch (Throwable ignored) {}
+            if (fam == null || fam.trim().isEmpty()) {
+                fam = inferEvolvedFamilyFromKey(kCanon);
+            }
+            if (fam != null && !fam.trim().isEmpty()) {
+                tag.setString("HexEvolvedFamily", fam.trim());
+            }
+        }
+
+        String source = null;
+        try {
+            if (tag.hasKey("HexGemSource", 8)) {
+                source = tag.getString("HexGemSource");
+            }
+        } catch (Throwable ignored) {}
+        if (source == null || source.trim().isEmpty()) {
+            if (evolved) source = "evolved";
+            else if (isLikelyScriptGem(tag)) source = "script";
+        }
+        if (source != null && !source.trim().isEmpty()) {
+            tag.setString("HexGemSource", source.trim());
+        }
+
+        gem.setTagCompound(tag);
+    }
+
+    private static boolean isLikelyScriptGem(NBTTagCompound tag) {
+        if (tag == null) return false;
+        try { if (tag.hasKey("HexLightType", 8)) return true; } catch (Throwable ignored) {}
+        try { if (tag.hasKey("HexVoidType", 8)) return true; } catch (Throwable ignored) {}
+        try { if (tag.hasKey("HexDarkFireType", 8)) return true; } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static boolean isLikelyEvolvedGem(ItemStack stack, String kCanon) {
+        if (stack == null) return false;
+
+        try {
+            NBTTagCompound tag = stack.getTagCompound();
+            if (tag != null) {
+                if (tag.hasKey("HexEvolved")) {
+                    try { if (tag.getBoolean("HexEvolved")) return true; } catch (Throwable ignored) {}
+                }
+                if (tag.hasKey("Evolved")) {
+                    try { if (tag.getBoolean("Evolved")) return true; } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        try {
+            String k = (kCanon == null) ? "" : kCanon.toLowerCase();
+            if (k.contains("evolved") || k.contains("ascended") || k.contains("evolution")) return true;
+        } catch (Throwable ignored) {}
+
+        try {
+            NBTTagCompound tag = stack.getTagCompound();
+            if (tag != null && tag.hasKey("display", 10)) {
+                NBTTagCompound disp = tag.getCompoundTag("display");
+                if (disp != null && disp.hasKey("Lore", 9)) {
+                    NBTTagList lore = disp.getTagList("Lore", 8);
+                    for (int i = 0; i < lore.tagCount(); i++) {
+                        String s = lore.getStringTagAt(i);
+                        if (s == null) continue;
+                        String low = s.toLowerCase();
+                        if (low.contains("evolved") || low.contains("ascended") || low.contains("evolution")) return true;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        try {
+            String dn = stack.getDisplayName();
+            if (dn != null) {
+                String low = dn.toLowerCase();
+                if (low.contains("evolved") || low.contains("ascended")) return true;
+            }
+        } catch (Throwable ignored) {}
+
+        return false;
+    }
+
+    private static String inferEvolvedFamilyFromKey(String kCanon) {
+        if (kCanon == null) return "";
+        String k = kCanon.toLowerCase();
+        if (k.contains("inferno") || k.contains("fire") || k.contains("orange")) return "inferno";
+        if (k.contains("frost") || k.contains("ice") || k.contains("blue")) return "frost";
+        if (k.contains("solar") || k.contains("gold") || k.contains("yellow")) return "solar";
+        if (k.contains("nature") || k.contains("green")) return "nature";
+        if (k.contains("aether") || k.contains("teal") || k.contains("cyan")) return "aether";
+        if (k.contains("rainbow") || k.contains("energized") || k.contains("perfect")) return "rainbow";
+        return "";
     }
 
     /**
@@ -955,12 +1095,26 @@ public class ContainerHexSocketStation extends Container {
     private static class SocketBonus {
         public final String attrKey;
         public final String displayName;
+        /**
+         * Display-friendly amount used by the socket preview / socket page formatting.
+         * For .Multi stats this may be normalized (e.g. 0.10 for a stored 10%).
+         */
         public final double amount;
+        /**
+         * Exact value that should be written back into item NBT / RPGCore.Attributes.
+         * For .Multi stats this preserves the original stored value from the gem (e.g. 10 for 10%).
+         */
+        public final double storedAmount;
 
         private SocketBonus(String attrKey, String displayName, double amount) {
+            this(attrKey, displayName, amount, amount);
+        }
+
+        private SocketBonus(String attrKey, String displayName, double amount, double storedAmount) {
             this.attrKey = attrKey == null ? "" : attrKey;
             this.displayName = displayName == null ? "" : displayName;
             this.amount = amount;
+            this.storedAmount = storedAmount;
         }
     }
 
@@ -996,8 +1150,8 @@ public class ContainerHexSocketStation extends Container {
                             double raw;
                             try { raw = rolls.getDouble(k); } catch (Throwable t) { raw = 0d; }
                             if (raw == 0d) continue;
-                            float amt = (float) normalizeBonusAmount(k, raw);
-                            out.add(new SocketBonus(k, prettyAttrNameFromKey(k), amt));
+                            double displayAmt = normalizeBonusAmount(k, raw);
+                            out.add(new SocketBonus(k, prettyAttrNameFromKey(k), displayAmt, raw));
                         }
                     }
                     if (!out.isEmpty()) return out;
@@ -1018,8 +1172,8 @@ public class ContainerHexSocketStation extends Container {
                                 double raw;
                                 try { raw = attrs.getDouble(k); } catch (Throwable t) { raw = 0d; }
                                 if (raw == 0d) continue;
-                                float amt = (float) normalizeBonusAmount(k, raw);
-                                out.add(new SocketBonus(k, prettyAttrNameFromKey(k), amt));
+                                double displayAmt = normalizeBonusAmount(k, raw);
+                                out.add(new SocketBonus(k, prettyAttrNameFromKey(k), displayAmt, raw));
                             }
                         }
                     }
@@ -1116,7 +1270,7 @@ public class ContainerHexSocketStation extends Container {
 
         // Store whole percent for % lines (7% => 7). If it was already fractional (0.07), convert to 7.
         double amt = isPct ? (Math.abs(val) <= 1.0 ? (val * 100.0) : val) : val;
-        return new SocketBonus(attrKey, statName, amt);
+        return new SocketBonus(attrKey, statName, amt, amt);
     }
 
     private static SocketBonus parseBonusFromDisplayLore(ItemStack gem) {
@@ -1313,9 +1467,6 @@ public class ContainerHexSocketStation extends Container {
     private static void applySocketBonusesToRpgCoreIfNeeded(ItemStack target, ItemStack gem, List<SocketBonus> bonuses) {
         if (target == null || gem == null || bonuses == null || bonuses.isEmpty()) return;
         try {
-            NBTTagCompound gt = gem.getTagCompound();
-            if (gt == null) return;
-
             NBTTagCompound it = target.getTagCompound();
             if (it == null) { it = new NBTTagCompound(); target.setTagCompound(it); }
 
@@ -1326,25 +1477,11 @@ public class ContainerHexSocketStation extends Container {
                 SocketBonus b = bonuses.get(bi);
                 if (b == null || b.attrKey == null || b.attrKey.length() == 0) continue;
 
-                boolean gemHas = false;
-                try {
-                    if (gt.hasKey("HexOrbRolls", 10)) {
-                        NBTTagCompound rolls = gt.getCompoundTag("HexOrbRolls");
-                        gemHas = rolls != null && rolls.hasKey(b.attrKey);
-                    }
-                    if (!gemHas && gt.hasKey("RPGCore", 10)) {
-                        NBTTagCompound gr = gt.getCompoundTag("RPGCore");
-                        if (gr != null && gr.hasKey("Attributes", 10)) {
-                            NBTTagCompound ga = gr.getCompoundTag("Attributes");
-                            gemHas = ga != null && ga.hasKey(b.attrKey);
-                        }
-                    }
-                } catch (Throwable t) {
-                    gemHas = false;
-                }
-                if (gemHas) continue;
-
-                mergeAttributeAdd(attrs, b.attrKey, b.amount);
+                // IMPORTANT:
+                // - amount       = display-friendly / normalized value (e.g. 0.10 for 10%)
+                // - storedAmount = exact gem roll as authored in NBT / lore (e.g. 10 for 10%)
+                // RPGCore.Attributes / the KAM attribute page must receive the exact stored value.
+                mergeAttributeAdd(attrs, b.attrKey, b.storedAmount);
             }
 
             rpg.setTag("Attributes", attrs);
@@ -1421,7 +1558,7 @@ public class ContainerHexSocketStation extends Container {
                 NBTTagCompound b = new NBTTagCompound();
                 b.setString("K", bonus.attrKey);
                 b.setString("N", bonus.displayName);
-                b.setDouble("V", bonus.amount);
+                b.setDouble("V", bonus.storedAmount);
                 rebuilt.appendTag(b);
             } else {
                 rebuilt.appendTag(bonuses.getCompoundTagAt(i));

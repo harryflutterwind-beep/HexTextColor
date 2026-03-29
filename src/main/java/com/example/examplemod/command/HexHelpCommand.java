@@ -168,6 +168,44 @@ public class HexHelpCommand extends CommandBase {
                 + EnumChatFormatting.DARK_GRAY + " —");
     }
 
+    private IChatComponent macroChip(String macro, String name) {
+        ChatComponentText wrap = new ChatComponentText("");
+
+        ChatComponentText token = new ChatComponentText(EnumChatFormatting.AQUA + "&<" + macro + ">");
+        ChatStyle tokenStyle = new ChatStyle();
+        tokenStyle.setColor(EnumChatFormatting.AQUA);
+        tokenStyle.setChatClickEvent(new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, "&" + macro));
+        tokenStyle.setChatHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
+                new ChatComponentText(EnumChatFormatting.AQUA + "Type just &" + macro
+                        + EnumChatFormatting.GRAY + " then your text"
+                        + "\n" + EnumChatFormatting.DARK_GRAY + "Shown as &<" + macro + "> here so it displays literally")));
+        token.setChatStyle(tokenStyle);
+
+        wrap.appendSibling(token);
+        wrap.appendSibling(new ChatComponentText(EnumChatFormatting.GRAY + " " + name));
+        return wrap;
+    }
+
+    private IChatComponent macroIndexLine(String[][] items) {
+        ChatComponentText line = new ChatComponentText(EnumChatFormatting.DARK_GRAY + "• ");
+        boolean first = true;
+
+        if (items != null) {
+            for (String[] item : items) {
+                if (item == null || item.length < 2) continue;
+
+                if (!first) {
+                    line.appendSibling(new ChatComponentText(EnumChatFormatting.DARK_GRAY + "  |  "));
+                }
+
+                line.appendSibling(macroChip(item[0], item[1]));
+                first = false;
+            }
+        }
+
+        return line;
+    }
+
     // ─────────────────────────────────────────────
     // Auto page splitting builder
     // ─────────────────────────────────────────────
@@ -532,6 +570,128 @@ public class HexHelpCommand extends CommandBase {
                 "<snow flake=#55FFFF,#AA55FF dens=0.30 fall=14 speed=0.85 drift=1.1>"
                         + "<grad #55FFFF #FFFFFF #AA55FF scroll=0.22>[Aurora Bonus]</grad>"
                         + "</snow>"));
+
+
+        pb.newPage(true);
+
+        // ─────────────────────────────────────────────
+        // GROUP 10 — Ampersand macro shortcuts (core)
+        // ─────────────────────────────────────────────
+        pb.tip(tip("Ampersand macros are fast presets: &nameText&/name"));
+        pb.tip(tip("These names avoid vanilla collisions like &f and &r."));
+        pb.blank();
+
+        pb.section(section("Core macros"));
+        pb.example(exLine("Pink wave", "&pwNeon Wave&/pw"));
+        pb.example(exLine("Fiery preset", "&piRaging Heat&/pi"));
+        pb.example(exLine("Glow preset", "&plHalo Text&/pl"));
+        pb.example(exLine("Glow alias", "&glLegacy Glow&/gl"));
+
+        pb.blank();
+        pb.section(section("Direct rainbow macros"));
+        pb.example(exLine("Rainbow text", "&prbwPrism Flow&/prbw"));
+        pb.example(exLine("Rainbow glow", "&grbwPrism Halo&/grbw"));
+        pb.example(exLine("Rainbow fill + glow", "&xrbwFull Prism&/xrbw"));
+
+        pb.newPage(true);
+
+        // ─────────────────────────────────────────────
+        // GROUP 11 — Ampersand rainbow motion macros
+        // ─────────────────────────────────────────────
+        pb.tip(tip("These are one-line animated rainbow presets for quick chat use."));
+        pb.tip(tip("Use xfast/xmed for scroll speed, others stack a single motion FX."));
+        pb.blank();
+
+        pb.section(section("Rainbow motion"));
+        pb.example(exLine("Fast scroll", "&xfastbwFast Scroll&/xfastbw"));
+        pb.example(exLine("Medium scroll", "&xmedbwMedium Scroll&/xmedbw"));
+        pb.example(exLine("Pulse rainbow", "&xpulsebwPulse Prism&/xpulsebw"));
+        pb.example(exLine("Wave rainbow", "&xwavebwWavy Prism&/xwavebw"));
+        pb.example(exLine("Flicker rainbow", "&xflickbwFlicker Prism&/xflickbw"));
+        pb.example(exLine("Rain rainbow", "&xrainbwRain Prism&/xrainbw"));
+
+        pb.newPage(true);
+
+        // ─────────────────────────────────────────────
+        // GROUP 12 — Ampersand gradient presets
+        // ─────────────────────────────────────────────
+        pb.tip(tip("These are themed scrolling gradients with no extra args needed."));
+        pb.tip(tip("Good for titles, item names, drops, and quick server messages."));
+        pb.blank();
+
+        pb.section(section("Gradient themes"));
+        pb.example(exLine("Fire", "&xfiregRaging Block C&/xfireg"));
+        pb.example(exLine("Ocean", "&xoceangTidal Surge&/xoceang"));
+        pb.example(exLine("Royal", "&xroyalgRoyal Aura&/xroyalg"));
+        pb.example(exLine("Toxic", "&xtoxicgToxic Bloom&/xtoxicg"));
+        pb.example(exLine("Angel", "&xangelgHoly Light&/xangelg"));
+
+        pb.newPage(true);
+
+        // ─────────────────────────────────────────────
+        // GROUP 13 — Ampersand gradient + FX combos
+        // ─────────────────────────────────────────────
+        pb.tip(tip("These presets bundle a gradient with one animated wrapper effect."));
+        pb.tip(tip("They are the fastest way to get styled animated text without typing full tags."));
+        pb.blank();
+
+        pb.section(section("Gradient + FX"));
+        pb.example(exLine("Pulse gradient", "&xpulsegPulse Core&/xpulseg"));
+        pb.example(exLine("Wave gradient", "&xwavegWave Core&/xwaveg"));
+        pb.example(exLine("Flicker gradient", "&xflickgFlicker Core&/xflickg"));
+        pb.example(exLine("Shake gradient", "&xshakegShaken Core&/xshakeg"));
+        pb.example(exLine("Zoom gradient", "&xzoomgZoom Core&/xzoomg"));
+        pb.example(exLine("Rain gradient", "&xraingRain Core&/xraing"));
+        pb.example(exLine("Shadow gradient", "&xshadowgShadow Core&/xshadowg"));
+
+        pb.newPage(true);
+
+        // ─────────────────────────────────────────────
+        // GROUP 14 — Macro shortcut index
+        // ─────────────────────────────────────────────
+        pb.tip(tip("Quick macro index: click any &<macro> to insert the real prefix into chat."));
+        pb.tip(tip("You type just &name then your text. The < > are only shown here so the code displays cleanly."));
+        pb.blank();
+        pb.section(section("Macro shortcut index"));
+        pb.example(macroIndexLine(new String[][]{
+                {"pw", "Pink wave"},
+                {"pi", "Fiery preset"},
+                {"pl", "Glow preset"},
+                {"gl", "Glow alias"}
+        }));
+        pb.example(macroIndexLine(new String[][]{
+                {"prbw", "Rainbow text"},
+                {"grbw", "Rainbow glow"},
+                {"xrbw", "Rainbow both"},
+                {"xfastbw", "Fast rainbow"}
+        }));
+        pb.example(macroIndexLine(new String[][]{
+                {"xmedbw", "Medium rainbow"},
+                {"xpulsebw", "Pulse rainbow"},
+                {"xwavebw", "Wave rainbow"},
+                {"xflickbw", "Flicker rainbow"}
+        }));
+        pb.example(macroIndexLine(new String[][]{
+                {"xrainbw", "Rain rainbow"},
+                {"xfireg", "Fire gradient"},
+                {"xoceang", "Ocean gradient"},
+                {"xroyalg", "Royal gradient"}
+        }));
+        pb.example(macroIndexLine(new String[][]{
+                {"xtoxicg", "Toxic gradient"},
+                {"xangelg", "Angel gradient"},
+                {"xpulseg", "Pulse gradient"},
+                {"xwaveg", "Wave gradient"}
+        }));
+        pb.example(macroIndexLine(new String[][]{
+                {"xflickg", "Flicker gradient"},
+                {"xshakeg", "Shake gradient"},
+                {"xzoomg", "Zoom gradient"},
+                {"xraing", "Rain gradient"}
+        }));
+        pb.example(macroIndexLine(new String[][]{
+                {"xshadowg", "Shadow gradient"}
+        }));
 
         pb.finish();
         return pb.pages;

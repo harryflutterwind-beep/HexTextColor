@@ -167,21 +167,51 @@ public final class ItemBeamRenderer {
         return false;
     }
 
-    // Bottom→Top gradients (r,g,b 0..255)
-    private static final Map<String, int[][]> GRAD = new HashMap<String, int[][]>() {{
-        put("common",        new int[][]{{255,255,255}, {218,218,218}});
-        put("uncommon",      new int[][]{{  0,102,  0}, { 51,255, 51}});
-        put("rare",          new int[][]{{122, 44,224}, {166, 77,255}});
-        put("epic",          new int[][]{{ 14, 11,230}, { 58,123,255}});
-        put("legendary",     new int[][]{{255,170,  0}, {255,224, 92}});
-        put("pearlescent",   new int[][]{{ 48,200,190}, {120,255,220}});
-        put("seraph",        new int[][]{{230, 58,158}, {255,102,196}});
-        put("black",         new int[][]{{  0,  0,  0}, { 20, 20, 20}});
-        put("effervescent",  new int[][]{{255,255,255}, {255,255,255}});
-        put("effervescent_", new int[][]{{255,255,255}, {255,255,255}});
-        put("etech",         new int[][]{{255,  43,166}, {255,  43,166}});
-        put("glitch",        new int[][]{{255, 122,191}, {255, 161,211}});
-    }};
+    // Config-backed gradients / overlay colors (with safe fallbacks)
+    private static int[][] gradientFor(String key) {
+        if (key == null) key = "";
+        key = key.trim().toLowerCase(Locale.ROOT);
+
+        if ("common".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_common_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_common_top, ModConfig.brightness)};
+        }
+        if ("uncommon".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_uncommon_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_uncommon_top, ModConfig.brightness)};
+        }
+        if ("rare".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_rare_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_rare_top, ModConfig.brightness)};
+        }
+        if ("epic".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_epic_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_epic_top, ModConfig.brightness)};
+        }
+        if ("legendary".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_legend_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_legend_top, ModConfig.brightness)};
+        }
+        if ("pearlescent".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_pearl_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_pearl_top, ModConfig.brightness)};
+        }
+        if ("seraph".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_seraph_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_seraph_top, ModConfig.brightness)};
+        }
+        if ("black".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_black_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_black_top, ModConfig.brightness)};
+        }
+        if ("etech".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_etech_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_etech_top, ModConfig.brightness)};
+        }
+        if ("glitch".equals(key)) {
+            return new int[][]{ModConfig.col(ModConfig.grad_glitch_bot, ModConfig.brightness), ModConfig.col(ModConfig.grad_glitch_top, ModConfig.brightness)};
+        }
+        return new int[][]{{255,255,255}, {255,255,255}};
+    }
+
+    private static int[] pseudoBlackOutlineBot() {
+        return ModConfig.col(ModConfig.pseudoBlackOutlineBot, 1.0D);
+    }
+
+    private static int[] pseudoBlackOutlineTop() {
+        return ModConfig.col(ModConfig.pseudoBlackOutlineTop, 1.0D);
+    }
 
     private static boolean useNormalAlpha(String key) {
         return "legendary".equals(key) || "black".equals(key);
@@ -1015,9 +1045,10 @@ public final class ItemBeamRenderer {
 
                 String key = (tag != null && tag.hasKey(RarityTags.KEY)) ? tag.getString(RarityTags.KEY) : "";
                 if (key == null || key.trim().isEmpty()) {
-                    key = RarityDetect.fromStack(st);
+                    key = RarityDetect.baseRarityFromStack(st);
                 }
                 key = (key == null) ? "" : key.trim().toLowerCase().replaceAll("[^a-z0-9_]", "");
+                final boolean pseudoBlack = RarityDetect.hasPseudoBlackOverlay(st);
                 if (key.isEmpty()) {
                     continue; // nothing to render for this stack
                 }
@@ -1031,10 +1062,10 @@ public final class ItemBeamRenderer {
                 if (chaos == Chaos.ASCENDED)   h += 3;
                 if (chaos == Chaos.PRIMORDIAL) h += 1;
 
-                double baseR = 0.22 + (h >= 14 ? 0.06 : 0.0);
+                double baseR = ModConfig.baseRadius + (h >= 14 ? ModConfig.thickTierBoost : 0.0);
 
-                int    sides   = 16;
-                double taper   = 0.82;
+                int    sides   = ModConfig.coneSides;
+                double taper   = ModConfig.coneTaper;
                 double twist   = 0.00;
                 float  uvScale = 0.50f;
 
@@ -1047,6 +1078,9 @@ public final class ItemBeamRenderer {
                     pulse = 0.12 * Math.sin(phaseTime * 0.30 * (float)(2*Math.PI));
                 } else if ("glitch".equals(key)) {
                     pulse = 0.10 * Math.sin(phaseTime * 0.25 * (float)(2*Math.PI));
+                }
+                if (pseudoBlack) {
+                    pulse += 0.05 * Math.sin(phaseTime * 0.28 * (float)(2*Math.PI) + ei.getEntityId() * 0.17f);
                 }
 
                 // chaos traits
@@ -1084,14 +1118,14 @@ public final class ItemBeamRenderer {
                     radius *= 1.10; // slightly thicker shaft
                 }
 
-                if      ("legendary".equals(key))   twist += 0.10;
-                else if ("seraph".equals(key))      twist += 0.08;
-                else if ("pearlescent".equals(key)) twist += 0.08;
-                else if ("epic".equals(key))        twist += 0.12;
-                else if ("rare".equals(key))        twist += 0.08;
-                else if ("uncommon".equals(key))    twist += 0.06;
-                else if ("etech".equals(key))       twist += 0.12;
-                else if ("glitch".equals(key))      twist += 0.10;
+                if      ("legendary".equals(key))   twist += ModConfig.twistLegendary;
+                else if ("seraph".equals(key))      twist += ModConfig.twistSeraph;
+                else if ("pearlescent".equals(key)) twist += ModConfig.twistPearl;
+                else if ("epic".equals(key))        twist += ModConfig.twistEpic;
+                else if ("rare".equals(key))        twist += ModConfig.twistRare;
+                else if ("uncommon".equals(key))    twist += ModConfig.twistUncommon;
+                else if ("etech".equals(key))       twist += ModConfig.twistEtech;
+                else if ("glitch".equals(key))      twist += ModConfig.twistGlitch;
 
                 // world-space position relative to camera
                 double x = ei.lastTickPosX + (ei.posX - ei.lastTickPosX) * evt.partialTicks - camX;
@@ -1102,7 +1136,7 @@ public final class ItemBeamRenderer {
                 float[] botRGB, topRGB;
 
                 if ("effervescent".equals(key) || "effervescent_".equals(key)) {
-                    float speed = "effervescent_".equals(key) ? EFF_SPEED_FAST : EFF_SPEED;
+                    float speed = "effervescent_".equals(key) ? (float)ModConfig.rbwSpeedPlus : (float)ModConfig.rbwSpeed;
                     float hueB  = (phaseTime * speed) % 1.0f;
                     float hueT  = (hueB + 0.08f) % 1.0f;
                     int   cB    = Color.HSBtoRGB(hueB, 1f, 1f);
@@ -1110,9 +1144,7 @@ public final class ItemBeamRenderer {
                     bot255 = new int[]{(cB >> 16) & 255, (cB >> 8) & 255, cB & 255};
                     top255 = new int[]{(cT >> 16) & 255, (cT >> 8) & 255, cT & 255};
                 } else {
-                    int[][] stops = GRAD.containsKey(key)
-                            ? GRAD.get(key)
-                            : new int[][]{{255, 255, 255}, {255, 255, 255}};
+                    int[][] stops = gradientFor(key);
                     bot255 = stops[0];
                     top255 = stops[1];
                 }
@@ -1130,6 +1162,36 @@ public final class ItemBeamRenderer {
                 float alpha = alphaFor(key) * chaosAlphaMod;
                 if (evolved) {
                     alpha = Math.min(1.0f, alpha + 0.12f);
+                }
+
+                // Pseudo Black modifier: draw a slightly larger dark shell FIRST so the
+                // normal rarity beam overwrites the center and leaves a visible black
+                // silhouette/outline around the outside from side views.
+                if (pseudoBlack) {
+                    final double pbOutlineRadius = radius * ModConfig.pseudoBlackOutlineScale;
+                    final float  pbAlpha = (float)ModConfig.pseudoBlackOutlineAlpha
+                            + 0.07f * (float)(0.5 + 0.5 * Math.sin(phaseTime * 1.25 + ei.getEntityId() * 0.31));
+                    final int[]  pbBot255 = pseudoBlackOutlineBot();
+                    final int[]  pbTop255 = pseudoBlackOutlineTop();
+                    final float[] pbBotRGB = rgb(pbBot255[0], pbBot255[1], pbBot255[2]);
+                    final float[] pbTopRGB = rgb(pbTop255[0], pbTop255[1], pbTop255[2]);
+
+                    GL11.glDisable(GL11.GL_CULL_FACE);
+                    GL11.glDepthMask(false);
+                    GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+                    mc.getTextureManager().bindTexture(BEAM_TEX);
+                    renderConeGradient(t, x, y, z, pbOutlineRadius, h,
+                            pbBotRGB, pbTopRGB,
+                            baseScroll * 0.98f + (phaseTime * 0.0035f),
+                            sides, taper, twist, uvScale * 1.02f,
+                            pbAlpha, tTicks);
+                    GL11.glDepthMask(true);
+
+                    if (normalAlpha) {
+                        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+                    } else {
+                        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE);
+                    }
                 }
 
                 // main beam cone
@@ -1360,6 +1422,53 @@ public final class ItemBeamRenderer {
             t.addVertexWithUV(x0t, y + h, z0t, u0, v1);
             t.draw();
         }
+    }
+
+    private void renderPseudoBlackCoreCross(Tessellator t, double x, double y, double z,
+                                            double halfW, double h,
+                                            float[] botRGB, float[] topRGB,
+                                            float vScroll, float uvScale,
+                                            float alpha, float tTicks) {
+        t.setBrightness(240);
+        float v1 = vScroll;
+        float v2 = vScroll + (float)(h * uvScale);
+        float phase = (tTicks + vScroll * 200.0f) * 0.005f;
+
+        // Two intersecting vertical ribbons (X/Z aligned) read like a center line from
+        // almost any outside angle, unlike a true inner cone hidden by the outer shell.
+        renderVerticalRibbon(t, x, y, z, halfW, h, botRGB, topRGB, phase, v1, v2, alpha, true);
+        renderVerticalRibbon(t, x, y, z, halfW, h, botRGB, topRGB, phase + 0.25f, v1, v2, alpha, false);
+    }
+
+    private void renderVerticalRibbon(Tessellator t, double x, double y, double z,
+                                      double halfW, double h,
+                                      float[] botRGB, float[] topRGB,
+                                      float uPhase, float v1, float v2,
+                                      float alpha, boolean xAxis) {
+        double x0 = xAxis ? x - halfW : x;
+        double x1 = xAxis ? x + halfW : x;
+        double z0 = xAxis ? z : z - halfW;
+        double z1 = xAxis ? z : z + halfW;
+
+        // front face
+        t.startDrawingQuads();
+        t.setColorRGBA_F(botRGB[0], botRGB[1], botRGB[2], alpha);
+        t.addVertexWithUV(x0, y,     z0, 0.0f + uPhase, v2);
+        t.addVertexWithUV(x1, y,     z1, 1.0f + uPhase, v2);
+        t.setColorRGBA_F(topRGB[0], topRGB[1], topRGB[2], alpha);
+        t.addVertexWithUV(x1, y + h, z1, 1.0f + uPhase, v1);
+        t.addVertexWithUV(x0, y + h, z0, 0.0f + uPhase, v1);
+        t.draw();
+
+        // back face
+        t.startDrawingQuads();
+        t.setColorRGBA_F(botRGB[0], botRGB[1], botRGB[2], alpha);
+        t.addVertexWithUV(x0, y,     z0, 0.0f + uPhase, v2);
+        t.addVertexWithUV(x0, y + h, z0, 0.0f + uPhase, v1);
+        t.setColorRGBA_F(topRGB[0], topRGB[1], topRGB[2], alpha);
+        t.addVertexWithUV(x1, y + h, z1, 1.0f + uPhase, v1);
+        t.addVertexWithUV(x1, y,     z1, 1.0f + uPhase, v2);
+        t.draw();
     }
 
     // ===== Chaos extras =====

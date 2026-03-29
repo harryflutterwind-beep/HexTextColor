@@ -1,0 +1,169 @@
+Hex Color Text:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<Introduction>
+
+Basically I wanted custom colors (hex colors) for text, and I *was not* about to
+move to 1.12+ just to get them. So I spent about a day and a half fighting my mod
+workspace, breaking things, fixing them, and questioning my life choices.
+Not fun — but one video saved me.
+
+This mod was both a pain *and* a joy to make. I absolutely got lost in the plot
+halfway through and added things that were probably unnecessary. That said,
+it somehow ended up working alongside Kam’s HexText mod, and I honestly still
+don’t know how I pulled that off. Not complaining though.
+
+So what does this mod actually do?
+
+It adds **safe, nestable, animated hex text** to Minecraft 1.7.10.
+If you understand “hyper text” (as Hausar put it), you’ll probably have a field
+day with this. If not — no worries — there’s a `/hex-help` command that walks
+through everything with clickable examples.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<Basic Hex Colors>
+
+You can color text using real hex values:
+
+    <#FFAA00>Gold Text</#>
+    <#55FFFF>Aqua Text</#>
+    <#FF3B3B>Red Text</#>
+
+Short hex also works:
+
+    <#FA0>Gold</#>
+
+These are **safe** — no § codes get injected into chat.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<Text Styles>
+
+Styles are appended directly to the hex tag:
+
+    l = bold
+    o = italic
+    n = underline
+    m = strikethrough
+    k = obfuscated
+
+Examples:
+
+    <#FFAA00l>Bold Gold</#>
+    <#55FFFFo>Italic Aqua</#>
+    <#FF55FFn>Underlined Pink</#>
+    <#FF5555m>Strikethrough Red</#>
+    <#AA00AAk>Obfuscated</#>
+
+You can stack them:
+
+    <#FFAA00lon>Bold Italic Underline</#>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<Gradients>
+
+Gradients interpolate colors per character:
+
+    <grad #FF6A00 #FFDD55>Sunset</grad>
+    <grad #00C6FF #0072FF>Ocean</grad>
+
+Multiple color stops are supported:
+
+    <grad #00FF88 #FFFFFF #FF00AA>Neon</grad>
+
+Animated gradients:
+
+    <grad #FF6A00 #FFDD55 scroll=0.22>Shimmer</grad>
+
+Gradients also support styles:
+
+    <grad #00C6FF #0072FF scroll=0.20 styles=l>Bold Ocean</grad>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<Rainbow>
+
+Rainbow cycles colors per character.
+
+Aliases:
+    <rb>, <rbw>, <rainbow>
+
+Examples:
+
+    <rbw>R A I N B O W</rbw>
+    <rbw speed=0.8 cycles=1.2>Slow Rainbow</rbw>
+
+Rainbow works extremely well with pulse, wave, outline, etc.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<Motion Effects>
+
+Motion tags visually move characters:
+
+    <wave>       Sine wave motion
+    <shake>      Aggressive jitter
+    <jitter>     Subtle jitter
+    <wobble>     Smooth wobble
+    <zoom>       Scale pulsing
+    <scroll>     Horizontal scroll
+    <loop>       Looping divider / header motion
+
+Examples:
+
+    <wave amp=2.2 speed=6>Wavy Text</wave>
+    <zoom amp=1.35 speed=3.5>Zoom Pop</zoom>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<FX Layers>
+
+FX tags wrap other styles and add overlays:
+
+    <outline>   Border
+    <shadow>    Drop shadow
+    <snow>      Snow overlay
+    <rain>      Rain overlay
+    <sparkle>   Stars
+    <flicker>   Flicker
+    <glitch>    Glitch distortion
+    <shootingstar> Star trail sweep
+
+IMPORTANT RULE:
+    Outer tags wrap inner tags.
+
+Correct:
+
+    <outline><grad #FFDD55 #FF6A00>Text</grad></outline>
+
+Incorrect:
+
+    <grad #FFDD55 #FF6A00><outline>Text</outline></grad>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<Shooting Star Note>
+
+ShootingStar MUST be wrapped by an FX like outline.
+
+Valid examples:
+
+    <outline><shootingstar><#FF3B3B>CRIT!</#></shootingstar></outline>
+    <outline><shootingstar><grad #FFDD55 #FF6A00 scroll=0.18>CRIT!</grad></shootingstar></outline>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<Final Notes>
+
+This system works in:
+    ✔ Chat
+    ✔ Item names
+    ✔ Item lore
+    ✔ GUIs
+    ✔ NPC dialogue
+    ✔ Tooltips
+    ❌ DOESNT WORK ON OVERLAYS (For now >:3)
+If you want examples, use:
+    /hex-help
+
+Click anything in that menu — it auto-inserts into chat.
+
+Have fun breaking your own text rendering.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Gem stuff:
+Mainly socketing like an rpg system sorta?
+Requires xp levels and materlais to open slots
+more on this /hexsocket gui /hexsocket open /hexsocket opener

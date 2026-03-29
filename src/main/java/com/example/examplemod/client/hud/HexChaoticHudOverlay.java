@@ -16,12 +16,12 @@ import org.lwjgl.opengl.GL11;
 /**
  * Chaotic Orb HUD (MC 1.7.10)
  *
- * Shows the actual Chaotic orb item icon + a small bar indicating time until the next reroll.
+ * Shows the Chaotic orb icon + an animated gradient charge bar.
  * Drawn above the hearts on the far left.
  *
- * NOTE:
- * - Displays ONLY when a Chaotic orb is "active" (held OR worn on armor).
- * - Reads the timers directly from the orb's NBT: HexChaosNextAt + HexChaosHold.
+ * Notes:
+ * - Uses Darkfire-style GL state isolation for the item render so the orb never looks "faded"
+ * - Bar is a scrolling 3-stop gradient (magenta -> violet -> cyan) that matches tooltip vibes
  */
 public class HexChaoticHudOverlay {
 
@@ -56,20 +56,19 @@ public class HexChaoticHudOverlay {
         long now = System.currentTimeMillis();
         // Server stores NEXT_AT as epoch milliseconds; HOLD is stored as ticks (20 tps).
         long remainingMs = nextAt - now;
-        if (remainingMs < 0L) remainingMs = 0L;
 
         long totalMs = (long) hold * 50L;
         if (totalMs <= 0L) totalMs = 1L;
 
-        // If we ever read an old world-time value, clamp so the bar doesn't get stuck empty/negative.
+        // Clamp so bar doesn't go weird if old values are present.
         if (remainingMs > totalMs) remainingMs = totalMs;
+        if (remainingMs < 0L) remainingMs = 0L;
 
         float frac = 1.0f - (remainingMs / (float) totalMs);
         if (frac < 0.0f) frac = 0.0f;
         if (frac > 1.0f) frac = 1.0f;
 
         ScaledResolution res = event.resolution;
-        int sw = res.getScaledWidth();
         int sh = res.getScaledHeight();
 
         // Position: above hearts, far left
@@ -87,30 +86,74 @@ public class HexChaoticHudOverlay {
         try {
             GL11.glScalef(S, S, 1.0f);
 
-            // Draw item icon (exact orb)
-            RenderHelper.enableGUIStandardItemLighting();
+            // ---- Orb icon (state isolated so it never inherits alpha/tint) ----
+            GL11.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS);
             try {
-                ITEM_RENDER.renderItemAndEffectIntoGUI(mc.fontRenderer, mc.getTextureManager(), chaotic, sx, sy);
+                GL11.glDisable(GL11.GL_LIGHTING);
+                GL11.glDisable(GL11.GL_FOG);
+                GL11.glDisable(GL11.GL_CULL_FACE);
+                GL11.glEnable(GL11.GL_BLEND);
+                GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+                GL11.glColor4f(1f, 1f, 1f, 1f);
+
+                RenderHelper.enableGUIStandardItemLighting();
+                try {
+                    ITEM_RENDER.renderItemAndEffectIntoGUI(mc.fontRenderer, mc.getTextureManager(), chaotic, sx, sy);
+                } finally {
+                    RenderHelper.disableStandardItemLighting();
+                }
+
+                GL11.glColor4f(1f, 1f, 1f, 1f);
             } finally {
-                RenderHelper.disableStandardItemLighting();
+                GL11.glPopAttrib();
             }
 
+            // ---- Animated gradient bar ----
             // Bar to the right of the icon
-            int barX = sx + 16; // tighter spacing since we're scaling down
+            int barX = sx + 16;
             int barY = sy + 5;
             int barW = 54;
             int barH = 6;
 
             int filled = (int) (barW * frac);
+            if (filled < 0) filled = 0;
+            if (filled > barW) filled = barW;
 
-            // Background
-            Gui.drawRect(barX, barY, barX + barW, barY + barH, 0xAA000000);
-            // Fill (purple-ish)
-            Gui.drawRect(barX, barY, barX + filled, barY + barH, 0xAA7A5CFF);
+            // Background: very subtle (not a "black box")
+            int bg = 0x18000000;
+            Gui.drawRect(barX, barY, barX + barW, barY + barH, bg);
 
-            // Optional: tiny tick/seconds text (kept minimal to avoid clutter)
-            // int secs = (int) Math.ceil(remaining / 20.0);
-            // mc.fontRenderer.drawStringWithShadow(secs + "s", barX + barW + 4, barY - 1, 0xE0E0E0);
+            // Outline (thin)
+            int outline = 0xA05B2EFF; // purple outline
+            drawOutline(barX, barY, barW, barH, outline);
+
+            // Fill: scrolling gradient
+            long tMs = now;
+            float phase = (tMs % 1200L) / 1200.0f; // 0..1
+
+            // gentle pulse for alpha
+            float pulse = 0.70f + 0.30f * (float) Math.sin((tMs % 2000L) / 2000.0f * (Math.PI * 2.0));
+
+            // draw 1px vertical strips across filled portion
+            for (int i = 0; i < filled; i++) {
+                float u = (filled <= 1) ? 0f : (i / (float) (filled - 1));
+                float g = fract(u + phase); // scrolling
+                int rgb = chaoticGradientRGB(g);
+                int col = withAlpha(rgb, (int) (170 * pulse)); // 0..255
+                Gui.drawRect(barX + i, barY, barX + i + 1, barY + barH, col);
+            }
+
+            // Shimmer highlight line (subtle, rides inside filled area)
+            if (filled > 4) {
+                float shPhase = fract(phase * 1.7f);
+                int lx = barX + (int) (shPhase * (filled - 1));
+                int glow = withAlpha(0xD6F8FF, 140); // pale cyan
+                Gui.drawRect(lx, barY, lx + 1, barY + barH, glow);
+                // slight 2px shoulder
+                int glow2 = withAlpha(0xB9E7FF, 85);
+                if (lx - 1 >= barX) Gui.drawRect(lx - 1, barY, lx, barY + barH, glow2);
+                if (lx + 1 <= barX + filled) Gui.drawRect(lx + 1, barY, lx + 2, barY + barH, glow2);
+            }
 
         } finally {
             // reset common state we touch
@@ -164,5 +207,61 @@ public class HexChaoticHudOverlay {
 
         // Fallback: chaotic stacks always carry these tags.
         return tag.hasKey(TAG_CHAOS_NEXT_AT) || tag.hasKey(TAG_CHAOS_HOLD);
+    }
+
+    // ----- tiny helpers (self-contained, no external deps) -----
+
+    private static void drawOutline(int x, int y, int w, int h, int col) {
+        // top
+        Gui.drawRect(x, y, x + w, y + 1, col);
+        // bottom
+        Gui.drawRect(x, y + h - 1, x + w, y + h, col);
+        // left
+        Gui.drawRect(x, y, x + 1, y + h, col);
+        // right
+        Gui.drawRect(x + w - 1, y, x + w, y + h, col);
+    }
+
+    private static int withAlpha(int rgb, int a) {
+        if (a < 0) a = 0;
+        if (a > 255) a = 255;
+        return (a << 24) | (rgb & 0x00FFFFFF);
+    }
+
+    private static float fract(float v) {
+        return v - (float) Math.floor(v);
+    }
+
+    /**
+     * 3-stop looped gradient:
+     *  0.00 -> 0.50 : magenta -> violet
+     *  0.50 -> 1.00 : violet  -> cyan
+     * and wraps naturally due to fract()
+     */
+    private static int chaoticGradientRGB(float t) {
+        // Tooltip-ish palette:
+        // magenta/pink, violet, cyan
+        final int MAG = 0xFF3FD6;
+        final int VIO = 0x8B4CFF;
+        final int CYA = 0x32E9FF;
+
+        if (t < 0.5f) {
+            float u = t / 0.5f;
+            return lerpRGB(MAG, VIO, u);
+        } else {
+            float u = (t - 0.5f) / 0.5f;
+            return lerpRGB(VIO, CYA, u);
+        }
+    }
+
+    private static int lerpRGB(int a, int b, float t) {
+        if (t < 0f) t = 0f;
+        if (t > 1f) t = 1f;
+        int ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+        int br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+        int rr = (int) (ar + (br - ar) * t);
+        int rg = (int) (ag + (bg - ag) * t);
+        int rb = (int) (ab + (bb - ab) * t);
+        return (rr << 16) | (rg << 8) | rb;
     }
 }

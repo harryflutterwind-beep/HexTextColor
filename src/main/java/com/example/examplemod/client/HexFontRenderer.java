@@ -54,6 +54,109 @@ public class HexFontRenderer extends FontRenderer {
     private static final Pattern AMP_PW_OPEN  = Pattern.compile("(?i)&pw");
     private static final Pattern AMP_PW_CLOSE = Pattern.compile("(?i)&/pw");
 
+    //  &pi  → fiery gradient preset (safe replacement for &fi; avoids vanilla &f collision)
+    //  &/pi → closes the fiery gradient
+    private static final Pattern AMP_PI_OPEN  = Pattern.compile("(?i)&pi");
+    private static final Pattern AMP_PI_CLOSE = Pattern.compile("(?i)&/pi");
+
+    //  &pl  → glow preset (primary name)
+    //  &/pl → closes the glow preset
+    //  &gl  → legacy glow alias (kept for compatibility)
+    //  &/gl → closes the legacy glow alias
+    private static final Pattern AMP_PL_OPEN  = Pattern.compile("(?i)&pl");
+    private static final Pattern AMP_PL_CLOSE = Pattern.compile("(?i)&/pl");
+    private static final Pattern AMP_GL_OPEN  = Pattern.compile("(?i)&gl");
+    private static final Pattern AMP_GL_CLOSE = Pattern.compile("(?i)&/gl");
+
+    //  &prbw  → direct rainbow text animation (safe replacement for &rbw; avoids vanilla &r collision)
+    //  &/prbw → closes the direct rainbow text animation
+    //  &grbw  → white/default text + rainbow glow halo
+    //  &/grbw → closes the rainbow glow preset
+    //  &xrbw  → rainbow text + rainbow glow halo
+    //  &/xrbw → closes the rainbow fill+glow preset
+    private static final Pattern AMP_PRBW_OPEN  = Pattern.compile("(?i)&prbw");
+    private static final Pattern AMP_PRBW_CLOSE = Pattern.compile("(?i)&/prbw");
+    private static final Pattern AMP_GRBW_OPEN  = Pattern.compile("(?i)&grbw");
+    private static final Pattern AMP_GRBW_CLOSE = Pattern.compile("(?i)&/grbw");
+    private static final Pattern AMP_XRBW_OPEN  = Pattern.compile("(?i)&xrbw");
+    private static final Pattern AMP_XRBW_CLOSE = Pattern.compile("(?i)&/xrbw");
+
+    // Extra rainbow presets (all start with safe non-legacy letters, so ampToSection won't eat them)
+    //  &xfastbw   → faster scrolling rainbow text
+    //  &/xfastbw  → closes the fast rainbow preset
+    //  &xmedbw    → medium scrolling rainbow text (explicit alias)
+    //  &/xmedbw   → closes the medium rainbow preset
+    //  &xpulsebw  → rainbow text wrapped in pulse
+    //  &/xpulsebw → closes the pulse rainbow preset
+    //  &xwavebw   → rainbow text wrapped in wave
+    //  &/xwavebw  → closes the wave rainbow preset
+    //  &xflickbw  → rainbow text wrapped in flicker
+    //  &/xflickbw → closes the flicker rainbow preset
+    //  &xrainbw   → rainbow text wrapped in rain
+    //  &/xrainbw  → closes the rain rainbow preset
+    private static final Pattern AMP_XFASTBW_OPEN   = Pattern.compile("(?i)&xfastbw");
+    private static final Pattern AMP_XFASTBW_CLOSE  = Pattern.compile("(?i)&/xfastbw");
+    private static final Pattern AMP_XMEDBW_OPEN    = Pattern.compile("(?i)&xmedbw");
+    private static final Pattern AMP_XMEDBW_CLOSE   = Pattern.compile("(?i)&/xmedbw");
+    private static final Pattern AMP_XPULSEBW_OPEN  = Pattern.compile("(?i)&xpulsebw");
+    private static final Pattern AMP_XPULSEBW_CLOSE = Pattern.compile("(?i)&/xpulsebw");
+    private static final Pattern AMP_XWAVEBW_OPEN   = Pattern.compile("(?i)&xwavebw");
+    private static final Pattern AMP_XWAVEBW_CLOSE  = Pattern.compile("(?i)&/xwavebw");
+    private static final Pattern AMP_XFLICKBW_OPEN  = Pattern.compile("(?i)&xflickbw");
+    private static final Pattern AMP_XFLICKBW_CLOSE = Pattern.compile("(?i)&/xflickbw");
+    private static final Pattern AMP_XRAINBW_OPEN   = Pattern.compile("(?i)&xrainbw");
+    private static final Pattern AMP_XRAINBW_CLOSE  = Pattern.compile("(?i)&/xrainbw");
+
+    // Gradient-heavy animated presets (safe x-prefix to avoid vanilla amp collisions)
+    //  &xfireg    → fiery scrolling gradient
+    //  &/xfireg   → closes fiery gradient
+    //  &xoceang   → ocean scrolling gradient
+    //  &/xoceang  → closes ocean gradient
+    //  &xroyalg   → royal purple/blue scrolling gradient
+    //  &/xroyalg  → closes royal gradient
+    //  &xtoxicg   → toxic lime/cyan scrolling gradient
+    //  &/xtoxicg  → closes toxic gradient
+    //  &xangelg   → bright holy white/gold scrolling gradient
+    //  &/xangelg  → closes holy gradient
+    //  &xpulseg   → pink/violet gradient with inline pulse
+    //  &/xpulseg  → closes pulsing gradient
+    //  &xwaveg    → cyan/blue gradient wrapped in wave
+    //  &/xwaveg   → closes wave gradient
+    //  &xflickg   → amber/orange gradient wrapped in flicker
+    //  &/xflickg  → closes flicker gradient
+    //  &xshakeg   → hot red/magenta gradient wrapped in shake
+    //  &/xshakeg  → closes shake gradient
+    //  &xzoomg    → bright gold/white gradient wrapped in zoom
+    //  &/xzoomg   → closes zoom gradient
+    //  &xraing    → cool blue gradient wrapped in rain
+    //  &/xraing   → closes rain gradient
+    //  &xshadowg  → rich violet gradient wrapped in shadow
+    //  &/xshadowg → closes shadow gradient
+    private static final Pattern AMP_XFIREG_OPEN    = Pattern.compile("(?i)&xfireg");
+    private static final Pattern AMP_XFIREG_CLOSE   = Pattern.compile("(?i)&/xfireg");
+    private static final Pattern AMP_XOCEANG_OPEN   = Pattern.compile("(?i)&xoceang");
+    private static final Pattern AMP_XOCEANG_CLOSE  = Pattern.compile("(?i)&/xoceang");
+    private static final Pattern AMP_XROYALG_OPEN   = Pattern.compile("(?i)&xroyalg");
+    private static final Pattern AMP_XROYALG_CLOSE  = Pattern.compile("(?i)&/xroyalg");
+    private static final Pattern AMP_XTOXICG_OPEN   = Pattern.compile("(?i)&xtoxicg");
+    private static final Pattern AMP_XTOXICG_CLOSE  = Pattern.compile("(?i)&/xtoxicg");
+    private static final Pattern AMP_XANGELG_OPEN   = Pattern.compile("(?i)&xangelg");
+    private static final Pattern AMP_XANGELG_CLOSE  = Pattern.compile("(?i)&/xangelg");
+    private static final Pattern AMP_XPULSEG_OPEN   = Pattern.compile("(?i)&xpulseg");
+    private static final Pattern AMP_XPULSEG_CLOSE  = Pattern.compile("(?i)&/xpulseg");
+    private static final Pattern AMP_XWAVEG_OPEN    = Pattern.compile("(?i)&xwaveg");
+    private static final Pattern AMP_XWAVEG_CLOSE   = Pattern.compile("(?i)&/xwaveg");
+    private static final Pattern AMP_XFLICKG_OPEN   = Pattern.compile("(?i)&xflickg");
+    private static final Pattern AMP_XFLICKG_CLOSE  = Pattern.compile("(?i)&/xflickg");
+    private static final Pattern AMP_XSHAKEG_OPEN   = Pattern.compile("(?i)&xshakeg");
+    private static final Pattern AMP_XSHAKEG_CLOSE  = Pattern.compile("(?i)&/xshakeg");
+    private static final Pattern AMP_XZOOMG_OPEN    = Pattern.compile("(?i)&xzoomg");
+    private static final Pattern AMP_XZOOMG_CLOSE   = Pattern.compile("(?i)&/xzoomg");
+    private static final Pattern AMP_XRAING_OPEN    = Pattern.compile("(?i)&xraing");
+    private static final Pattern AMP_XRAING_CLOSE   = Pattern.compile("(?i)&/xraing");
+    private static final Pattern AMP_XSHADOWG_OPEN  = Pattern.compile("(?i)&xshadowg");
+    private static final Pattern AMP_XSHADOWG_CLOSE = Pattern.compile("(?i)&/xshadowg");
+
 
     // Inline icon tag: <ico:gems/dark_fire_face 12x12> or <ico:gems/dark_fire_face 12>
 // Also supports chevrons: «ico:gems/dark_fire_face 12x12»
@@ -523,11 +626,111 @@ public class HexFontRenderer extends FontRenderer {
             // &/pw → closes it
             s = AMP_PW_CLOSE.matcher(s).replaceAll("</wave></#>");
             s = AMP_PW_OPEN.matcher(s).replaceAll("<#ff007el><wave>");
+
+            // &pi  → fiery gradient preset (safe replacement for old &fi)
+            // &/pi → closes it
+            s = AMP_PI_CLOSE.matcher(s).replaceAll("</grad>");
+            s = AMP_PI_OPEN.matcher(s).replaceAll("<grad #FF2000 #FF5A00 #FFCC00 #FF5A00 #FF2000 scroll=0.20>");
+
+            // &pl / &gl → glow preset
+            // Real pulsing glow preset (normal text + animated halo).
+            s = AMP_PL_CLOSE.matcher(s).replaceAll("</glow>");
+            s = AMP_GL_CLOSE.matcher(s).replaceAll("</glow>");
+            s = AMP_PL_OPEN.matcher(s).replaceAll("<glow #ff7af7>");
+            s = AMP_GL_OPEN.matcher(s).replaceAll("<glow #ff7af7>");
+
+            // Rainbow animation presets (safe replacements for legacy-unsafe names like &rbw)
+            // &prbw  → direct rainbow animated text
+            // &grbw  → white/default fill + rainbow glow halo
+            // &xrbw  → rainbow fill + rainbow glow halo
+            s = AMP_PRBW_CLOSE.matcher(s).replaceAll("</rbw>");
+            s = AMP_PRBW_OPEN.matcher(s).replaceAll("<rbw speed=0.85 sat=1.00 val=1.00 cycles=1.0>");
+
+            s = AMP_GRBW_CLOSE.matcher(s).replaceAll("</glow>");
+            s = AMP_GRBW_OPEN.matcher(s).replaceAll("<glow glow=rbw glowSpeed=0.55 glowCycles=1.0>");
+
+            s = AMP_XRBW_CLOSE.matcher(s).replaceAll("</glow>");
+            s = AMP_XRBW_OPEN.matcher(s).replaceAll("<glow glow=rbw fill=rbw glowSpeed=0.55 fillSpeed=0.90 glowCycles=1.0 fillCycles=1.0>");
+
+            // Extra rainbow presets
+            // &xfastbw  → faster scrolling rainbow text
+            // &xmedbw   → medium scrolling rainbow text (explicit alias)
+            // &xpulsebw → rainbow text wrapped in pulse
+            // &xwavebw  → rainbow text wrapped in wave
+            // &xflickbw → rainbow text wrapped in flicker
+            // &xrainbw  → rainbow text wrapped in rain
+            s = AMP_XFASTBW_CLOSE.matcher(s).replaceAll("</rbw>");
+            s = AMP_XFASTBW_OPEN.matcher(s).replaceAll("<rbw speed=1.35 sat=1.00 val=1.00 cycles=1.0>");
+
+            s = AMP_XMEDBW_CLOSE.matcher(s).replaceAll("</rbw>");
+            s = AMP_XMEDBW_OPEN.matcher(s).replaceAll("<rbw speed=0.85 sat=1.00 val=1.00 cycles=1.0>");
+
+            s = AMP_XPULSEBW_CLOSE.matcher(s).replaceAll("</rbw></pulse>");
+            s = AMP_XPULSEBW_OPEN.matcher(s).replaceAll("<pulse amp=0.38 speed=0.55><rbw speed=0.90 sat=1.00 val=1.00 cycles=1.0>");
+
+            s = AMP_XWAVEBW_CLOSE.matcher(s).replaceAll("</rbw></wave>");
+            s = AMP_XWAVEBW_OPEN.matcher(s).replaceAll("<wave amp=1.10 speed=5.50><rbw speed=0.90 sat=1.00 val=1.00 cycles=1.0>");
+
+            s = AMP_XFLICKBW_CLOSE.matcher(s).replaceAll("</rbw></flicker>");
+            s = AMP_XFLICKBW_OPEN.matcher(s).replaceAll("<flicker speed=5.20><rbw speed=0.92 sat=1.00 val=1.00 cycles=1.0>");
+
+            s = AMP_XRAINBW_CLOSE.matcher(s).replaceAll("</rbw></rain>");
+            s = AMP_XRAINBW_OPEN.matcher(s).replaceAll("<rain><rbw speed=0.88 sat=1.00 val=1.00 cycles=1.0>");
+
+            // Gradient-heavy animated presets
+            // &xfireg   → fiery scrolling gradient
+            // &xoceang  → cool ocean scrolling gradient
+            // &xroyalg  → royal purple/blue scrolling gradient
+            // &xtoxicg  → toxic lime/cyan scrolling gradient
+            // &xangelg  → bright holy white/gold scrolling gradient
+            // &xpulseg  → neon pink/violet gradient with inline pulse
+            // &xwaveg   → cyan/blue gradient + wave
+            // &xflickg  → amber/orange gradient + flicker
+            // &xshakeg  → red/magenta gradient + shake
+            // &xzoomg   → white/gold gradient + zoom
+            // &xraing   → cool blue gradient + rain
+            // &xshadowg → violet/blue gradient + shadow
+            s = AMP_XFIREG_CLOSE.matcher(s).replaceAll("</grad>");
+            s = AMP_XFIREG_OPEN.matcher(s).replaceAll("<grad #FF2000 #FF5A00 #FFCC00 #FF5A00 #FF2000 scroll=0.26>");
+
+            s = AMP_XOCEANG_CLOSE.matcher(s).replaceAll("</grad>");
+            s = AMP_XOCEANG_OPEN.matcher(s).replaceAll("<grad #0AEFFF #33B5FF #2C6BFF #33B5FF #0AEFFF scroll=0.22>");
+
+            s = AMP_XROYALG_CLOSE.matcher(s).replaceAll("</grad>");
+            s = AMP_XROYALG_OPEN.matcher(s).replaceAll("<grad #7A5CFF #B16CFF #5F7CFF #B16CFF #7A5CFF scroll=0.20>");
+
+            s = AMP_XTOXICG_CLOSE.matcher(s).replaceAll("</grad>");
+            s = AMP_XTOXICG_OPEN.matcher(s).replaceAll("<grad #D4FF00 #5CFF5C #00FFD5 #5CFF5C #D4FF00 scroll=0.23>");
+
+            s = AMP_XANGELG_CLOSE.matcher(s).replaceAll("</grad>");
+            s = AMP_XANGELG_OPEN.matcher(s).replaceAll("<grad #FFFFFF #FFF6AE #FFD86B #FFF6AE #FFFFFF scroll=0.16>");
+
+            s = AMP_XPULSEG_CLOSE.matcher(s).replaceAll("</grad>");
+            s = AMP_XPULSEG_OPEN.matcher(s).replaceAll("<grad #FF54D9 #B56BFF #7A8DFF #B56BFF #FF54D9 scroll=0.20 pulse=1 amp=0.34 pulsespeed=0.62>");
+
+            s = AMP_XWAVEG_CLOSE.matcher(s).replaceAll("</grad></wave>");
+            s = AMP_XWAVEG_OPEN.matcher(s).replaceAll("<wave amp=1.15 speed=5.20><grad #76F9FF #45D2FF #4D7BFF #45D2FF #76F9FF scroll=0.18>");
+
+            s = AMP_XFLICKG_CLOSE.matcher(s).replaceAll("</grad></flicker>");
+            s = AMP_XFLICKG_OPEN.matcher(s).replaceAll("<flicker speed=4.80><grad #FFE16B #FFAC33 #FF6A00 #FFAC33 #FFE16B scroll=0.19>");
+
+            s = AMP_XSHAKEG_CLOSE.matcher(s).replaceAll("</grad></shake>");
+            s = AMP_XSHAKEG_OPEN.matcher(s).replaceAll("<shake amp=0.55 speed=7.20><grad #FF3B3B #FF5B8A #D248FF #FF5B8A #FF3B3B scroll=0.24>");
+
+            s = AMP_XZOOMG_CLOSE.matcher(s).replaceAll("</grad></zoom>");
+            s = AMP_XZOOMG_OPEN.matcher(s).replaceAll("<zoom amp=0.08 speed=1.20><grad #FFFFFF #FFF0B3 #FFD86B #FFF0B3 #FFFFFF scroll=0.17>");
+
+            s = AMP_XRAING_CLOSE.matcher(s).replaceAll("</grad></rain>");
+            s = AMP_XRAING_OPEN.matcher(s).replaceAll("<rain><grad #DDF8FF #8CE3FF #47A8FF #8CE3FF #DDF8FF scroll=0.15>");
+
+            s = AMP_XSHADOWG_CLOSE.matcher(s).replaceAll("</grad></shadow>");
+            s = AMP_XSHADOWG_OPEN.matcher(s).replaceAll("<shadow><grad #C18CFF #7A7CFF #456BFF #7A7CFF #C18CFF scroll=0.18>");
         }
 
         // Existing tag shortcuts
-        if (s.indexOf('<') >= 0) {
+        if (s.indexOf('<') >= 0 || s.indexOf('«') >= 0) {
             s = s.replace("<g_fire>", "<grad #FF2000 #FF5A00 #FFCC00 #FF5A00 #FF2000 scroll=0.20>");
+
         }
 
         return s;
@@ -1076,6 +1279,10 @@ public class HexFontRenderer extends FontRenderer {
     }
 
 
+    // CodeChicken / NEI now gets the wrapped renderer through ChatHexHandler,
+    // so we intentionally do NOT bypass those paths here anymore.
+
+
     private static boolean isJourneyMapManageWaypointsScreen() {
         GuiScreen s = Minecraft.getMinecraft().currentScreen;
         if (s == null) {
@@ -1084,6 +1291,24 @@ public class HexFontRenderer extends FontRenderer {
             String cn = s.getClass().getName().toLowerCase();
             return cn.contains("journeymap") && cn.contains("waypoint");
         }
+    }
+
+    private static boolean isAchievementLikeScreen() {
+        GuiScreen s = Minecraft.getMinecraft().currentScreen;
+        if (s == null) {
+            return false;
+        } else {
+            String cn = s.getClass().getName();
+            return cn.equals("net.minecraft.client.gui.achievement.GuiAchievements")
+                    || cn.equals("net.minecraft.client.gui.achievement.GuiStats")
+                    || cn.endsWith(".GuiAchievements")
+                    || cn.endsWith(".GuiStats");
+        }
+    }
+
+    // Hybrid achievement/stats path: plain text stays vanilla; Hex syntax uses custom rendering.
+    private static boolean shouldUseVanillaAchievementPath(String text) {
+        return isAchievementLikeScreen() && !looksLikeOurSyntax(text);
     }
 
     private static boolean isForgeModListScreen() {
@@ -1145,7 +1370,31 @@ public class HexFontRenderer extends FontRenderer {
 
         // Custom &-macros (expanded via applyHexShortcuts)
         try {
-            if (AMP_PW_OPEN.matcher(s).find() || AMP_PW_CLOSE.matcher(s).find()) return true;
+            if (AMP_PW_OPEN.matcher(s).find() || AMP_PW_CLOSE.matcher(s).find()
+                    || AMP_PI_OPEN.matcher(s).find() || AMP_PI_CLOSE.matcher(s).find()
+                    || AMP_PL_OPEN.matcher(s).find() || AMP_PL_CLOSE.matcher(s).find()
+                    || AMP_GL_OPEN.matcher(s).find() || AMP_GL_CLOSE.matcher(s).find()
+                    || AMP_PRBW_OPEN.matcher(s).find() || AMP_PRBW_CLOSE.matcher(s).find()
+                    || AMP_GRBW_OPEN.matcher(s).find() || AMP_GRBW_CLOSE.matcher(s).find()
+                    || AMP_XRBW_OPEN.matcher(s).find() || AMP_XRBW_CLOSE.matcher(s).find()
+                    || AMP_XFASTBW_OPEN.matcher(s).find() || AMP_XFASTBW_CLOSE.matcher(s).find()
+                    || AMP_XMEDBW_OPEN.matcher(s).find() || AMP_XMEDBW_CLOSE.matcher(s).find()
+                    || AMP_XPULSEBW_OPEN.matcher(s).find() || AMP_XPULSEBW_CLOSE.matcher(s).find()
+                    || AMP_XWAVEBW_OPEN.matcher(s).find() || AMP_XWAVEBW_CLOSE.matcher(s).find()
+                    || AMP_XFLICKBW_OPEN.matcher(s).find() || AMP_XFLICKBW_CLOSE.matcher(s).find()
+                    || AMP_XRAINBW_OPEN.matcher(s).find() || AMP_XRAINBW_CLOSE.matcher(s).find()
+                    || AMP_XFIREG_OPEN.matcher(s).find() || AMP_XFIREG_CLOSE.matcher(s).find()
+                    || AMP_XOCEANG_OPEN.matcher(s).find() || AMP_XOCEANG_CLOSE.matcher(s).find()
+                    || AMP_XROYALG_OPEN.matcher(s).find() || AMP_XROYALG_CLOSE.matcher(s).find()
+                    || AMP_XTOXICG_OPEN.matcher(s).find() || AMP_XTOXICG_CLOSE.matcher(s).find()
+                    || AMP_XANGELG_OPEN.matcher(s).find() || AMP_XANGELG_CLOSE.matcher(s).find()
+                    || AMP_XPULSEG_OPEN.matcher(s).find() || AMP_XPULSEG_CLOSE.matcher(s).find()
+                    || AMP_XWAVEG_OPEN.matcher(s).find() || AMP_XWAVEG_CLOSE.matcher(s).find()
+                    || AMP_XFLICKG_OPEN.matcher(s).find() || AMP_XFLICKG_CLOSE.matcher(s).find()
+                    || AMP_XSHAKEG_OPEN.matcher(s).find() || AMP_XSHAKEG_CLOSE.matcher(s).find()
+                    || AMP_XZOOMG_OPEN.matcher(s).find() || AMP_XZOOMG_CLOSE.matcher(s).find()
+                    || AMP_XRAING_OPEN.matcher(s).find() || AMP_XRAING_CLOSE.matcher(s).find()
+                    || AMP_XSHADOWG_OPEN.matcher(s).find() || AMP_XSHADOWG_CLOSE.matcher(s).find()) return true;
         } catch (Throwable t) {
             // ignore
         }
@@ -1193,6 +1442,9 @@ public class HexFontRenderer extends FontRenderer {
     public int getStringWidth(String text) {
         // CNPC GUIs must use vanilla metrics
         if (isCustomNpcScreen()) {
+            return this.base.getStringWidth(text == null ? "" : text);
+        }
+        if (shouldUseVanillaAchievementPath(text)) {
             return this.base.getStringWidth(text == null ? "" : text);
         }
 
@@ -1275,9 +1527,15 @@ public class HexFontRenderer extends FontRenderer {
         if (isCustomNpcScreen()) {
             return this.base.trimStringToWidth(text == null ? "" : text, width, reverse);
         }
+        if (shouldUseVanillaAchievementPath(text)) {
+            return this.base.trimStringToWidth(text == null ? "" : text, width, reverse);
+        }
 
         // Leave special GUIs alone
         if (isForgeModListLike() || isJourneyMapManageWaypointsScreen()) {
+            return this.base.trimStringToWidth(text, width, reverse);
+        }
+        if (shouldUseVanillaAchievementPath(text)) {
             return this.base.trimStringToWidth(text, width, reverse);
         }
 
@@ -1505,6 +1763,7 @@ public class HexFontRenderer extends FontRenderer {
 
         // Journeymap waypoints etc → bypass
         if (isJourneyMapManageWaypointsScreen()) return true;
+        if (isAchievementLikeScreen()) return true;
 
         return false;
     }
@@ -1709,6 +1968,14 @@ public class HexFontRenderer extends FontRenderer {
             }
             return this.base.listFormattedStringToWidth(text, width);
         }
+        if (shouldUseVanillaAchievementPath(text)) {
+            if (text == null) {
+                List<String> out = new ArrayList<String>();
+                out.add("");
+                return out;
+            }
+            return this.base.listFormattedStringToWidth(text, width);
+        }
 
         // Safety / null behaviour identical to vanilla
         if (text == null) {
@@ -1722,6 +1989,9 @@ public class HexFontRenderer extends FontRenderer {
             return this.base.listFormattedStringToWidth(fixSectionJunk(text), width);
         }
         if (isJourneyMapManageWaypointsScreen()) {
+            return this.base.listFormattedStringToWidth(text, width);
+        }
+        if (shouldUseVanillaAchievementPath(text)) {
             return this.base.listFormattedStringToWidth(text, width);
         }
 
@@ -2097,6 +2367,9 @@ public class HexFontRenderer extends FontRenderer {
         if (isCustomNpcScreen()) {
             return this.base.drawString(text, x, y, applyForcedMul(color), shadow);
         }
+        if (shouldUseVanillaAchievementPath(text)) {
+            return this.base.drawString(text, x, y, applyForcedMul(color), shadow);
+        }
 
         if (isForgeModListLike()) {
             return this.base.drawString(fixSectionJunk(text), x, y, applyForcedMul(color), shadow);
@@ -2105,6 +2378,10 @@ public class HexFontRenderer extends FontRenderer {
         this.syncBaseStateFromThis();
 
         if (isJourneyMapManageWaypointsScreen()) {
+            return this.base.drawString(text, x, y, applyForcedMul(color), shadow);
+
+        }
+        if (shouldUseVanillaAchievementPath(text)) {
             return this.base.drawString(text, x, y, applyForcedMul(color), shadow);
 
         }
@@ -2128,6 +2405,9 @@ public class HexFontRenderer extends FontRenderer {
         if (isCustomNpcScreen()) {
             return this.base.drawStringWithShadow(text, x, y, color);
         }
+        if (shouldUseVanillaAchievementPath(text)) {
+            return this.base.drawStringWithShadow(text, x, y, color);
+        }
 
         if (isForgeModListLike()) {
             return this.base.drawStringWithShadow(fixSectionJunk(text), x, y, color);
@@ -2136,6 +2416,9 @@ public class HexFontRenderer extends FontRenderer {
         this.syncBaseStateFromThis();
 
         if (isJourneyMapManageWaypointsScreen()) {
+            return this.base.drawStringWithShadow(text, x, y, color);
+        }
+        if (shouldUseVanillaAchievementPath(text)) {
             return this.base.drawStringWithShadow(text, x, y, color);
         }
 
@@ -3890,6 +4173,163 @@ public class HexFontRenderer extends FontRenderer {
         return this.drawString(s, x, y, main, shadow);
     }
 
+    private int drawGlowTextPulse(String s, int x, int y, int textColor, int glowColor,
+                                  boolean shadow, float speed, float amp) {
+        if (s == null || s.isEmpty()) return 0;
+
+        float sp = (speed <= 0.01F ? 0.70F : speed);
+        float strength = clamp01(amp <= 0.0F ? 0.50F : amp);
+
+        float pulse = 0.5F + 0.5F * (float)Math.sin(timeSeconds() * sp * ((float)Math.PI * 2F));
+        float baseBand = 0.58F + (0.42F * pulse);
+        float mul = clamp01((1.0F - strength) + (strength * baseBand));
+        float topBottomMul = clamp01(mul * 0.78F);
+        float outerMul = clamp01(mul * 0.46F);
+
+        boolean forceSolidHalo = (glowColor >= 0);
+        int haloColor = forceSolidHalo ? (glowColor & 0xFFFFFF) : (textColor & 0xFFFFFF);
+
+        boolean prevSolid = FORCE_COLOR_SOLID;
+        int prevSolidCol = FORCED_COLOR_SOLID;
+        boolean prevMul = FORCE_COLOR_MUL;
+        float prevMulVal = FORCED_COLOR_MUL;
+
+        FORCE_COLOR_SOLID = forceSolidHalo;
+        if (forceSolidHalo) {
+            FORCED_COLOR_SOLID = haloColor;
+        }
+        FORCE_COLOR_MUL = true;
+        FORCED_COLOR_MUL = mul;
+
+        try {
+            // Slightly thicker than before, but still soft: strong side halo + faint outer side ring + top/bottom feather.
+            this.drawString(s, x + 1, y, haloColor, false);
+            this.drawString(s, x - 1, y, haloColor, false);
+
+            FORCED_COLOR_MUL = outerMul;
+            this.drawString(s, x + 2, y, haloColor, false);
+            this.drawString(s, x - 2, y, haloColor, false);
+
+            FORCED_COLOR_MUL = topBottomMul;
+            this.drawString(s, x, y - 1, haloColor, false);
+            this.drawString(s, x, y + 1, haloColor, false);
+        } finally {
+            FORCE_COLOR_SOLID = prevSolid;
+            FORCED_COLOR_SOLID = prevSolidCol;
+            FORCE_COLOR_MUL = prevMul;
+            FORCED_COLOR_MUL = prevMulVal;
+        }
+
+        return this.drawString(s, x, y, textColor, shadow);
+    }
+
+    private void drawGlowOverlayPlain(String plain, int x, int y, int fallbackTextColor,
+                                      float speed, float amp,
+                                      java.util.List<Op> kids, int explicitHaloColor, Op glowOp) {
+        if (plain == null || plain.isEmpty()) return;
+
+        float sp = (speed <= 0.01F ? 0.70F : speed);
+        float strength = clamp01(amp <= 0.0F ? 0.50F : amp);
+
+        float pulse = 0.5F + 0.5F * (float)Math.sin(timeSeconds() * sp * ((float)Math.PI * 2F));
+        float baseBand = 0.58F + (0.42F * pulse);
+        float mul = clamp01((1.0F - strength) + (strength * baseBand));
+        float topBottomMul = clamp01(mul * 0.72F);
+
+        int fx = x;
+        for (int i = 0; i < plain.length(); i++) {
+            char c = plain.charAt(i);
+
+            int cw = this.base.getCharWidth(c);
+            if (cw < 0) cw = this.base.getStringWidth(String.valueOf(c));
+            if (cw < 0) cw = 0;
+
+            int halo;
+            if (glowOp != null && glowOp.glowHaloRainbow && explicitHaloColor < 0) {
+                halo = sampleDirectRainbowColorAt(i, plain.length(),
+                        glowOp.glowHaloRbwSpeed,
+                        glowOp.glowHaloRbwCycles,
+                        glowOp.glowHaloRbwSat,
+                        glowOp.glowHaloRbwVal) & 0xFFFFFF;
+            } else {
+                halo = (explicitHaloColor >= 0)
+                        ? (explicitHaloColor & 0xFFFFFF)
+                        : ((kids != null && !kids.isEmpty())
+                        ? (colorAtIndexFromOps(kids, i, fallbackTextColor) & 0xFFFFFF)
+                        : (fallbackTextColor & 0xFFFFFF));
+            }
+
+            halo = applyForcedColor(halo);
+
+            int sideCol = mulRGB(halo, mul);
+            int topBottomCol = mulRGB(halo, topBottomMul);
+            int outerSideCol = mulRGB(halo, clamp01(mul * 0.46F));
+
+            String ch = String.valueOf(c);
+            this.base.drawString(ch, fx + 1, y, argb(0.76F, sideCol), false);
+            this.base.drawString(ch, fx - 1, y, argb(0.76F, sideCol), false);
+            this.base.drawString(ch, fx + 2, y, argb(0.24F, outerSideCol), false);
+            this.base.drawString(ch, fx - 2, y, argb(0.24F, outerSideCol), false);
+            this.base.drawString(ch, fx, y - 1, argb(0.44F, topBottomCol), false);
+            this.base.drawString(ch, fx, y + 1, argb(0.44F, topBottomCol), false);
+
+            fx += cw;
+        }
+    }
+
+    private int drawDirectRainbowFillPlain(String plain, int x, int y, boolean shadow, Op glowOp, int fallbackColor) {
+        if (plain == null || plain.isEmpty()) return 0;
+        if (glowOp == null || !glowOp.glowFillRainbow) {
+            return this.drawString(plain, x, y, fallbackColor, shadow);
+        }
+
+        int fx = x;
+        for (int i = 0; i < plain.length(); i++) {
+            char c = plain.charAt(i);
+            int cw = this.base.getCharWidth(c);
+            if (cw < 0) cw = this.base.getStringWidth(String.valueOf(c));
+            if (cw < 0) cw = 0;
+
+            int col = sampleDirectRainbowColorAt(i, plain.length(),
+                    glowOp.glowFillRbwSpeed,
+                    glowOp.glowFillRbwCycles,
+                    glowOp.glowFillRbwSat,
+                    glowOp.glowFillRbwVal) & 0xFFFFFF;
+
+            this.base.drawString(String.valueOf(c), fx, y, argb(1.0F, col), shadow);
+            fx += cw;
+        }
+        return Math.max(0, fx - x);
+    }
+
+    private int sampleDirectRainbowColorAt(int i, int len, float speed, float cycles, float sat, float val) {
+        float tphase = 0.0F;
+        if (speed > 0.0F) {
+            tphase = (timeSeconds() * speed) % 1.0F;
+        }
+
+        float t = (len <= 1) ? 0.0F : (float)i / (float)(len - 1);
+        float h01 = (tphase + t * Math.max(0.01F, cycles)) % 1.0F;
+        return hsvToRgb(h01 * 360.0F, clamp01(sat), clamp01(val)) & 0xFFFFFF;
+    }
+
+    private int drawOpsForcedSolid(java.util.List<Op> kids, int x, int y, int solidColor, boolean shadow) {
+        if (kids == null || kids.isEmpty()) return 0;
+
+        boolean prevSolid = FORCE_COLOR_SOLID;
+        int prevSolidCol = FORCED_COLOR_SOLID;
+
+        FORCE_COLOR_SOLID = true;
+        FORCED_COLOR_SOLID = (solidColor & 0xFFFFFF);
+
+        try {
+            return drawOps(kids, x, y, solidColor, shadow);
+        } finally {
+            FORCE_COLOR_SOLID = prevSolid;
+            FORCED_COLOR_SOLID = prevSolidCol;
+        }
+    }
+
     private void drawSparkleOverlayPlain(String plain, int x, int y, int color, boolean shadow,
                                          float intensity, float speed,
                                          java.util.List<Op> kids, Op op) {
@@ -4705,6 +5145,134 @@ public class HexFontRenderer extends FontRenderer {
         }
     }
 
+    private static void parseGlowArgs(String attrs, Op out) {
+        // Default: halo inherits current style unless explicitly set.
+        // Fill defaults to white so <glow><grad ...>text</grad></glow>
+        // gives white letters + colored halo unless the user opts in.
+        out.outlineColor = -1;    // -1 = inherit current text color for halo
+        out.rgb = 0xFFFFFF;       // default solid fill is white
+        out.glowFillNested = false;
+        out.glowHaloRainbow = false;
+        out.glowFillRainbow = false;
+        out.glowHaloRbwSpeed = 1.0F;
+        out.glowFillRbwSpeed = 1.0F;
+        out.glowHaloRbwCycles = 1.0F;
+        out.glowFillRbwCycles = 1.0F;
+        out.glowHaloRbwSat = 1.0F;
+        out.glowFillRbwSat = 1.0F;
+        out.glowHaloRbwVal = 1.0F;
+        out.glowFillRbwVal = 1.0F;
+        out.pulseSpeed = 0.70F;   // slower by default
+        out.pulseAmp = 0.50F;     // gentler pulse by default
+
+        if (attrs == null) return;
+
+        // Explicit halo color aliases
+        String glowSpec = getStr(attrs, "glow", null);
+        if (glowSpec == null) glowSpec = getStr(attrs, "halo", null);
+        if (glowSpec != null && !glowSpec.trim().isEmpty()) {
+            String gs = glowSpec.trim();
+            if ("rbw".equalsIgnoreCase(gs)
+                    || "rainbow".equalsIgnoreCase(gs)
+                    || "rb".equalsIgnoreCase(gs)
+                    || "prism".equalsIgnoreCase(gs)) {
+                out.glowHaloRainbow = true;
+                out.outlineColor = -1;
+            } else {
+                out.outlineColor = parseHexColor(gs, out.outlineColor);
+                out.glowHaloRainbow = false;
+            }
+        }
+
+        // Fill controls:
+        //   fill=#RRGGBB     -> solid fill color
+        //   fill=nested      -> nested styles also tint/fill the letters
+        //   fill=inherit     -> use current outer/base color as solid fill
+        String fillSpec = getStr(attrs, "fill", null);
+        if (fillSpec != null && !fillSpec.trim().isEmpty()) {
+            String fs = fillSpec.trim();
+            if ("nested".equalsIgnoreCase(fs)
+                    || "style".equalsIgnoreCase(fs)
+                    || "styled".equalsIgnoreCase(fs)
+                    || "bridge".equalsIgnoreCase(fs)
+                    || "match".equalsIgnoreCase(fs)
+                    || "true".equalsIgnoreCase(fs)
+                    || "1".equalsIgnoreCase(fs)) {
+                out.glowFillNested = true;
+                out.glowFillRainbow = false;
+            } else if ("inherit".equalsIgnoreCase(fs)
+                    || "current".equalsIgnoreCase(fs)
+                    || "base".equalsIgnoreCase(fs)
+                    || "outer".equalsIgnoreCase(fs)) {
+                out.rgb = -1;
+                out.glowFillRainbow = false;
+            } else if ("rbw".equalsIgnoreCase(fs)
+                    || "rainbow".equalsIgnoreCase(fs)
+                    || "rb".equalsIgnoreCase(fs)
+                    || "prism".equalsIgnoreCase(fs)) {
+                out.glowFillRainbow = true;
+                out.glowFillNested = false;
+            } else {
+                out.rgb = parseHexColor(fs, out.rgb);
+                out.glowFillRainbow = false;
+            }
+        }
+
+        // Explicit main text color aliases
+        String textSpec = getStr(attrs, "text", null);
+        if (textSpec == null) textSpec = getStr(attrs, "color", null);
+        if (textSpec == null) textSpec = getStr(attrs, "fillcolor", null);
+        if (textSpec != null && !textSpec.trim().isEmpty()) {
+            String ts = textSpec.trim();
+            if ("rbw".equalsIgnoreCase(ts)
+                    || "rainbow".equalsIgnoreCase(ts)
+                    || "rb".equalsIgnoreCase(ts)
+                    || "prism".equalsIgnoreCase(ts)) {
+                out.glowFillRainbow = true;
+            } else {
+                out.rgb = parseHexColor(ts, out.rgb);
+                out.glowFillRainbow = false;
+            }
+            out.glowFillNested = false;
+        }
+
+        // Shorthand: first bare hex = halo, second bare hex = main text color.
+        List<String> hexes = parseHexTokens(attrs);
+        if (!hexes.isEmpty() && out.outlineColor < 0) {
+            out.outlineColor = parseHexRGB(hexes.get(0));
+        }
+        if (hexes.size() >= 2) {
+            out.rgb = parseHexRGB(hexes.get(1));
+            out.glowFillNested = false;
+            out.glowFillRainbow = false;
+        }
+
+        out.glowHaloRbwSpeed = getFloat(attrs, "glowSpeed", out.glowHaloRbwSpeed);
+        out.glowHaloRbwSpeed = getFloat(attrs, "haloSpeed", out.glowHaloRbwSpeed);
+        out.glowHaloRbwSpeed = getFloat(attrs, "rainbowSpeed", out.glowHaloRbwSpeed);
+        out.glowHaloRbwCycles = getFloat(attrs, "glowCycles", out.glowHaloRbwCycles);
+        out.glowHaloRbwCycles = getFloat(attrs, "haloCycles", out.glowHaloRbwCycles);
+        out.glowHaloRbwSat = clamp01(getFloat(attrs, "glowSat", out.glowHaloRbwSat));
+        out.glowHaloRbwSat = clamp01(getFloat(attrs, "haloSat", out.glowHaloRbwSat));
+        out.glowHaloRbwVal = clamp01(getFloat(attrs, "glowVal", out.glowHaloRbwVal));
+        out.glowHaloRbwVal = clamp01(getFloat(attrs, "haloVal", out.glowHaloRbwVal));
+
+        out.glowFillRbwSpeed = getFloat(attrs, "fillSpeed", out.glowFillRbwSpeed);
+        out.glowFillRbwSpeed = getFloat(attrs, "textSpeed", out.glowFillRbwSpeed);
+        out.glowFillRbwCycles = getFloat(attrs, "fillCycles", out.glowFillRbwCycles);
+        out.glowFillRbwCycles = getFloat(attrs, "textCycles", out.glowFillRbwCycles);
+        out.glowFillRbwSat = clamp01(getFloat(attrs, "fillSat", out.glowFillRbwSat));
+        out.glowFillRbwSat = clamp01(getFloat(attrs, "textSat", out.glowFillRbwSat));
+        out.glowFillRbwVal = clamp01(getFloat(attrs, "fillVal", out.glowFillRbwVal));
+        out.glowFillRbwVal = clamp01(getFloat(attrs, "textVal", out.glowFillRbwVal));
+
+        out.pulseSpeed = getFloat(attrs, "speed", out.pulseSpeed);
+        out.pulseSpeed = getFloat(attrs, "pulseSpeed", out.pulseSpeed);
+        out.pulseAmp = clamp01(getFloat(attrs, "amp", out.pulseAmp));
+        out.pulseAmp = clamp01(getFloat(attrs, "strength", out.pulseAmp));
+        out.pulseAmp = clamp01(getFloat(attrs, "pulseAmp", out.pulseAmp));
+    }
+
     private static void parseSparkleArgs(String attrs, Op out) {
         // default sparkle
         out.sparkleIntensity = 1.0F;
@@ -4982,6 +5550,26 @@ public class HexFontRenderer extends FontRenderer {
             return false;
         }
         return true;
+    }
+
+    private static boolean needsColorAwareGlowBridge(List<Op> kids) {
+        if (kids == null || kids.isEmpty()) return false;
+
+        for (Op c : kids) {
+            if (c == null) continue;
+
+            if (c.kind == Kind.PUSH_HEX
+                    || c.kind == Kind.POP_HEX
+                    || c.kind == Kind.GRADIENT_MULTI
+                    || c.kind == Kind.RAINBOW_TEXT) {
+                return true;
+            }
+
+            if (c.children != null && !c.children.isEmpty() && needsColorAwareGlowBridge(c.children)) {
+                return true;
+            }
+        }
+        return false;
     }
 
 
@@ -5721,6 +6309,151 @@ public class HexFontRenderer extends FontRenderer {
                 }
 
 
+                case GLOW_TEXT: {
+                    int fillCol = (op.rgb >= 0 ? op.rgb : (hexActive ? activeHexRGB : baseColor));
+                    boolean fillNested = op.glowFillNested;
+                    boolean haloRainbow = op.glowHaloRainbow;
+                    boolean fillRainbow = op.glowFillRainbow;
+                    boolean forceSolidHalo = (op.outlineColor >= 0) && !haloRainbow;
+                    int glowCol = forceSolidHalo ? op.outlineColor : fillCol;
+                    float sp = (op.pulseSpeed <= 0.01F ? 0.70F : op.pulseSpeed);
+                    float strength = clamp01(op.pulseAmp <= 0.0F ? 0.50F : op.pulseAmp);
+
+                    if (op.children != null && !op.children.isEmpty()) {
+                        String plain = plainTextFromOps(op.children);
+                        boolean colorAware = needsColorAwareGlowBridge(op.children);
+
+                        if (hasOnlyColorOps(op.children)) {
+                            // Color-only nested wrappers (hex/grad/rbw).
+                            if (colorAware) {
+                                // Halo follows nested colors; fill stays solid unless fill=nested.
+                                drawGlowOverlayPlain(plain, cursorX, y, fillCol, sp, strength, op.children,
+                                        forceSolidHalo ? glowCol : -1, op);
+
+                                int adv;
+                                if (fillNested) {
+                                    adv = drawOps(op.children, cursorX, y, fillCol, shadow);
+                                } else if (fillRainbow) {
+                                    adv = drawDirectRainbowFillPlain(plain, cursorX, y, shadow, op, fillCol);
+                                } else {
+                                    adv = this.drawString(plain, cursorX, y, fillCol, shadow);
+                                }
+
+                                cursorX += adv;
+                                maxRight = Math.max(maxRight, cursorX);
+                            } else {
+                                // Simple single-color nested content.
+                                int adv;
+                                if (haloRainbow || fillRainbow) {
+                                    drawGlowOverlayPlain(plain, cursorX, y, fillCol, sp, strength, op.children,
+                                            forceSolidHalo ? glowCol : -1, op);
+                                    if (fillNested) {
+                                        boolean prevSolid = FORCE_COLOR_SOLID;
+                                        int prevSolidCol = FORCED_COLOR_SOLID;
+                                        try {
+                                            FORCE_COLOR_SOLID = false;
+                                            adv = drawOps(op.children, cursorX, y, fillCol, shadow);
+                                        } finally {
+                                            FORCE_COLOR_SOLID = prevSolid;
+                                            FORCED_COLOR_SOLID = prevSolidCol;
+                                        }
+                                    } else if (fillRainbow) {
+                                        adv = drawDirectRainbowFillPlain(plain, cursorX, y, shadow, op, fillCol);
+                                    } else {
+                                        adv = this.drawString(plain, cursorX, y, fillCol, shadow);
+                                    }
+                                } else {
+                                    adv = drawGlowTextPulse(plain, cursorX, y, fillCol,
+                                            forceSolidHalo ? glowCol : -1, shadow, sp, strength);
+
+                                    if (fillNested) {
+                                        boolean prevSolid = FORCE_COLOR_SOLID;
+                                        int prevSolidCol = FORCED_COLOR_SOLID;
+                                        try {
+                                            // Repaint the fill with the nested style on top when requested.
+                                            FORCE_COLOR_SOLID = false;
+                                            adv = drawOps(op.children, cursorX, y, fillCol, shadow);
+                                        } finally {
+                                            FORCE_COLOR_SOLID = prevSolid;
+                                            FORCED_COLOR_SOLID = prevSolidCol;
+                                        }
+                                    }
+                                }
+
+                                cursorX += adv;
+                                maxRight = Math.max(maxRight, cursorX);
+                            }
+                        } else {
+                            // Mixed/nested animated wrappers. Keep nested styles for the halo.
+                            float pulse = 0.5F + 0.5F * (float)Math.sin(timeSeconds() * sp * ((float)Math.PI * 2F));
+                            float baseBand = 0.58F + (0.42F * pulse);
+                            float mul = clamp01((1.0F - strength) + (strength * baseBand));
+                            float topBottomMul = clamp01(mul * 0.78F);
+                            float outerMul = clamp01(mul * 0.46F);
+
+                            boolean prevSolid = FORCE_COLOR_SOLID;
+                            int prevSolidCol = FORCED_COLOR_SOLID;
+                            boolean prevMul = FORCE_COLOR_MUL;
+                            float prevMulVal = FORCED_COLOR_MUL;
+
+                            FORCE_COLOR_SOLID = forceSolidHalo;
+                            if (forceSolidHalo) {
+                                FORCED_COLOR_SOLID = glowCol;
+                            }
+                            FORCE_COLOR_MUL = true;
+                            FORCED_COLOR_MUL = mul;
+
+                            try {
+                                drawOps(op.children, cursorX + 1, y, fillCol, false);
+                                drawOps(op.children, cursorX - 1, y, fillCol, false);
+
+                                FORCED_COLOR_MUL = outerMul;
+                                drawOps(op.children, cursorX + 2, y, fillCol, false);
+                                drawOps(op.children, cursorX - 2, y, fillCol, false);
+
+                                FORCED_COLOR_MUL = topBottomMul;
+                                drawOps(op.children, cursorX, y - 1, fillCol, false);
+                                drawOps(op.children, cursorX, y + 1, fillCol, false);
+                            } finally {
+                                FORCE_COLOR_SOLID = prevSolid;
+                                FORCED_COLOR_SOLID = prevSolidCol;
+                                FORCE_COLOR_MUL = prevMul;
+                                FORCED_COLOR_MUL = prevMulVal;
+                            }
+
+                            int adv;
+                            if (fillNested) {
+                                adv = drawOps(op.children, cursorX, y, fillCol, shadow);
+                            } else if (fillRainbow) {
+                                adv = drawDirectRainbowFillPlain(plain, cursorX, y, shadow, op, fillCol);
+                            } else {
+                                adv = this.drawString(plain, cursorX, y, fillCol, shadow);
+                            }
+
+                            cursorX += adv;
+                            maxRight = Math.max(maxRight, cursorX);
+                        }
+                    } else {
+                        int adv;
+                        if (haloRainbow || fillRainbow) {
+                            String plain = cleanPayload(op.payload);
+                            drawGlowOverlayPlain(plain, cursorX, y, fillCol, sp, strength, null,
+                                    forceSolidHalo ? glowCol : -1, op);
+                            if (fillRainbow) {
+                                adv = drawDirectRainbowFillPlain(plain, cursorX, y, shadow, op, fillCol);
+                            } else {
+                                adv = this.drawString(plain, cursorX, y, fillCol, shadow);
+                            }
+                        } else {
+                            adv = drawGlowTextPulse(op.payload, cursorX, y, fillCol,
+                                    forceSolidHalo ? glowCol : -1, shadow, sp, strength);
+                        }
+                        cursorX += adv;
+                        maxRight = Math.max(maxRight, cursorX);
+                    }
+                    break;
+                }
+
                 case SPARKLE_TEXT: {
                     int col = (op.rgb >= 0 ? op.rgb : (hexActive ? activeHexRGB : baseColor));
 
@@ -5890,6 +6623,10 @@ public class HexFontRenderer extends FontRenderer {
             Matcher mshdA = Pattern.compile("(?i)<\\s*shadow([^>]*)>").matcher(s);
             Matcher mshdC = Pattern.compile("(?i)[«]\\s*shadow([^»]*)[»]").matcher(s);
 
+            // GLOW
+            Matcher mglwA = Pattern.compile("(?i)<\\s*glow([^>]*)>").matcher(s);
+            Matcher mglwC = Pattern.compile("(?i)[«]\\s*glow([^»]*)[»]").matcher(s);
+
             // SPARKLE
             Matcher mspA  = Pattern.compile("(?i)<\\s*sparkle([^>]*)>").matcher(s);
             Matcher mspC  = Pattern.compile("(?i)[«]\\s*sparkle([^»]*)[»]").matcher(s);
@@ -5936,6 +6673,8 @@ public class HexFontRenderer extends FontRenderer {
             boolean outC = moutC.find();
             boolean shdA = mshdA.find();
             boolean shdC = mshdC.find();
+            boolean glwA = mglwA.find();
+            boolean glwC = mglwC.find();
             boolean spA  = mspA.find();
             boolean spC  = mspC.find();
             boolean flA  = mfA.find();
@@ -5949,7 +6688,7 @@ public class HexFontRenderer extends FontRenderer {
                     !rnA && !rnC && !scA && !scC &&
                     !snA && !snC &&
                     !jitA && !jitC && !wbA && !wbC &&
-                    !lpA && !lpC && !ssA && !ssC && !outA && !outC && !shdA && !shdC &&
+                    !lpA && !lpC && !ssA && !ssC && !outA && !outC && !shdA && !shdC && !glwA && !glwC &&
                     !spA && !spC && !flA && !flC &&
                     !glA && !glC &&
                     !iA && !iC) {
@@ -5992,6 +6731,8 @@ public class HexFontRenderer extends FontRenderer {
             int idxOUTC = outC ? moutC.start() : Integer.MAX_VALUE;
             int idxSHDA = shdA ? mshdA.start() : Integer.MAX_VALUE;
             int idxSHDC = shdC ? mshdC.start() : Integer.MAX_VALUE;
+            int idxGLWA = glwA ? mglwA.start() : Integer.MAX_VALUE;
+            int idxGLWC = glwC ? mglwC.start() : Integer.MAX_VALUE;
             int idxSPA  = spA  ? mspA.start()  : Integer.MAX_VALUE;
             int idxSPC  = spC  ? mspC.start()  : Integer.MAX_VALUE;
             int idxFLA  = flA  ? mfA.start()   : Integer.MAX_VALUE;
@@ -6032,6 +6773,8 @@ public class HexFontRenderer extends FontRenderer {
             pick = Math.min(pick, idxOUTC);
             pick = Math.min(pick, idxSHDA);
             pick = Math.min(pick, idxSHDC);
+            pick = Math.min(pick, idxGLWA);
+            pick = Math.min(pick, idxGLWC);
             pick = Math.min(pick, idxSPA);
             pick = Math.min(pick, idxSPC);
             pick = Math.min(pick, idxFLA);
@@ -6079,6 +6822,8 @@ public class HexFontRenderer extends FontRenderer {
                 moutC = Pattern.compile("(?i)[«]\\s*outline([^»]*)[»]").matcher(s);
                 mshdA = Pattern.compile("(?i)<\\s*shadow([^>]*)>").matcher(s);
                 mshdC = Pattern.compile("(?i)[«]\\s*shadow([^»]*)[»]").matcher(s);
+                mglwA = Pattern.compile("(?i)<\\s*glow([^>]*)>").matcher(s);
+                mglwC = Pattern.compile("(?i)[«]\\s*glow([^»]*)[»]").matcher(s);
                 mspA  = Pattern.compile("(?i)<\\s*sparkle([^>]*)>").matcher(s);
                 mspC  = Pattern.compile("(?i)[«]\\s*sparkle([^»]*)[»]").matcher(s);
                 mfA   = Pattern.compile("(?i)<\\s*flicker([^>]*)>").matcher(s);
@@ -6101,6 +6846,7 @@ public class HexFontRenderer extends FontRenderer {
                 boolean shootingStarAt = mssA.lookingAt() || mssC.lookingAt();
                 boolean outlineAt = moutA.lookingAt() || moutC.lookingAt();
                 boolean shadowAt  = mshdA.lookingAt() || mshdC.lookingAt();
+                boolean glowAt    = mglwA.lookingAt() || mglwC.lookingAt();
                 boolean sparkleAt = mspA.lookingAt()  || mspC.lookingAt();
                 boolean flickerAt = mfA.lookingAt()   || mfC.lookingAt();
                 boolean glitchAt  = mglA.lookingAt()  || mglC.lookingAt();
@@ -6569,6 +7315,33 @@ public class HexFontRenderer extends FontRenderer {
                     continue;
                 }
 
+                if (glowAt) {
+                    boolean chev = mglwC.lookingAt();
+                    Matcher mOpen = chev ? mglwC : mglwA;
+                    int openEnd = mOpen.end();
+                    String attrs = mOpen.group(1);
+
+                    Matcher close = Pattern.compile("(?i)</\\s*glow\\s*>")
+                            .matcher(s).region(openEnd, s.length());
+
+                    boolean found = close.find();
+
+                    String inner = found
+                            ? s.substring(openEnd, close.start())
+                            : s.substring(openEnd);
+
+                    Op o = new Op();
+                    o.kind = Kind.GLOW_TEXT;
+                    parseGlowArgs(attrs, o);
+
+                    o.payload = inner;
+                    o.children = parseChildren(inner);
+
+                    ops.add(o);
+                    s = found ? s.substring(close.end()) : "";
+                    continue;
+                }
+
                 if (sparkleAt) {
                     boolean chev = mspC.lookingAt();
                     Matcher mOpen = chev ? mspC : mspA;
@@ -6717,7 +7490,7 @@ public class HexFontRenderer extends FontRenderer {
 
             // NEW: strip closers for our extra block tags
             s = s.replaceAll(
-                    "(?i)</\\s*(wave|shake|zoom|rain|scroll|outline|shadow|sparkle|flicker|glitch|jitter|wobble)\\s*>",
+                    "(?i)</\\s*(wave|shake|zoom|rain|scroll|outline|shadow|glow|sparkle|flicker|glitch|jitter|wobble)\\s*>",
                     ""
             );
 
@@ -6950,6 +7723,7 @@ public class HexFontRenderer extends FontRenderer {
         SCROLL_TEXT,
         OUTLINE_TEXT,
         SHADOW_TEXT,
+        GLOW_TEXT,
         SPARKLE_TEXT,
         FLICKER_TEXT,
         GLITCH_TEXT,
@@ -7058,6 +7832,17 @@ public class HexFontRenderer extends FontRenderer {
         public List<Op> children;
         // parsed ops for inner text
         String plain;                    // inner text stripped for width/flake band
+        boolean glowFillNested = false;    // for <glow fill=nested>, let nested styles tint the fill too
+        boolean glowHaloRainbow = false;   // for <glow glow=rbw>
+        boolean glowFillRainbow = false;   // for <glow fill=rbw>
+        float glowHaloRbwSpeed = 1.0F;
+        float glowFillRbwSpeed = 1.0F;
+        float glowHaloRbwCycles = 1.0F;
+        float glowFillRbwCycles = 1.0F;
+        float glowHaloRbwSat = 1.0F;
+        float glowFillRbwSat = 1.0F;
+        float glowHaloRbwVal = 1.0F;
+        float glowFillRbwVal = 1.0F;
 
 
         // ──────────────────────────────
@@ -7151,17 +7936,28 @@ public class HexFontRenderer extends FontRenderer {
     // ─────────────────────────────────────────────────────────────
     @Override
     public void drawSplitString(String str, int x, int y, int wrapWidth, int textColor) {
-        if (isForgeModListLike() && this.base != null) {
-            this.base.drawSplitString(fixSectionJunk(str), x, y, wrapWidth, textColor);
-            return;
+        if (this.base != null) {
+            if (isForgeModListLike()) {
+                this.base.drawSplitString(fixSectionJunk(str), x, y, wrapWidth, textColor);
+                return;
+            }
+            if (shouldUseVanillaAchievementPath(str)) {
+                this.base.drawSplitString(str, x, y, wrapWidth, textColor);
+                return;
+            }
         }
         super.drawSplitString(str, x, y, wrapWidth, textColor);
     }
 
     @Override
     public int splitStringWidth(String str, int wrapWidth) {
-        if (isForgeModListLike() && this.base != null) {
-            return this.base.splitStringWidth(fixSectionJunk(str), wrapWidth);
+        if (this.base != null) {
+            if (isForgeModListLike()) {
+                return this.base.splitStringWidth(fixSectionJunk(str), wrapWidth);
+            }
+            if (shouldUseVanillaAchievementPath(str)) {
+                return this.base.splitStringWidth(str, wrapWidth);
+            }
         }
         return super.splitStringWidth(str, wrapWidth);
     }

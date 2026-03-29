@@ -174,6 +174,15 @@ public class ContainerHexSocketOpener extends Container {
         ItemStack target = input.getStackInSlot(SLOT_TARGET);
         ItemStack cat = input.getStackInSlot(SLOT_CATALYST);
 
+        // Client-side containers should NEVER roll or persist offers locally.
+        // Otherwise you get a fake/stale cost flash (e.g. 167 -> different value)
+        // before the server's synced costs arrive.
+        if (player != null && player.worldObj != null && player.worldObj.isRemote) {
+            costs[0] = costs[1] = costs[2] = 0;
+            baseCosts[0] = baseCosts[1] = baseCosts[2] = 0;
+            return;
+        }
+
         // We recompute display costs when either:
         //  - the target changes (including being removed/re-added)
         //  - the material tier changes (or material removed/added)
@@ -408,6 +417,10 @@ public class ContainerHexSocketOpener extends Container {
     public boolean enchantItem(EntityPlayer player, int buttonId) {
         if (buttonId < 0 || buttonId > 2) return false;
 
+        // IMPORTANT: Only perform the roll/consume/apply on the server.
+        // NEI/GUI can invoke this on the client too; client-side RNG would desync results/messages.
+        if (player.worldObj != null && player.worldObj.isRemote) return true;
+
         ItemStack target = input.getStackInSlot(SLOT_TARGET);
         ItemStack cat = input.getStackInSlot(SLOT_CATALYST);
         if (target == null || cat == null) return false;
@@ -428,13 +441,6 @@ public class ContainerHexSocketOpener extends Container {
         int add = Math.min(buttonId + 1, remaining);
         if (add <= 0) return false;
 
-        // Consume material + XP first (attempt cost), unless creative.
-        if (!creative) {
-            player.addExperienceLevel(-cost);
-            cat.stackSize--;
-            if (cat.stackSize <= 0) input.setInventorySlotContents(SLOT_CATALYST, null);
-        }
-
         // Chance roll (rarer material => higher chance)
         MaterialInfo mi = getMaterialInfo(cat);
         if (mi == null) return false;
@@ -443,6 +449,17 @@ public class ContainerHexSocketOpener extends Container {
         boolean success = rr.nextDouble() < mi.successChance;
 
         if (success) {
+            // Consume material only on success. Creative still bypasses the XP cost,
+            // but it no longer bypasses catalyst consumption.
+            if (!creative) {
+                player.addExperienceLevel(-cost);
+            }
+
+            cat.stackSize--;
+            if (cat.stackSize <= 0) {
+                input.setInventorySlotContents(SLOT_CATALYST, null);
+            }
+
             HexSocketAPI.setSocketsOpen(target, open + add);
             try { HexSocketAPI.syncSocketsPageOnly(target); } catch (Throwable ignored) {}
         } else {
@@ -542,14 +559,26 @@ public class ContainerHexSocketOpener extends Container {
     @Override
     public void onContainerClosed(EntityPlayer player) {
         super.onContainerClosed(player);
-        // Drop leftovers like vanilla
+
         if (!player.worldObj.isRemote) {
+            // Return leftovers to inventory first (like the socket station). Only drop if inventory is full.
             ItemStack a = input.getStackInSlot(SLOT_TARGET);
             ItemStack b = input.getStackInSlot(SLOT_CATALYST);
-            if (a != null) player.dropPlayerItemWithRandomChoice(a, false);
-            if (b != null) player.dropPlayerItemWithRandomChoice(b, false);
+
+            if (a != null) {
+                if (!player.inventory.addItemStackToInventory(a)) {
+                    player.dropPlayerItemWithRandomChoice(a, false);
+                }
+            }
+            if (b != null) {
+                if (!player.inventory.addItemStackToInventory(b)) {
+                    player.dropPlayerItemWithRandomChoice(b, false);
+                }
+            }
+
             input.setInventorySlotContents(SLOT_TARGET, null);
             input.setInventorySlotContents(SLOT_CATALYST, null);
+            player.inventory.markDirty();
         }
     }
 }

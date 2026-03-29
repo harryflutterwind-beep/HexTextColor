@@ -30,6 +30,7 @@ public class ChatHexHandler {
     // ──────────────────────────────────────────────────────────
     private static Field F_FONT;
     private static Field F_SGF;
+    private static Field F_CC_GUI_DRAW_FONT;
 
     private static Field findFontField() {
         if (F_FONT != null) return F_FONT;
@@ -57,6 +58,34 @@ public class ChatHexHandler {
             } catch (Throwable ignored) {}
         }
         return null;
+    }
+
+    private static Field findCodeChickenGuiDrawFontField() {
+        if (F_CC_GUI_DRAW_FONT != null) return F_CC_GUI_DRAW_FONT;
+
+        try {
+            Class guiDraw = Class.forName("codechicken.lib.gui.GuiDraw");
+            Field f = guiDraw.getDeclaredField("fontRenderer");
+            f.setAccessible(true);
+            F_CC_GUI_DRAW_FONT = f;
+            System.out.println("[HexFont] Found CodeChicken GuiDraw.fontRenderer");
+            return f;
+        } catch (Throwable ignored) {}
+
+        return null;
+    }
+
+    private static void syncCodeChickenFontRenderer(FontRenderer fr) {
+        try {
+            if (fr == null) return;
+
+            Field f = findCodeChickenGuiDrawFontField();
+            if (f == null) return;
+
+            f.set(null, fr);
+        } catch (Throwable t) {
+            System.out.println("[HexFont] syncCodeChickenFontRenderer ERROR " + t);
+        }
     }
 
     // ──────────────────────────────────────────────────────────
@@ -97,6 +126,10 @@ public class ChatHexHandler {
             if (sgf != null) {
                 sgf.set(mc, fr);
             }
+
+            // NEI / CodeChicken can cache and use GuiDraw.fontRenderer instead of
+            // Minecraft.fontRenderer, so keep that path in sync too.
+            syncCodeChickenFontRenderer(fr);
 
             appliedFont = fr;
             System.out.println("[HexFont] setMcFonts -> " + fr.getClass().getName());

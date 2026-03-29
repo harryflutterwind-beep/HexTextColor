@@ -16,6 +16,7 @@ import net.minecraft.nbt.NBTTagList;
 import net.minecraft.nbt.NBTTagString;
 import net.minecraft.util.ChatComponentText;
 import com.example.examplemod.api.HexSocketAPI;
+import com.example.examplemod.api.LorePagesAPI;
 import com.example.examplemod.ExampleMod;
 import com.example.examplemod.gui.HexSocketStationGuiHandler;
 
@@ -46,7 +47,7 @@ public class HexSocketCommand extends CommandBase {
 
     // ─────────────────────────────────────────────────────────────
     // Lore Pages (HexLorePages) — dedicated sockets page per item
-    // Stored by LorePagesCommand at: stack.tag.HexLorePages.Pages (NBTTagList<String>)
+    // Stored by LorePagesAPI/LorePagesCommand at: stack.tag.HexLorePages.Pages (NBTTagList<Compound>)
     // We keep an index pointer in HexGems to update the same page.
     // ─────────────────────────────────────────────────────────────
     private static final String LP_ROOT = "HexLorePages";
@@ -111,19 +112,53 @@ public class HexSocketCommand extends CommandBase {
 
     @Override public String getCommandName() { return "hexsocket"; }
 
-    @Override public String getCommandUsage(ICommandSender s) {
-        // Public subcommands:
-        //  - gui    : Socket Station GUI
-        //  - opener : Socket Opener GUI
-        // Legacy aliases (station/anvil/openstation/socket) are intentionally not advertised.
-        return "/hexsocket <open|unsocket|setbonus|list|info|setmax|clear|testall|gui|opener> ...";
+    @Override
+    public String getCommandUsage(ICommandSender s) {
+        // In integrated singleplayer, allow the full toolset.
+        // On dedicated servers, keep admin/testing commands restricted.
+        if (!hasAdminAccess(s)) {
+            return "/hexsocket <list|info|gui|station|anvil|opener|hub>";
+        }
+        return "/hexsocket <open|unsocket|setbonus|list|info|setmax|clear|testall|gui|station|anvil|opener|hub> ...";
     }
+
 
     // Keep OP-only for now while you're testing
     @Override public int getRequiredPermissionLevel() { return 0; }
     @Override
     public boolean canCommandSenderUseCommand(ICommandSender sender) {
         return true; // allow everyone (even deopped)
+    }
+
+
+
+    private boolean isOp(ICommandSender sender) {
+        try {
+            // 2 is the common OP permission level for gameplay-affecting commands in 1.7.10
+            return sender != null && sender.canCommandSenderUseCommand(2, this.getCommandName());
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private boolean isIntegratedSingleplayer(ICommandSender sender) {
+        try {
+            if (sender == null) return false;
+            if (sender.getEntityWorld() == null) return false;
+            if (sender.getEntityWorld().isRemote) return false;
+            net.minecraft.server.MinecraftServer srv = net.minecraft.server.MinecraftServer.getServer();
+            if (srv == null) return false;
+            // true for local singleplayer/LAN host, false for dedicated servers
+            return !srv.isDedicatedServer();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private boolean hasAdminAccess(ICommandSender sender) {
+        // Let the local singleplayer host use the full command set without needing "cheats"-style server perms.
+        // On dedicated/multiplayer servers, fall back to OP/admin permission checks.
+        return isIntegratedSingleplayer(sender) || isOp(sender);
     }
 
     @Override
@@ -139,13 +174,37 @@ public class HexSocketCommand extends CommandBase {
             return;
         }
 
+        String sub = args[0].trim().toLowerCase();
+        boolean admin = hasAdminAccess(sender);
+
+// In integrated singleplayer, allow all subcommands.
+// On dedicated servers, keep only gameplay/UI helpers open to non-admins.
+        if (!admin) {
+            if (!("list".equals(sub) || "info".equals(sub) || "gui".equals(sub)
+                    || "station".equals(sub) || "anvil".equals(sub)
+                    || "opener".equals(sub) || "openstation".equals(sub) || "open_gui".equals(sub)
+                    || "hub".equals(sub) || "menu".equals(sub) || "dashboard".equals(sub))) {
+                p.addChatMessage(txt(PFX + "§cNo permission. §7Allowed: §f/hexsocket list§7, §f/hexsocket info§7, §f/hexsocket gui§7, §f/hexsocket opener§7, §f/hexsocket hub"));
+                return;
+            }
+        }
+
+// GUI is allowed for everyone and does not require holding an item
+        if ("gui".equals(sub) || "station".equals(sub) || "anvil".equals(sub)) {
+            p.openGui(ExampleMod.INSTANCE, HexSocketStationGuiHandler.GUI_ID_SOCKET_STATION, p.worldObj, 0, 0, 0);
+            return;
+        }
+
+        if ("hub".equals(sub) || "menu".equals(sub) || "dashboard".equals(sub)) {
+            p.openGui(ExampleMod.INSTANCE, HexSocketStationGuiHandler.GUI_ID_HUB, p.worldObj, 0, 0, 0);
+            return;
+        }
+
         ItemStack held = p.getHeldItem();
         if (held == null) {
             p.addChatMessage(txt(PFX + "§cHold an item."));
             return;
         }
-
-        String sub = args[0].trim().toLowerCase();
 
         if ("open".equals(sub)) {
             int add = 1;
@@ -177,12 +236,8 @@ public class HexSocketCommand extends CommandBase {
                     + " §8| §7Max: §f" + maxStr));
             return;
         }
-        if ("gui".equals(sub) || "station".equals(sub) || "anvil".equals(sub)) {
-            p.openGui(ExampleMod.INSTANCE, HexSocketStationGuiHandler.GUI_ID_SOCKET_STATION, p.worldObj, 0, 0, 0);
-            return;
-        }
 
-        // Socket opener (enchant-style cost UI)
+// Socket opener (enchant-style cost UI)
         if ("opener".equals(sub) || "openstation".equals(sub) || "open_gui".equals(sub)) {
             p.openGui(ExampleMod.INSTANCE, HexSocketStationGuiHandler.GUI_ID_SOCKET_OPENER, p.worldObj, 0, 0, 0);
             return;
@@ -327,12 +382,22 @@ public class HexSocketCommand extends CommandBase {
 
         if (args == null) return out;
 
+// Hide admin/test completions from restricted dedicated-server players to avoid confusing help text
+        if (!hasAdminAccess(sender) && args.length >= 2) return out;
+
+
         if (args.length == 1) {
             String p = args[0] == null ? "" : args[0].toLowerCase();
-            String[] subs = new String[] {
-                    "open", "unsocket", "setbonus", "list", "info", "setmax", "clear", "testall",
-                    "gui", "opener"
-            };
+            String[] subs;
+            if (hasAdminAccess(sender)) {
+                subs = new String[] {
+                        "open", "unsocket", "setbonus", "list", "info", "setmax", "clear", "testall",
+                        "gui", "station", "anvil", "opener", "openstation", "open_gui",
+                        "hub", "menu", "dashboard"
+                };
+            } else {
+                subs = new String[] { "list", "info", "gui", "station", "anvil", "opener", "openstation", "open_gui", "hub", "menu", "dashboard" };
+            }
             for (int i = 0; i < subs.length; i++) {
                 if (subs[i].startsWith(p)) out.add(subs[i]);
             }
@@ -625,8 +690,9 @@ public class HexSocketCommand extends CommandBase {
 
     // ─────────────────────────────────────────────────────────────
     // Lore Pages helpers (HexLorePages.Pages)
-    // We use the same storage as LorePagesCommand:
-    //   stack.tag.HexLorePages.Pages (NBTTagList<String>)
+    // We use the same storage as LorePagesAPI/LorePagesCommand:
+    //   stack.tag.HexLorePages.Pages (NBTTagList<Compound>)
+    //   each page compound stores line strings in key "L"
     // ─────────────────────────────────────────────────────────────
 
     private static String joinWithBackslashN(List<String> lines) {
@@ -647,12 +713,22 @@ public class HexSocketCommand extends CommandBase {
         NBTTagCompound root = tag.getCompoundTag(LP_ROOT);
 
         if (!root.hasKey(LP_LIST, 9)) root.setTag(LP_LIST, new NBTTagList());
-        return root.getTagList(LP_LIST, 8); // 8 = string
+        return root.getTagList(LP_LIST, 10); // 10 = compound page tags
     }
 
     private static List<String> readPages(ItemStack stack) {
         List<String> out = new ArrayList<String>();
-        if (stack == null || !stack.hasTagCompound()) return out;
+        if (stack == null) return out;
+
+        List<List<String>> pages = LorePagesAPI.readPagesFromNBT(stack);
+        if (pages != null && !pages.isEmpty()) {
+            for (int i = 0; i < pages.size(); i++) {
+                out.add(joinPageLines(pages.get(i)));
+            }
+            return out;
+        }
+
+        if (!stack.hasTagCompound()) return out;
 
         NBTTagCompound tag = stack.getTagCompound();
         if (tag == null || !tag.hasKey(LP_ROOT, 10)) return out;
@@ -670,32 +746,16 @@ public class HexSocketCommand extends CommandBase {
     private static void savePages(ItemStack stack, List<String> pages) {
         if (stack == null) return;
 
-        if (pages == null) pages = new ArrayList<String>();
-
-        // Build NBTTagList<String>
-        NBTTagList list = new NBTTagList();
-        for (int i = 0; i < pages.size(); i++) {
-            String s = pages.get(i);
-            if (s == null) s = "";
-            list.appendTag(new NBTTagString(s));
-        }
-
-        if (stack.getTagCompound() == null) stack.setTagCompound(new NBTTagCompound());
-        NBTTagCompound tag = stack.getTagCompound();
-
-        if (!tag.hasKey(LP_ROOT, 10)) tag.setTag(LP_ROOT, new NBTTagCompound());
-        NBTTagCompound root = tag.getCompoundTag(LP_ROOT);
-
-        // If empty, clean up to keep items tidy
-        if (list.tagCount() == 0) {
-            if (root != null) root.removeTag(LP_LIST);
-
-            if (root == null || root.hasNoTags()) tag.removeTag(LP_ROOT);
-            if (tag.hasNoTags()) stack.setTagCompound(null);
+        if (pages == null || pages.isEmpty()) {
+            LorePagesAPI.clearPagesNBT(stack);
             return;
         }
 
-        root.setTag(LP_LIST, list);
+        List<List<String>> out = new ArrayList<List<String>>();
+        for (int i = 0; i < pages.size(); i++) {
+            out.add(splitPageLines(pages.get(i)));
+        }
+        LorePagesAPI.writePagesToNBT(stack, out);
     }
 
     private static int getSocketsPageIndex(ItemStack stack) {
@@ -813,6 +873,36 @@ public class HexSocketCommand extends CommandBase {
         clearSocketsPageIndex(stack);
     }
 
+
+    private static List<String> splitPageLines(String pageText) {
+        List<String> lines = new ArrayList<String>();
+        if (pageText == null) {
+            lines.add("");
+            return lines;
+        }
+
+        String normalized = pageText.replace("\r", "").replace("\\n", "\n");
+        String[] split = normalized.split("\n", -1);
+        if (split.length == 0) {
+            lines.add("");
+            return lines;
+        }
+
+        for (int i = 0; i < split.length; i++) {
+            lines.add(split[i] == null ? "" : split[i]);
+        }
+        return lines;
+    }
+
+    private static String joinPageLines(List<String> lines) {
+        if (lines == null || lines.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < lines.size(); i++) {
+            if (i > 0) sb.append("\n");
+            sb.append(lines.get(i) == null ? "" : lines.get(i));
+        }
+        return sb.toString();
+    }
 
     private static boolean matchesPrefix(String line, String rawPrefix) {
         if (line == null || rawPrefix == null) return false;

@@ -66,6 +66,8 @@ public class VoidOrbHudOverlay {
             new ResourceLocation("hexcolorcodes", "textures/items/gems/orb_gem_violet_void_64.png");
     private static final ResourceLocation VOID_ICON_ANIM_RL =
             new ResourceLocation("hexcolorcodes", "textures/items/gems/orb_gem_violet_void_64_anim_8f.png");
+    private static final ResourceLocation PERFECT_CORE_ICON_ANIM_RL =
+            new ResourceLocation("hexcolorcodes", "textures/items/gems/evolved_rainbow_gem_64_anim_8f.png");
 
 
 
@@ -711,39 +713,57 @@ public class VoidOrbHudOverlay {
      */
 
     private static void drawVoidOrbIcon(Minecraft mc, EntityPlayer p, ItemStack host, int x, int y) {
-        // Default: flat Void orb icon
         ResourceLocation rl = VOID_ICON_RL;
 
-        // Prefer socketed gem KEY (works client-side even if GemStacks are not synced)
+        boolean usePerfectCore = false;
         try {
-            if (host != null && HexSocketAPI.hasSocketData(host)) {
-                int filled = HexSocketAPI.getSocketsFilled(host);
-                for (int i = 0; i < filled; i++) {
-                    String k = HexSocketAPI.getGemKeyAt(host, i);
-                    if (k == null) continue;
-                    String lk = k.toLowerCase();
-                    if (lk.indexOf("orb_gem_violet_void") >= 0) {
-                        if (lk.indexOf("anim") >= 0 || lk.indexOf("8f") >= 0) rl = VOID_ICON_ANIM_RL;
-                        break;
-                    }
-                }
+            NBTTagCompound tag = (host != null) ? host.getTagCompound() : null;
+            if (tag != null) {
+                usePerfectCore = safeBool(tag, "HexVoidHudUsePerfectCore")
+                        || safeBool(tag, "HexVoidHudUsePerfectCore_abyss")
+                        || safeBool(tag, "HexVoidHudUsePerfectCore_entropy")
+                        || safeBool(tag, "HexVoidHudUsePerfectCore_gw");
             }
         } catch (Throwable ignored) {}
 
-        // If we didn't detect from socket keys, fall back to any real orb item in the player inventory
-        if (rl == VOID_ICON_RL) {
+        if (usePerfectCore) {
+            rl = PERFECT_CORE_ICON_ANIM_RL;
+        } else {
             try {
-                ItemStack orb = findVoidIconStack(p, null); // do NOT pass host (safety: never return host item)
-                if (orb != null && isActualVoidOrbItem(orb)) {
-                    if (orb.getItemDamage() == 23) rl = VOID_ICON_ANIM_RL;
+                if (host != null && HexSocketAPI.hasSocketData(host)) {
+                    int filled = HexSocketAPI.getSocketsFilled(host);
+                    for (int i = 0; i < filled; i++) {
+                        String k = HexSocketAPI.getGemKeyAt(host, i);
+                        if (k == null) continue;
+                        String lk = k.toLowerCase();
+                        if (lk.indexOf("evolved_rainbow_gem") >= 0 || lk.indexOf("perfect_core") >= 0) {
+                            usePerfectCore = true;
+                            rl = PERFECT_CORE_ICON_ANIM_RL;
+                            break;
+                        }
+                        if (lk.indexOf("orb_gem_violet_void") >= 0) {
+                            if (lk.indexOf("anim") >= 0 || lk.indexOf("8f") >= 0) rl = VOID_ICON_ANIM_RL;
+                            break;
+                        }
+                    }
                 }
             } catch (Throwable ignored) {}
+
+            if (rl == VOID_ICON_RL) {
+                try {
+                    ItemStack orb = findVoidIconStack(p, null);
+                    if (orb != null && isActualVoidOrbItem(orb)) {
+                        if (orb.getItemDamage() == 23) rl = VOID_ICON_ANIM_RL;
+                    }
+                } catch (Throwable ignored) {}
+            }
         }
 
         drawVoidIconTexture(rl, x, y);
     }
 
     private static void drawVoidIconTexture(int x, int y) {
+
         drawVoidIconTexture(VOID_ICON_RL, x, y);
     }
 
@@ -767,7 +787,7 @@ public class VoidOrbHudOverlay {
         // - anim sheet (8 frames stacked vertically): draw only the current frame
         float u0 = 0f, u1 = 1f;
         float v0 = 0f, v1 = 1f;
-        if (rl == VOID_ICON_ANIM_RL) {
+        if (rl == VOID_ICON_ANIM_RL || rl == PERFECT_CORE_ICON_ANIM_RL) {
             try {
                 int frames = 8;
                 long ms = Minecraft.getSystemTime();
@@ -854,6 +874,11 @@ public class VoidOrbHudOverlay {
 
     private static String safeStr(String s) {
         return (s == null) ? "" : s.trim();
+    }
+
+    private static boolean safeBool(NBTTagCompound tag, String key) {
+        if (tag == null || key == null || key.length() == 0) return false;
+        try { return tag.getBoolean(key); } catch (Throwable ignored) { return false; }
     }
 
     /**

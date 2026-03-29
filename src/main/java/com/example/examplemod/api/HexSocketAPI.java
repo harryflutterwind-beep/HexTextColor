@@ -10,6 +10,7 @@ import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.nbt.NBTTagString;
 import com.example.examplemod.item.ItemGemIcons;
+import com.example.examplemod.util.WearableNameRules;
 
 /**
  * HexSocketAPI (1.7.10)
@@ -27,7 +28,11 @@ import com.example.examplemod.item.ItemGemIcons;
  *
  * Lore pages storage lives under:
  *   ItemStack.tag.HexLorePages
- *     - Pages (NBTTagList<String>) // each entry is a full page, lines separated by '\n'
+ *     - Pages (NBTTagList<Compound>)
+ *         - L (NBTTagList<String>) // lines for that page
+ *
+ * This API also reads the older legacy Pages (NBTTagList<String>) format and
+ * converts it to the compound-page format when socket pages are touched.
  */
 public final class HexSocketAPI {
 
@@ -57,8 +62,14 @@ public final class HexSocketAPI {
     private static final String TAG_VOID_TYPE     = "HexVoidType";
     private static final String TAG_DARKFIRE_TYPE = "HexDarkFireType";
 
-    public static final String LORE_ROOT_KEY  = "HexLorePages";
-    public static final String LORE_PAGES_KEY = "Pages";          // list<string>
+    // Generic gem identity/source tags (safe for base, evolved, and script-driven gems)
+    private static final String TAG_GEM_SOURCE      = "HexGemSource";       // e.g. "base", "evolved", "script"
+    private static final String TAG_EVOLVED         = "HexEvolved";         // boolean
+    private static final String TAG_EVOLVED_FAMILY  = "HexEvolvedFamily";   // e.g. "inferno", "frost", "solar"
+
+    public static final String LORE_ROOT_KEY       = "HexLorePages";
+    public static final String LORE_PAGES_KEY      = "Pages";      // list<compound>, each page has L=list<string>
+    public static final String LORE_PAGE_LINES_KEY = "L";
 
     // per-bonus compound keys
     public static final String B_ATTR = "Attr";
@@ -179,28 +190,56 @@ public final class HexSocketAPI {
     // ─────────────────────────────────────────────────────────────
     public static boolean hasSocketData(ItemStack stack) {
         if (stack == null) return false;
+
+        // Self-heal accidentally dirtied stackables (diamonds, ingots, food, etc.)
+        // so they can merge again. This only strips Hex socket containers.
+        if (isAlwaysNonSocketable(stack)) {
+            cleanupEmptySocketData(stack);
+            return false;
+        }
+
         NBTTagCompound tag = stack.getTagCompound();
         return tag != null && tag.hasKey(ROOT_HEX_GEMS, 10);
     }
 
     public static int getSocketsOpen(ItemStack stack) {
-        ensureDefaults(stack);
-        return getHexGems(stack).getInteger(K_OPEN);
+        if (stack == null) return 0;
+        if (isAlwaysNonSocketable(stack)) {
+            cleanupEmptySocketData(stack);
+            return 0;
+        }
+
+        NBTTagCompound hex = peekHexGems(stack);
+        if (hex == null || !hex.hasKey(K_OPEN)) return 0;
+        return hex.getInteger(K_OPEN);
     }
 
     public static int getSocketsMax(ItemStack stack) {
-        ensureDefaults(stack);
-        return getHexGems(stack).getInteger(K_MAX);
+        if (stack == null) return 0;
+        if (isAlwaysNonSocketable(stack)) {
+            cleanupEmptySocketData(stack);
+            return 0;
+        }
+
+        NBTTagCompound hex = peekHexGems(stack);
+        if (hex != null && hex.hasKey(K_MAX)) return hex.getInteger(K_MAX);
+        return defaultMaxFor(stack);
     }
 
     public static int getSocketsFilled(ItemStack stack) {
-        ensureDefaults(stack);
-        return getGemsList(stack).tagCount();
+        if (stack == null) return 0;
+        if (isAlwaysNonSocketable(stack)) {
+            cleanupEmptySocketData(stack);
+            return 0;
+        }
+
+        NBTTagList gems = peekGemsList(stack);
+        return (gems == null) ? 0 : gems.tagCount();
     }
 
     public static String getGemKeyAt(ItemStack stack, int idx) {
-        ensureDefaults(stack);
-        NBTTagList list = getGemsList(stack);
+        NBTTagList list = peekGemsList(stack);
+        if (list == null) return "";
         if (idx < 0 || idx >= list.tagCount()) return "";
         return list.getStringTagAt(idx);
     }
@@ -261,6 +300,48 @@ public final class HexSocketAPI {
         return "";
     }
 
+    private static String deriveGemSourceFromStack(ItemStack gem) {
+        if (gem == null) return "";
+        try {
+            NBTTagCompound tg = gem.getTagCompound();
+            if (tg == null) return "";
+            if (tg.hasKey(TAG_GEM_SOURCE, 8)) return tg.getString(TAG_GEM_SOURCE);
+            if (tg.hasKey(TAG_EVOLVED) && tg.getBoolean(TAG_EVOLVED)) return "evolved";
+        } catch (Throwable t) {
+            // ignore
+        }
+        return "";
+    }
+
+    private static boolean isEvolvedGemStack(ItemStack gem) {
+        if (gem == null) return false;
+        try {
+            NBTTagCompound tg = gem.getTagCompound();
+            if (tg == null) return false;
+            if (tg.hasKey(TAG_EVOLVED) && tg.getBoolean(TAG_EVOLVED)) return true;
+            if (tg.hasKey(TAG_GEM_SOURCE, 8)) {
+                String src = tg.getString(TAG_GEM_SOURCE);
+                return src != null && src.equalsIgnoreCase("evolved");
+            }
+        } catch (Throwable t) {
+            // ignore
+        }
+        return false;
+    }
+
+    private static String getEvolvedFamily(ItemStack gem) {
+        if (gem == null) return "";
+        try {
+            NBTTagCompound tg = gem.getTagCompound();
+            if (tg != null && tg.hasKey(TAG_EVOLVED_FAMILY, 8)) {
+                return tg.getString(TAG_EVOLVED_FAMILY);
+            }
+        } catch (Throwable t) {
+            // ignore
+        }
+        return "";
+    }
+
     // If GemStacks exist, keep K_GEMS aligned + correct by deriving keys from the stacks.
     private static void fixGemKeysFromGemStacks(ItemStack host) {
         if (host == null) return;
@@ -314,10 +395,9 @@ public final class HexSocketAPI {
      */
     public static ItemStack getGemAt(ItemStack host, int idx) {
         if (host == null) return null;
-        ensureDefaults(host);
 
-        NBTTagCompound hex = getHexGems(host);
-        if (!hex.hasKey(K_GEM_STACKS, 9)) return null;
+        NBTTagCompound hex = peekHexGems(host);
+        if (hex == null || !hex.hasKey(K_GEM_STACKS, 9)) return null;
 
         NBTTagList stacks = hex.getTagList(K_GEM_STACKS, 10);
         if (idx < 0 || idx >= stacks.tagCount()) return null;
@@ -375,6 +455,11 @@ public final class HexSocketAPI {
         }
 
         hex.setTag(K_GEM_STACKS, out);
+
+        // Keep the lightweight key list aligned with the full stored gem stack.
+        // This is especially important when a socketed gem changes identity later
+        // (for example base -> evolved, or script-driven variants that rewrite HexGemKey).
+        fixGemKeysFromGemStacks(host);
         return true;
     }
 
@@ -384,11 +469,11 @@ public final class HexSocketAPI {
      * Supports both legacy single-bonus compounds and the newer multi-bonus list format (B_LIST).
      */
     public static List<GemBonus> getBonusesAt(ItemStack stack, int idx) {
-        ensureDefaults(stack);
-        NBTTagList gems = getGemsList(stack);
+        NBTTagList gems = peekGemsList(stack);
+        if (gems == null) return Collections.emptyList();
         if (idx < 0 || idx >= gems.tagCount()) return Collections.emptyList();
 
-        NBTTagList bonuses = getBonusesList(stack, false);
+        NBTTagList bonuses = peekBonusesList(stack);
         if (bonuses == null || idx >= bonuses.tagCount()) return Collections.emptyList();
 
         try {
@@ -431,8 +516,8 @@ public final class HexSocketAPI {
     }
 
     public static List<GemBonus> getAllBonuses(ItemStack stack) {
-        ensureDefaults(stack);
-        NBTTagList gems = getGemsList(stack);
+        NBTTagList gems = peekGemsList(stack);
+        if (gems == null) return Collections.emptyList();
         int n = gems.tagCount();
         if (n <= 0) return Collections.emptyList();
 
@@ -545,6 +630,42 @@ public final class HexSocketAPI {
     /** Convenience overload (double amount, no displayName). */
     public static boolean socketGemWithBonus(ItemStack stack, String gemKey, String attrKey, double amount) {
         return socketGemWithBonus(stack, gemKey, attrKey, amount, null);
+    }
+
+    /**
+     * Socket a FULL gem/orb stack (preserving its NBT/effect tags) into the next available slot.
+     * This is the safest path for evolved and script-driven gems because it stores both:
+     * - K_GEMS      (icon/style key)
+     * - K_GEM_STACKS (the full ItemStack NBT)
+     */
+    public static boolean socketGemStack(ItemStack host, ItemStack gem) {
+        return socketGemStackWithBonuses(host, gem, null, null, null);
+    }
+
+    /**
+     * Socket a FULL gem/orb stack and store multi-roll bonuses at the same time.
+     * This preserves effect/source/evolved tags already present on the gem stack.
+     */
+    public static boolean socketGemStackWithBonuses(ItemStack host, ItemStack gem, String[] attrKeys, double[] amounts, String[] displayNames) {
+        if (host == null || gem == null || gem.getItem() == null) return false;
+
+        String key = deriveGemKeyFromStack(gem);
+        if (key == null || key.length() <= 0) return false;
+
+        if (!socketGemWithBonus(host, key, null, 0.0, null)) return false;
+
+        int idx = getSocketsFilled(host) - 1;
+        if (idx < 0) return false;
+
+        setGemAt(host, idx, gem);
+
+        if (attrKeys != null && amounts != null && displayNames != null
+                && attrKeys.length > 0 && amounts.length > 0 && displayNames.length > 0) {
+            setBonusesAt(host, idx, attrKeys, amounts, displayNames);
+        } else {
+            syncSocketsPageOnly(host);
+        }
+        return true;
     }
 
 
@@ -740,23 +861,32 @@ public final class HexSocketAPI {
      */
     public static void syncSocketsPageOnly(ItemStack stack) {
         if (stack == null) return;
-        ensureDefaults(stack);
+
+        // Never create socket data just because a GUI/view path asked to rebuild pages.
+        // Plain items (especially stackables like diamonds) must stay untouched so stacks can merge.
+        if (!hasSocketData(stack)) {
+            removeSocketsPageIfPresent(stack);
+            removeSocketInfoPageIfPresent(stack);
+            cleanupEmptySocketData(stack);
+            return;
+        }
 
         int open = getSocketsOpen(stack);
         if (open <= 0) {
             // remove generated pages if present
             removeSocketsPageIfPresent(stack);
             removeSocketInfoPageIfPresent(stack);
+            cleanupEmptySocketData(stack);
             return;
         }
 
         NBTTagCompound loreRoot = getOrCreateHexLorePages(stack);
-        NBTTagList pages = getOrCreateStringList(loreRoot, LORE_PAGES_KEY);
+        NBTTagList pages = getOrCreateLorePagesList(loreRoot);
 
         // Decide which index to use for the generated sockets-icons page.
         int idx = getSocketsPageIndex(stack);
         if (idx >= 0 && idx < pages.tagCount()) {
-            String existing = pages.getStringTagAt(idx);
+            String existing = getLorePageTextAt(pages, idx);
             if (!looksLikeGeneratedSocketsPage(existing)) idx = -1;
         } else {
             idx = -1;
@@ -772,7 +902,7 @@ public final class HexSocketAPI {
 
         if (idx < 0) {
             // append new page
-            pages.appendTag(new NBTTagString(pageText));
+            pages.appendTag(makeLorePageTag(pageText));
             idx = pages.tagCount() - 1;
         } else {
             pages = replacePageAt(pages, idx, pageText);
@@ -806,7 +936,7 @@ public final class HexSocketAPI {
     /** Builds the sockets-only page lines (NO other info). */
     public static List<String> buildSocketsPageLines(ItemStack stack) {
         if (stack == null) return Collections.emptyList();
-        ensureDefaults(stack);
+        if (!hasSocketData(stack)) return Collections.emptyList();
 
         int open = getSocketsOpen(stack);
         if (open <= 0) return Collections.emptyList();
@@ -1041,11 +1171,49 @@ public final class HexSocketAPI {
         }
         return -1;
     }
+    private static NBTTagList dedupeSocketInfoPages(ItemStack host, NBTTagList pages, int keepIdx) {
+        if (pages == null) return pages;
 
+        NBTTagList out = new NBTTagList();
+        int newKeep = -1;
+
+        for (int i = 0; i < pages.tagCount(); i++) {
+            String p = getLorePageTextAt(pages, i);
+            boolean isInfo = looksLikeGeneratedSocketInfoPage(p);
+
+            if (!isInfo) {
+                out.appendTag(copyLorePageTag(pages, i));
+                continue;
+            }
+
+            if (keepIdx >= 0) {
+                if (i == keepIdx && newKeep < 0) {
+                    newKeep = out.tagCount();
+                    out.appendTag(copyLorePageTag(pages, i));
+                }
+            } else {
+                // keep only the first info page, drop the rest
+                if (newKeep < 0) {
+                    newKeep = out.tagCount();
+                    out.appendTag(copyLorePageTag(pages, i));
+                }
+            }
+        }
+
+        if (host != null) {
+            setSocketInfoPageIndex(host, newKeep);
+
+            int sIdx = findExistingSocketsPageIndex(out);
+            if (sIdx >= 0) setSocketsPageIndex(host, sIdx);
+            else clearSocketsPageIndex(host);
+        }
+
+        return out;
+    }
     private static int getSocketInfoPageIndex(ItemStack stack) {
         try {
-            NBTTagCompound gems = getHexGems(stack);
-            if (gems.hasKey(K_INFO_PAGE_INDEX, 3)) return gems.getInteger(K_INFO_PAGE_INDEX);
+            NBTTagCompound gems = peekHexGems(stack);
+            if (gems != null && gems.hasKey(K_INFO_PAGE_INDEX, 3)) return gems.getInteger(K_INFO_PAGE_INDEX);
         } catch (Throwable ignored) {}
         return -1;
     }
@@ -1060,26 +1228,46 @@ public final class HexSocketAPI {
 
     private static void clearSocketInfoPageIndex(ItemStack stack) {
         try {
-            NBTTagCompound gems = getHexGems(stack);
-            if (gems.hasKey(K_INFO_PAGE_INDEX)) gems.removeTag(K_INFO_PAGE_INDEX);
+            NBTTagCompound gems = peekHexGems(stack);
+            if (gems != null && gems.hasKey(K_INFO_PAGE_INDEX)) gems.removeTag(K_INFO_PAGE_INDEX);
 
         } catch (Throwable ignored) {}
     }
 
     private static void removeSocketInfoPageIfPresent(ItemStack stack) {
         if (stack == null) return;
+
+        // Never create or keep socket info pages on plain stackables.
+        if (isAlwaysNonSocketable(stack)) {
+            cleanupEmptySocketData(stack);
+            clearSocketInfoPageIndex(stack);
+            return;
+        }
+
         NBTTagCompound tag = stack.getTagCompound();
         if (tag == null) {
             clearSocketInfoPageIndex(stack);
             return;
         }
+        if (!tag.hasKey(LORE_ROOT_KEY, 10)) {
+            clearSocketInfoPageIndex(stack);
+            return;
+        }
 
-        NBTTagCompound loreRoot = getOrCreateHexLorePages(stack);
-        NBTTagList pages = getOrCreateStringList(loreRoot, LORE_PAGES_KEY);
+        NBTTagCompound loreRoot = tag.getCompoundTag(LORE_ROOT_KEY);
+        if (loreRoot == null || !loreRoot.hasKey(LORE_PAGES_KEY, 9)) {
+            clearSocketInfoPageIndex(stack);
+            return;
+        }
+        NBTTagList pages = getLorePagesListIfPresent(loreRoot);
+        if (pages == null) {
+            clearSocketInfoPageIndex(stack);
+            return;
+        }
 
         int idx = getSocketInfoPageIndex(stack);
         if (idx >= 0 && idx < pages.tagCount()) {
-            String existing = pages.getStringTagAt(idx);
+            String existing = getLorePageTextAt(pages, idx);
             if (!looksLikeGeneratedSocketInfoPage(existing)) idx = -1;
         } else {
             idx = -1;
@@ -1104,21 +1292,19 @@ public final class HexSocketAPI {
 
         int filled = getSocketsFilled(host);
         if (filled <= 0) {
-            // remove the info page if it exists
+            pages = dedupeSocketInfoPages(host, pages, -1);
+
             int idx = getSocketInfoPageIndex(host);
-            if (idx >= 0 && idx < pages.tagCount() && looksLikeGeneratedSocketInfoPage(pages.getStringTagAt(idx))) {
+            if (idx >= 0 && idx < pages.tagCount()) {
                 pages = removePageAt(pages, idx);
-                int sIdx = getSocketsPageIndex(host);
-                if (sIdx > idx) setSocketsPageIndex(host, sIdx - 1);
-            } else {
-                int found = findExistingSocketInfoPageIndex(pages);
-                if (found >= 0) {
-                    pages = removePageAt(pages, found);
-                    int sIdx = getSocketsPageIndex(host);
-                    if (sIdx > found) setSocketsPageIndex(host, sIdx - 1);
-                }
             }
+
             clearSocketInfoPageIndex(host);
+
+            int sIdx = findExistingSocketsPageIndex(pages);
+            if (sIdx >= 0) setSocketsPageIndex(host, sIdx);
+            else clearSocketsPageIndex(host);
+
             return pages;
         }
 
@@ -1129,17 +1315,24 @@ public final class HexSocketAPI {
         }
 
         String pageText = joinLines(lines);
-        // marker removed; heuristic matching only
 
         int idx = getSocketInfoPageIndex(host);
         if (idx >= 0 && idx < pages.tagCount()) {
-            if (!looksLikeGeneratedSocketInfoPage(pages.getStringTagAt(idx))) idx = -1;
-        } else idx = -1;
+            if (!looksLikeGeneratedSocketInfoPage(getLorePageTextAt(pages, idx))) {
+                idx = -1;
+            }
+        } else {
+            idx = -1;
+        }
 
         if (idx < 0) idx = findExistingSocketInfoPageIndex(pages);
 
+        // collapse any older duplicate "Socketed Orbs" pages first
+        pages = dedupeSocketInfoPages(host, pages, idx);
+        idx = getSocketInfoPageIndex(host);
+
         if (idx < 0) {
-            pages.appendTag(new NBTTagString(pageText));
+            pages.appendTag(makeLorePageTag(pageText));
             idx = pages.tagCount() - 1;
         } else {
             pages = replacePageAt(pages, idx, pageText);
@@ -1148,7 +1341,6 @@ public final class HexSocketAPI {
         setSocketInfoPageIndex(host, idx);
         return pages;
     }
-
 
     private static String prettyNameFromGemKey(String key) {
         if (key == null) return "Unknown";
@@ -1197,7 +1389,7 @@ public final class HexSocketAPI {
         int filled = getSocketsFilled(host);
         for (int i = 0; i < filled; i++) {
             ItemStack gem = getGemAt(host, i);
-            String key = getGemKeyAt(host, i);
+            String key = resolveGemKeyAt(host, i);
 
             String name = null;
             try {
@@ -1228,17 +1420,31 @@ public final class HexSocketAPI {
             String voidType  = (tag != null && tag.hasKey(TAG_VOID_TYPE, 8)) ? tag.getString(TAG_VOID_TYPE) : null;
             String dfType    = (tag != null && tag.hasKey(TAG_DARKFIRE_TYPE, 8)) ? tag.getString(TAG_DARKFIRE_TYPE) : null;
 
-            // Only show rolled effect/type for effect-orbs (Light/Void/Darkfire).
+            String source = deriveGemSourceFromStack(gem);
+            boolean evolved = isEvolvedGemStack(gem);
+            String evolvedFamily = getEvolvedFamily(gem);
+
+            // Show rolled effect/type for effect-orbs (Light/Void/Darkfire).
             if (lightType != null && lightType.trim().length() > 0) {
                 out.add("§8• §7Light Effect: §e" + lightType + "§7.");
-                return;
             }
             if (voidType != null && voidType.trim().length() > 0) {
                 out.add("§8• §7Void Effect: " + styleForGemKey(gemKey, voidType) + "§7.");
-                return;
             }
             if (dfType != null && dfType.trim().length() > 0) {
                 out.add("§8• §7Darkfire Effect: §c" + dfType + "§7.");
+            }
+
+            if (evolved) {
+                StringBuilder line = new StringBuilder();
+                line.append("§8• §7Tier: ").append(styleForGemKey(gemKey, "Evolved"));
+                if (evolvedFamily != null && evolvedFamily.trim().length() > 0) {
+                    line.append(" §8(").append(styleForGemKey(gemKey, evolvedFamily)).append("§8)");
+                }
+                line.append("§7.");
+                out.add(line.toString());
+            } else if (source != null && source.trim().length() > 0 && !source.equalsIgnoreCase("base")) {
+                out.add("§8• §7Source: §b" + source + "§7.");
             }
         } catch (Throwable ignored) {}
     }
@@ -1263,11 +1469,15 @@ public final class HexSocketAPI {
             return;
         }
 
-        NBTTagList pages = loreRoot.getTagList(LORE_PAGES_KEY, 8);
+        NBTTagList pages = getLorePagesListIfPresent(loreRoot);
+        if (pages == null) {
+            clearSocketsPageIndex(stack);
+            return;
+        }
 
         // Validate stored idx; never delete user-authored help pages.
         if (idx >= 0 && idx < pages.tagCount()) {
-            String existing = pages.getStringTagAt(idx);
+            String existing = getLorePageTextAt(pages, idx);
             if (!looksLikeGeneratedSocketsPage(existing)) idx = -1;
         } else {
             idx = -1;
@@ -1294,7 +1504,7 @@ public final class HexSocketAPI {
     private static int findExistingSocketsPageIndex(NBTTagList pages) {
         if (pages == null) return -1;
         for (int i = 0; i < pages.tagCount(); i++) {
-            String p = pages.getStringTagAt(i);
+            String p = getLorePageTextAt(pages, i);
             if (looksLikeGeneratedSocketsPage(p)) return i;
         }
         return -1;
@@ -1302,7 +1512,7 @@ public final class HexSocketAPI {
 
     private static String firstNonEmptyLine(String page) {
         if (page == null) return null;
-        String[] parts = page.split("\\n");
+        String[] parts = page.split("\n");
         for (int i = 0; i < parts.length; i++) {
             String s = parts[i];
             if (s == null) continue;
@@ -1315,8 +1525,8 @@ public final class HexSocketAPI {
     private static NBTTagList replacePageAt(NBTTagList pages, int idx, String pageText) {
         NBTTagList out = new NBTTagList();
         for (int i = 0; i < pages.tagCount(); i++) {
-            if (i == idx) out.appendTag(new NBTTagString(pageText));
-            else out.appendTag(new NBTTagString(pages.getStringTagAt(i)));
+            if (i == idx) out.appendTag(makeLorePageTag(pageText));
+            else out.appendTag(copyLorePageTag(pages, i));
         }
         return out;
     }
@@ -1325,7 +1535,7 @@ public final class HexSocketAPI {
         NBTTagList out = new NBTTagList();
         for (int i = 0; i < pages.tagCount(); i++) {
             if (i == idx) continue;
-            out.appendTag(new NBTTagString(pages.getStringTagAt(i)));
+            out.appendTag(copyLorePageTag(pages, i));
         }
         return out;
     }
@@ -1347,14 +1557,196 @@ public final class HexSocketAPI {
         stack.setTagCompound(root);
     }
 
-    private static NBTTagList getOrCreateStringList(NBTTagCompound parent, String key) {
-        if (!parent.hasKey(key, 9)) parent.setTag(key, new NBTTagList());
-        return parent.getTagList(key, 8);
+    private static NBTTagCompound makeLorePageTag(List<String> lines) {
+        NBTTagCompound pageTag = new NBTTagCompound();
+        NBTTagList lineList = new NBTTagList();
+        if (lines != null) {
+            for (int i = 0; i < lines.size(); i++) {
+                String s = lines.get(i);
+                lineList.appendTag(new NBTTagString(s == null ? "" : s));
+            }
+        }
+        pageTag.setTag(LORE_PAGE_LINES_KEY, lineList);
+        return pageTag;
+    }
+
+    private static NBTTagCompound makeLorePageTag(String pageText) {
+        List<String> lines = new ArrayList<String>();
+        if (pageText != null && pageText.length() > 0) {
+            String[] split = pageText.split("\n", -1);
+            for (int i = 0; i < split.length; i++) lines.add(split[i]);
+        }
+        return makeLorePageTag(lines);
+    }
+
+    private static NBTTagCompound copyLorePageTag(NBTTagList pages, int idx) {
+        return makeLorePageTag(getLorePageTextAt(pages, idx));
+    }
+
+    private static String getLorePageTextAt(NBTTagList pages, int idx) {
+        if (pages == null || idx < 0 || idx >= pages.tagCount()) return "";
+        NBTTagCompound pageTag = pages.getCompoundTagAt(idx);
+        if (pageTag == null) return "";
+        NBTTagList lineList = pageTag.getTagList(LORE_PAGE_LINES_KEY, 8);
+        if (lineList == null || lineList.tagCount() <= 0) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < lineList.tagCount(); i++) {
+            if (i > 0) sb.append('\n');
+            sb.append(lineList.getStringTagAt(i));
+        }
+        return sb.toString();
+    }
+
+    private static NBTTagList convertLegacyStringPagesToCompound(NBTTagList legacyPages) {
+        NBTTagList out = new NBTTagList();
+        if (legacyPages == null) return out;
+        for (int i = 0; i < legacyPages.tagCount(); i++) {
+            out.appendTag(makeLorePageTag(legacyPages.getStringTagAt(i)));
+        }
+        return out;
+    }
+
+    private static NBTTagList getOrCreateLorePagesList(NBTTagCompound parent) {
+        if (parent == null) return new NBTTagList();
+        if (!parent.hasKey(LORE_PAGES_KEY, 9)) {
+            NBTTagList out = new NBTTagList();
+            parent.setTag(LORE_PAGES_KEY, out);
+            return out;
+        }
+
+        NBTTagList compoundPages = parent.getTagList(LORE_PAGES_KEY, 10);
+        if (compoundPages != null && compoundPages.tagCount() > 0) return compoundPages;
+
+        NBTTagList legacyPages = parent.getTagList(LORE_PAGES_KEY, 8);
+        if (legacyPages != null && legacyPages.tagCount() > 0) {
+            NBTTagList converted = convertLegacyStringPagesToCompound(legacyPages);
+            parent.setTag(LORE_PAGES_KEY, converted);
+            return converted;
+        }
+
+        NBTTagList out = new NBTTagList();
+        parent.setTag(LORE_PAGES_KEY, out);
+        return out;
+    }
+
+    private static NBTTagList getLorePagesListIfPresent(NBTTagCompound parent) {
+        if (parent == null || !parent.hasKey(LORE_PAGES_KEY, 9)) return null;
+
+        NBTTagList compoundPages = parent.getTagList(LORE_PAGES_KEY, 10);
+        if (compoundPages != null && compoundPages.tagCount() > 0) return compoundPages;
+
+        NBTTagList legacyPages = parent.getTagList(LORE_PAGES_KEY, 8);
+        if (legacyPages != null && legacyPages.tagCount() > 0) {
+            NBTTagList converted = convertLegacyStringPagesToCompound(legacyPages);
+            parent.setTag(LORE_PAGES_KEY, converted);
+            return converted;
+        }
+
+        NBTTagList out = new NBTTagList();
+        parent.setTag(LORE_PAGES_KEY, out);
+        return out;
+    }
+
+    private static int getLorePageCountRaw(NBTTagCompound parent) {
+        if (parent == null || !parent.hasKey(LORE_PAGES_KEY, 9)) return 0;
+        NBTTagList compoundPages = parent.getTagList(LORE_PAGES_KEY, 10);
+        if (compoundPages != null && compoundPages.tagCount() > 0) return compoundPages.tagCount();
+        NBTTagList legacyPages = parent.getTagList(LORE_PAGES_KEY, 8);
+        if (legacyPages != null && legacyPages.tagCount() > 0) return legacyPages.tagCount();
+        return 0;
     }
 
     // ─────────────────────────────────────────────────────────────
     // NBT: HexGems helpers
     // ─────────────────────────────────────────────────────────────
+
+
+    /**
+     * Strips empty / accidental socket NBT from items that should never have it.
+     * Especially important for naturally stackable items so they can merge again.
+     */
+    private static boolean isAlwaysNonSocketable(ItemStack stack) {
+        if (stack == null) return false;
+        try {
+            // Accessory wearables (Artifact / Ring / Amulet) are allowed as socket hosts
+            // even if their base item class reports a stack size > 1.
+            if (isAccessorySocketHost(stack)) return false;
+            return stack.getMaxStackSize() > 1;
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static boolean isAccessorySocketHost(ItemStack stack) {
+        if (stack == null) return false;
+
+        // Prefer the shared wearable detector because it already supports both
+        // display-name and lore based detection, with formatting stripped.
+        try {
+            if (WearableNameRules.isHelmetWearableByName(stack)) return true;
+        } catch (Throwable ignored) {
+            // Fall through to the local heuristic below.
+        }
+
+        return hasAccessoryWearableLore(stack);
+    }
+
+    /**
+     * Strips empty / accidental socket NBT from items that should never have it.
+     * Especially important for naturally stackable items so they can merge again.
+     *
+     * This ONLY removes Hex socket containers:
+     * - HexGems
+     * - HexLorePages
+     * It does not touch unrelated NBT.
+     */
+    public static boolean cleanupEmptySocketData(ItemStack stack) {
+        if (stack == null || !stack.hasTagCompound()) return false;
+
+        boolean changed = false;
+        NBTTagCompound root = stack.getTagCompound();
+        if (root == null) return false;
+
+        boolean shouldNeverSocket = isAlwaysNonSocketable(stack);
+
+        if (root.hasKey(ROOT_HEX_GEMS, 10)) {
+            if (shouldNeverSocket) {
+                root.removeTag(ROOT_HEX_GEMS);
+                changed = true;
+            } else {
+                NBTTagCompound hex = root.getCompoundTag(ROOT_HEX_GEMS);
+                boolean emptyGems = (!hex.hasKey(K_GEMS, 9) || hex.getTagList(K_GEMS, 8).tagCount() <= 0);
+                boolean emptyBonuses = (!hex.hasKey(K_BONUSES, 9) || hex.getTagList(K_BONUSES, 10).tagCount() <= 0);
+                boolean emptyStacks = (!hex.hasKey(K_GEM_STACKS, 9) || hex.getTagList(K_GEM_STACKS, 10).tagCount() <= 0);
+                int open = hex.hasKey(K_OPEN) ? hex.getInteger(K_OPEN) : 0;
+                int max = hex.hasKey(K_MAX) ? hex.getInteger(K_MAX) : 0;
+
+                // Safe cleanup for empty host data on non-stackable gear.
+                if (emptyGems && emptyBonuses && emptyStacks && open <= 0 && max <= 0) {
+                    root.removeTag(ROOT_HEX_GEMS);
+                    changed = true;
+                }
+            }
+        }
+
+        if (root.hasKey(LORE_ROOT_KEY, 10)) {
+            if (shouldNeverSocket) {
+                root.removeTag(LORE_ROOT_KEY);
+                changed = true;
+            } else {
+                NBTTagCompound loreRoot = root.getCompoundTag(LORE_ROOT_KEY);
+                if (loreRoot == null || getLorePageCountRaw(loreRoot) <= 0) {
+                    root.removeTag(LORE_ROOT_KEY);
+                    changed = true;
+                }
+            }
+        }
+
+        if (root.hasNoTags()) {
+            stack.setTagCompound(null);
+            return true;
+        }
+        return changed;
+    }
 
     private static void ensureDefaults(ItemStack stack) {
         if (stack == null) return;
@@ -1366,7 +1758,10 @@ public final class HexSocketAPI {
     }
 
     private static int defaultMaxFor(ItemStack stack) {
-        if (stack == null) return 1;
+        if (stack == null) return 0;
+
+        // Plain stackables are never host items.
+        if (isAlwaysNonSocketable(stack)) return 0;
 
         // Artifacts / rings / amulets (your wearable-lore items) should default to 1 socket.
         if (hasAccessoryWearableLore(stack)) return 1;
@@ -1407,6 +1802,25 @@ public final class HexSocketAPI {
         NBTTagCompound root = ensureRootTag(stack);
         if (!root.hasKey(ROOT_HEX_GEMS, 10)) root.setTag(ROOT_HEX_GEMS, new NBTTagCompound());
         return root.getCompoundTag(ROOT_HEX_GEMS);
+    }
+
+    private static NBTTagCompound peekHexGems(ItemStack stack) {
+        if (stack == null || !stack.hasTagCompound()) return null;
+        NBTTagCompound root = stack.getTagCompound();
+        if (root == null || !root.hasKey(ROOT_HEX_GEMS, 10)) return null;
+        return root.getCompoundTag(ROOT_HEX_GEMS);
+    }
+
+    private static NBTTagList peekGemsList(ItemStack stack) {
+        NBTTagCompound hex = peekHexGems(stack);
+        if (hex == null || !hex.hasKey(K_GEMS, 9)) return null;
+        return hex.getTagList(K_GEMS, 8);
+    }
+
+    private static NBTTagList peekBonusesList(ItemStack stack) {
+        NBTTagCompound hex = peekHexGems(stack);
+        if (hex == null || !hex.hasKey(K_BONUSES, 9)) return null;
+        return hex.getTagList(K_BONUSES, 10);
     }
 
     private static NBTTagList getGemsList(ItemStack stack) {
@@ -1574,8 +1988,8 @@ public final class HexSocketAPI {
     }
 
     private static int getSocketsPageIndex(ItemStack stack) {
-        NBTTagCompound hex = getHexGems(stack);
-        return hex.hasKey(K_PAGE_INDEX) ? hex.getInteger(K_PAGE_INDEX) : -1;
+        NBTTagCompound hex = peekHexGems(stack);
+        return (hex != null && hex.hasKey(K_PAGE_INDEX)) ? hex.getInteger(K_PAGE_INDEX) : -1;
     }
 
     private static void setSocketsPageIndex(ItemStack stack, int idx) {
@@ -1583,8 +1997,8 @@ public final class HexSocketAPI {
     }
 
     private static void clearSocketsPageIndex(ItemStack stack) {
-        NBTTagCompound hex = getHexGems(stack);
-        if (hex.hasKey(K_PAGE_INDEX)) hex.removeTag(K_PAGE_INDEX);
+        NBTTagCompound hex = peekHexGems(stack);
+        if (hex != null && hex.hasKey(K_PAGE_INDEX)) hex.removeTag(K_PAGE_INDEX);
     }
 
     // ─────────────────────────────────────────────────────────────

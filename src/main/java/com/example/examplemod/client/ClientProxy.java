@@ -5,6 +5,7 @@ import com.example.examplemod.client.fractured.FracturedClientBootstrap;
 import com.example.examplemod.client.hud.*;
 import com.example.examplemod.client.ShadowFireStitch;
 
+
 import com.example.examplemod.client.fx.ShadowBurnClientFX;
 import cpw.mods.fml.common.FMLCommonHandler;
 import cpw.mods.fml.relauncher.Side;
@@ -34,7 +35,7 @@ public class ClientProxy extends com.example.examplemod.CommonProxy {
 
         // ✅ IMPORTANT: register config change listener (GuiConfig "Done" -> apply/save)
         FMLCommonHandler.instance().bus().register(new ClientConfigReload());
-
+        FMLCommonHandler.instance().bus().register(new HexHubClientHooks());
         // Main menu big logo overlay
         // MinecraftForge.EVENT_BUS.register(new MainMenuLogoOverlay());
 
@@ -45,14 +46,14 @@ public class ClientProxy extends com.example.examplemod.CommonProxy {
         }
 
         HexSlotOverlay.register();
-
+        //ClientCommandHandler.instance.registerCommand(new CommandHexHub());
         // Orb HUD overlays (non-fractured)
         MinecraftForge.EVENT_BUS.register(new HexLightHudOverlay());
         MinecraftForge.EVENT_BUS.register(new HexChaoticHudOverlay());
         MinecraftForge.EVENT_BUS.register(new VoidOrbHudOverlay());
         MinecraftForge.EVENT_BUS.register(new DarkfirePillHudOverlay());
         MinecraftForge.EVENT_BUS.register(new SwirlyOrbHudOverlay());
-        MinecraftForge.EVENT_BUS.register(new OverwriteHudOverlay());
+        MinecraftForge.EVENT_BUS.register(new PerfectCoreHudOverlay());
         MinecraftForge.EVENT_BUS.register(new FirePillHudOverlay());
       // Shadow Fire client hooks (icons + shadow-burn overlay)
       try {
